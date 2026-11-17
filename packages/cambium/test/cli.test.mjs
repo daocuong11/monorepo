@@ -2,7 +2,7 @@
 /** The verbs and the daemon loop, against a temp config and the fake collaborators. */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { main } from '../src/cli.mjs'
@@ -55,6 +55,28 @@ test('status reads the heartbeat file, flags a stale daemon', async () => {
   s.out.length = 0
   await main(['status', '--json'], s.io)
   assert.equal(JSON.parse(s.out.join('\n')).heartbeat.version, 1)
+})
+
+test('status --json exits 1 with no heartbeat or a stale one, 0 when fresh', async () => {
+  const s = setup()
+  assert.equal(await main(['status', '--json'], s.io), 1, 'no heartbeat')
+  assert.equal(JSON.parse(s.out.join('\n')).heartbeat, null)
+  const h = harness({ issues: [] })
+  h.deps.heartbeat = (state) => writeHeartbeat(join(s.home, 'state.json'), state)
+  await (await import('../src/tick.mjs')).tick(h.deps)
+  const finished = Date.parse(/** @type {any} */ (readHeartbeat(join(s.home, 'state.json'))).tick.finishedAt)
+  assert.equal(await main(['status', '--json'], { ...s.io, now: () => finished + 5000 }), 0)
+  assert.equal(await main(['status', '--json'], { ...s.io, now: () => finished + 600_000 }), 1)
+})
+
+test('status creates neither the db nor the state dir when absent', async () => {
+  const s = setup()
+  const home = join(s.home, 'absent')
+  writeFileSync(s.cfg, JSON.stringify({ repos: [{ slug: SLUG, path: '/repo' }], paths: { home } }))
+  assert.equal(await main(['status'], s.io), 1)
+  assert.equal(await main(['status', '--json'], s.io), 1)
+  assert.equal(JSON.parse(s.out.at(-1) ?? '').mode, 'running')
+  assert.equal(existsSync(home), false)
 })
 
 test('run task --issue N: claims, runs one worker in the foreground, transitions', async () => {

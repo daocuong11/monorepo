@@ -96,23 +96,32 @@ function fail(io, msg) {
   return 1
 }
 
+/** The mode, without creating the db or its directory when absent. @param {string} path */
+function readMode(path) {
+  if (!existsSync(path)) return 'running'
+  const store = openStore(path)
+  try {
+    return store.mode()
+  } finally {
+    store.close()
+  }
+}
+
 /** @param {import('./config.mjs').Config} config @param {IO} io @param {boolean} json */
 function status(config, io, json) {
   const hb = readHeartbeat(config.paths.heartbeat)
-  const store = openStore(config.paths.db)
-  const mode = store.mode()
-  store.close()
+  const mode = readMode(config.paths.db)
+  const age = hb ? Math.round(((io.now ?? Date.now)() - Date.parse(hb.tick?.finishedAt)) / 1000) : Number.NaN
+  const stale = !(age <= (hb?.daemon?.tickSeconds ?? 0) * 3)
   if (json) {
     io.out(JSON.stringify({ mode, heartbeat: hb }, null, 2))
-    return 0
+    return stale ? 1 : 0
   }
   io.out(`mode: ${mode}`)
   if (!hb) {
     io.out(`no heartbeat at ${config.paths.heartbeat} (daemon never ticked)`)
     return 1
   }
-  const age = Math.round(((io.now ?? Date.now)() - Date.parse(hb.tick.finishedAt)) / 1000)
-  const stale = age > hb.daemon.tickSeconds * 3
   io.out(
     `last tick #${hb.tick.n} ${age}s ago on ${hb.host} (pid ${hb.pid})${stale ? ' — STALE: daemon not ticking' : ''}`,
   )
