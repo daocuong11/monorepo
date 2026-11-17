@@ -32,6 +32,24 @@ importers:
 
   packages/mycelium: {}
 
+  packages/oakgreen:
+    dependencies:
+      '@oakgreencc/cambium':
+        specifier: workspace:*
+        version: link:../cambium
+      '@oakgreencc/canker':
+        specifier: workspace:*
+        version: link:../canker
+      '@oakgreencc/deadwood':
+        specifier: workspace:*
+        version: link:../deadwood
+      '@oakgreencc/graft':
+        specifier: workspace:*
+        version: link:../graft
+      '@oakgreencc/mycelium':
+        specifier: workspace:*
+        version: link:../mycelium
+
 packages:
 
   '@babel/code-frame@7.29.7':
