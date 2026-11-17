@@ -1,0 +1,13 @@
+{
+  "baseBranch": "main",
+  "requiredCheck": "verify",
+  "hooks": {
+    "path": ".githooks",
+    "required": [
+      "pre-commit"
+    ]
+  },
+  "validate": {
+    "command": "pnpm nx run-many -t lint test"
+  }
+}
