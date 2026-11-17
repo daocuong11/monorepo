@@ -42,6 +42,7 @@
   "dependencies": {
     "@oakgreencc/cambium": "workspace:*",
     "@oakgreencc/canker": "workspace:*",
+    "@oakgreencc/canopy": "workspace:*",
     "@oakgreencc/deadwood": "workspace:*",
     "@oakgreencc/graft": "workspace:*",
     "@oakgreencc/mycelium": "workspace:*"

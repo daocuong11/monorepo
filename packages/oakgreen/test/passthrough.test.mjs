@@ -25,12 +25,12 @@ process.exit(${code})
   return { root, resolve: (/** @type {string} */ id) => join(root, id.split('/').at(-1) ?? '') }
 }
 
-test('workspace packages resolve to their own bin, run with this node', () => {
-  const graft = toolCommand('graft')
-  assert.equal(graft.cmd, process.execPath)
-  assert.match(graft.args[0], /graft[/\\]bin[/\\]graft\.mjs$/)
-  const deadwood = toolCommand('deadwood')
-  assert.match(deadwood.args[0], /deadwood\.mjs$/)
+test('every stack tool resolves to its workspace bin, run with this node', () => {
+  for (const tool of /** @type {(keyof typeof TOOLS)[]} */ (Object.keys(TOOLS))) {
+    const c = toolCommand(tool)
+    assert.equal(c.cmd, process.execPath, tool)
+    assert.match(c.args[0], new RegExp(`${tool}[/\\\\]bin[/\\\\]${tool}\\.mjs$`), tool)
+  }
 })
 
 test('an unresolvable package falls back to PATH', () => {
