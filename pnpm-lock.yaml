@@ -18,6 +18,12 @@ importers:
         specifier: ^23.3.0
         version: 23.3.2
 
+  packages/canker:
+    dependencies:
+      '@babel/parser':
+        specifier: ^7.29.0
+        version: 7.29.14
+
   packages/graft: {}
 
 packages:
