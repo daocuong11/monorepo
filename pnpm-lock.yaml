@@ -42,6 +42,9 @@ importers:
       '@oakgreencc/canker':
         specifier: workspace:*
         version: link:../canker
+      '@oakgreencc/canopy':
+        specifier: workspace:*
+        version: link:../canopy
       '@oakgreencc/deadwood':
         specifier: workspace:*
         version: link:../deadwood
