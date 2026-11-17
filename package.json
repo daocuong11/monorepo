@@ -1,0 +1,29 @@
+{
+  "name": "@oakgreencc/monorepo",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "verify": "nx run-many -t lint test",
+    "verify:affected": "nx affected -t lint test",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.6",
+    "nx": "^23.3.0"
+  },
+  "graft": {
+    "baseBranch": "main",
+    "requiredCheck": "verify",
+    "hooks": {
+      "path": ".githooks",
+      "required": [
+        "pre-commit"
+      ]
+    }
+  }
+}

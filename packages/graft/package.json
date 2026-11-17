@@ -1,0 +1,65 @@
+{
+  "name": "@oakgreencc/graft",
+  "version": "0.2.0",
+  "description": "Let an agent work a GitHub project without the local git CLI's write path: Verified commits created by a GitHub App, the repo's git hooks run at the right moments, CODEOWNERS as the manifest of what needs a human, and a scoped maintainer mode for when one says yes.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oakgreencc/monorepo.git",
+    "directory": "packages/graft"
+  },
+  "homepage": "https://github.com/oakgreencc/monorepo/tree/main/packages/graft#readme",
+  "bugs": {
+    "url": "https://github.com/oakgreencc/monorepo/issues"
+  },
+  "keywords": [
+    "github",
+    "github-app",
+    "git",
+    "agent",
+    "claude-code",
+    "verified-commits",
+    "codeowners"
+  ],
+  "bin": {
+    "graft": "bin/graft.mjs",
+    "agit": "bin/graft.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "skills/",
+    ".claude-plugin/",
+    "docs/"
+  ],
+  "scripts": {
+    "lint": "biome check .",
+    "test": "node --test 'test/*.test.mjs'",
+    "conformance": "GRAFT_CONFORMANCE=1 node --test test/permissions.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "nx": {
+    "name": "graft",
+    "targets": {
+      "test": {
+        "inputs": [
+          "default",
+          "^production",
+          {
+            "runtime": "git --version"
+          }
+        ]
+      },
+      "conformance": {
+        "cache": false
+      }
+    }
+  }
+}

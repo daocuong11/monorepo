@@ -1,0 +1,407 @@
+// @ts-check
+/**
+ * `graft doctor` — is this machine and this repository actually protected?
+ *
+ * Every piece of the arrangement fails quietly when it is missing: a hook not
+ * wired is a hook that never fires, a CODEOWNERS the ruleset does not enforce
+ * is documentation, an App holding Workflows can make itself green. None of
+ * that shows up as an error anywhere else. So this checks each piece and says
+ * which are there:
+ *
+ *   ✓  in place
+ *   !  works, but weaker than it looks — read the line
+ *   ✗  broken; graft or the protection will not work. Exit 1.
+ *
+ * Reads only. The one GitHub read that needs the App's JWT rather than an
+ * installation token is the installation's permissions.
+ */
+
+import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { ownersOf, parseCodeowners } from '../codeowners.mjs'
+import { LEGACY_PROJECT_FILE, PACKAGE_FILE, PACKAGE_KEY, PROJECT_FILE, mergeableBases } from '../config.mjs'
+import { contextOptions } from '../cli/common.mjs'
+import { has, resolveContext } from '../context.mjs'
+import { findHook, hooksDir } from '../git-hooks.mjs'
+import { asApp, readAppCredentials } from '../github/app.mjs'
+import { describe, describeAll } from '../maintainer.mjs'
+import { SELF_PROTECTED } from '../protected.mjs'
+import { readRawGit, sessionFindings } from '../session-env.mjs'
+import { WITHHELD_PERMISSIONS } from './manifest.mjs'
+import { describeCall, readSettingsLayers, unallowedCalls } from './permissions.mjs'
+import { missingFromSettings } from './settings.mjs'
+
+/** @typedef {{ level: 'ok' | 'warn' | 'fail', label: string, detail?: string }} Finding */
+
+const ok = (label, detail) => ({ level: /** @type {const} */ ('ok'), label, ...(detail ? { detail } : {}) })
+const warn = (label, detail) => ({ level: /** @type {const} */ ('warn'), label, ...(detail ? { detail } : {}) })
+const fail = (label, detail) => ({ level: /** @type {const} */ ('fail'), label, ...(detail ? { detail } : {}) })
+
+/** Node major version check. */
+export function nodeFinding(version = process.versions.node) {
+  const major = Number(version.split('.')[0])
+  return major >= 22 ? ok(`node ${version}`) : fail(`node ${version}`, 'graft needs node >= 22')
+}
+
+/**
+ * The installation's permissions, judged.
+ *
+ * @param {Record<string, string>} perms
+ * @returns {Finding[]}
+ */
+export function permissionFindings(perms = {}) {
+  const out = []
+  for (const p of ['contents', 'pull_requests']) {
+    out.push(
+      perms[p] === 'write'
+        ? ok(`App permission ${p}: write`)
+        : fail(
+            `App permission ${p}: ${perms[p] ?? 'none'}`,
+            'publishing needs write; edit the App and accept the change on the installation',
+          ),
+    )
+  }
+  for (const p of WITHHELD_PERMISSIONS) {
+    if (perms[p])
+      out.push(
+        warn(
+          `App holds ${p}: ${perms[p]}`,
+          `an agent App should not — with ${p} it can change the rules it is held to. Remove it from the App's permissions.`,
+        ),
+      )
+  }
+  if (!out.some((f) => f.level !== 'ok')) out.push(ok(`App withholds ${WITHHELD_PERMISSIONS.join(', ')}`))
+  return out
+}
+
+/**
+ * The base branch's rules (`GET /repos/o/r/rules/branches/<base>`), judged.
+ *
+ * @param {any[]} rules
+ * @param {string} base
+ * @returns {Finding[]}
+ */
+export function rulesFindings(rules, base) {
+  const by = (t) => (rules ?? []).filter((r) => r?.type === t)
+  const out = []
+  const fix = 'Run: graft setup project'
+  const pr = by('pull_request')
+  if (!pr.length)
+    out.push(
+      warn(`${base}: no "require a pull request" rule`, `anything with write access can land on it directly. ${fix}`),
+    )
+  else if (!pr.some((r) => r.parameters?.require_code_owner_review))
+    out.push(
+      warn(
+        `${base}: code owner review not required`,
+        `CODEOWNERS is documentation until "Require review from Code Owners" is on. ${fix}`,
+      ),
+    )
+  else out.push(ok(`${base}: pull requests with code owner review required`))
+  out.push(
+    by('required_signatures').length
+      ? ok(`${base}: signed commits required`)
+      : warn(
+          `${base}: signed commits not required`,
+          `graft commits are Verified; requiring it keeps unsigned pushes out. ${fix}`,
+        ),
+  )
+  out.push(
+    by('non_fast_forward').length
+      ? ok(`${base}: force pushes blocked`)
+      : warn(`${base}: force pushes allowed`, `a force push can rewrite what was reviewed. ${fix}`),
+  )
+  out.push(
+    by('required_status_checks').length
+      ? ok(`${base}: required status checks`)
+      : warn(
+          `${base}: no required status checks`,
+          'CI is the acceptance gate; nothing makes it required. Run: graft setup project --required-check <job>',
+        ),
+  )
+  return out
+}
+
+/**
+ * Does CODEOWNERS own the files that define the protection?
+ *
+ * @param {{ path: string | null, text: string }} codeowners
+ * @param {string[]} [unsupported]
+ * @returns {Finding[]}
+ */
+export function codeownersFindings(codeowners, unsupported = []) {
+  if (!codeowners.path) return [fail('no CODEOWNERS', 'nothing is protected on GitHub. Run: graft setup project')]
+  const rules = parseCodeowners(codeowners.text)
+  const out = [ok(`CODEOWNERS at ${codeowners.path}`)]
+  // Only the locations that exist matter; the other two CODEOWNERS paths are
+  // protected locally in case the file moves, but need no owner line.
+  // The legacy `.agit.json` is protected locally but needs no owner line.
+  const wanted = SELF_PROTECTED.map((p) => p.slice(1)).filter(
+    (p) => (!/CODEOWNERS$/.test(p) || p === codeowners.path) && p !== LEGACY_PROJECT_FILE,
+  )
+  for (const p of wanted) {
+    if (!ownersOf(rules, p).length)
+      out.push(
+        warn(
+          `CODEOWNERS does not own ${p}`,
+          `graft protects it locally, but a PR changing it merges with no review. Add: /${p}  @<owner>`,
+        ),
+      )
+  }
+  for (const u of unsupported) out.push(warn(`CODEOWNERS ${u}`))
+  return out
+}
+
+/**
+ * What raw git in the process running doctor would authenticate as
+ * (session-env.mjs). Judged only inside a Claude Code session: in the human's
+ * own shell, raw git is theirs, and the answer is reported, not graded.
+ *
+ * @param {Parameters<typeof sessionFindings>[0] & { claude: boolean }} input
+ * @returns {Finding[]}
+ */
+export function processFindings({ claude, ...input }) {
+  const found = sessionFindings(input)
+  if (claude) return found.map((f) => ({ ...f, label: `this session: ${f.label}` }))
+  return [
+    ok(
+      `this shell (not a Claude Code session): ${found[0].label}`,
+      "raw git here is the human's own; agent sessions are checked at start by `graft hook session-check`",
+    ),
+  ]
+}
+
+/**
+ * Do the settings layers explicitly allow every call the workflow makes
+ * (permissions.mjs)? One not allowed is left to auto mode's classifier, or a
+ * prompt no headless session can answer.
+ *
+ * @param {{ path: string, settings: any }[]} layers
+ * @returns {Finding[]}
+ */
+export function permissionRuleFindings(layers) {
+  const gaps = unallowedCalls(layers.map((l) => l.settings))
+  const where = layers.map((l) => l.path).join(', ') || 'no settings files'
+  if (!gaps.length) return [ok(`permission rules allow every call the graft workflow makes (${where})`)]
+  return gaps.map(({ call, verdict, rule }) =>
+    warn(
+      `${describeCall(call)} is ${verdict === 'none' ? 'not explicitly allowed' : `${verdict === 'deny' ? 'denied' : 'set to ask'} by ${rule}`}`,
+      `${call.why}; auto mode's classifier, or a prompt, decides it instead. Run: graft setup project`,
+    ),
+  )
+}
+
+/** @param {Finding[]} findings */
+export function render(findings) {
+  const mark = { ok: '✓', warn: '!', fail: '✗' }
+  return findings.map((f) => `${mark[f.level]} ${f.label}${f.detail ? `\n    ${f.detail}` : ''}`).join('\n')
+}
+
+const onPath = (cmd) => {
+  try {
+    return execFileSync('sh', ['-c', `command -v ${cmd}`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * @param {string[]} argv
+ * @param {{ cwd?: string, env?: NodeJS.ProcessEnv }} [deps]
+ */
+export async function run(argv, deps = {}) {
+  /** @type {Finding[]} */
+  const findings = []
+  const add = (...f) => findings.push(...f)
+
+  add(nodeFinding())
+  add(onPath('git') ? ok('git present') : fail('git not found'))
+  const graftBin = onPath('graft')
+  add(
+    graftBin
+      ? ok(`graft on PATH (${graftBin})`)
+      : fail(
+          'graft is not on PATH',
+          'the hooks and the credential helper call `graft`. Install it: npm install -g @oakgreencc/graft',
+        ),
+  )
+
+  let ctx
+  try {
+    ctx = resolveContext(contextOptions(argv, deps))
+    void ctx.config // a broken policy is this finding, not a crash later
+  } catch (err) {
+    add(fail('graft policy', /** @type {Error} */ (err).message))
+    return finish(findings, argv)
+  }
+  if (!ctx.root) {
+    add(warn('not inside a git repository — repository checks skipped'))
+    return finish(findings, argv)
+  }
+  {
+    const source = ctx.localPolicy().configSource
+    add(
+      ok(
+        source === PACKAGE_FILE
+          ? `policy in ${PACKAGE_FILE} "${PACKAGE_KEY}" parses`
+          : source
+            ? `${source} parses`
+            : 'no graft policy (defaults apply)',
+      ),
+    )
+  }
+
+  let owner = ''
+  let repo = ''
+  try {
+    ;({ owner, repo } = ctx.repo())
+    add(ok(`repository ${owner}/${repo}`))
+  } catch (err) {
+    add(fail('repository', /** @type {Error} */ (err).message))
+  }
+
+  // --- the App ------------------------------------------------------------
+  let base = ctx.config.baseBranch
+  if (owner) {
+    let creds = null
+    try {
+      creds = readAppCredentials({ owner, project: ctx.config, env: ctx.env })
+      add(ok(`App credentials${creds.slug ? ` (${creds.slug})` : ''}`))
+    } catch (err) {
+      add(fail('App credentials', /** @type {Error} */ (err).message))
+    }
+    if (creds) {
+      try {
+        const { json } = await asApp(creds)(`/repos/${owner}/${repo}/installation`)
+        add(ok(`App installed on ${owner}/${repo}`))
+        add(...permissionFindings(json?.permissions))
+      } catch (err) {
+        add(
+          fail(
+            `App not installed on ${owner}/${repo}`,
+            `${String(/** @type {Error} */ (err).message).slice(0, 200)}${creds.slug ? `\n    Install: https://github.com/apps/${creds.slug}/installations/new` : ''}`,
+          ),
+        )
+        creds = null
+      }
+    }
+    if (creds) {
+      try {
+        const client = await ctx.client()
+        add(ok('installation token mints'))
+        base = await ctx.baseBranch()
+        try {
+          const rules = await client.api(`/repos/${owner}/${repo}/rules/branches/${encodeURIComponent(base)}`)
+          add(...rulesFindings(rules, base))
+        } catch (err) {
+          add(warn(`could not read the rules on ${base}`, String(/** @type {Error} */ (err).message).slice(0, 200)))
+        }
+      } catch (err) {
+        add(fail('installation token', /** @type {Error} */ (err).message))
+      }
+    }
+  }
+  if (base) {
+    const bases = mergeableBases(ctx.config, base)
+    add(ok(`base ${base}; agents may merge into: ${bases.length ? bases.join(', ') : 'nothing (humans merge)'}`))
+  }
+
+  // --- CODEOWNERS -----------------------------------------------------------
+  const policy = ctx.localPolicy()
+  add(...codeownersFindings(policy.codeowners, policy.unsupported))
+  if (policy.configSource === PACKAGE_FILE && !policy.check(PACKAGE_FILE)?.owners.length)
+    add(
+      warn(
+        `the policy in ${PACKAGE_FILE} is protected by key, which only graft enforces`,
+        `graft refuses edits, publishes and merges that change the "${PACKAGE_KEY}" key, but GitHub cannot ` +
+          `enforce a key: a PR changing it that is merged outside graft needs no review. For a hard boundary, ` +
+          `own /${PACKAGE_FILE} in CODEOWNERS, or keep the policy in ${PROJECT_FILE}.`,
+      ),
+    )
+
+  // --- git hooks ------------------------------------------------------------
+  try {
+    const dir = hooksDir({ git: ctx.git, root: ctx.root, config: ctx.config })
+    const required = new Set(ctx.config.hooks?.required ?? [])
+    const present = []
+    for (const name of ctx.config.hooks?.run ?? []) {
+      if (findHook(dir, name)) present.push(name)
+      else if (required.has(name)) add(fail(`required hook ${name} missing from ${dir}`))
+    }
+    if (present.length) add(ok(`git hooks graft will run: ${present.join(', ')} (${dir})`))
+    else
+      add(
+        warn(
+          `no git hooks in ${dir}`,
+          'publishes run no local checks. If the repo tracks hooks elsewhere, set hooks.path in .graft.json',
+        ),
+      )
+  } catch (err) {
+    add(fail('git hooks directory', /** @type {Error} */ (err).message))
+  }
+
+  // --- Claude settings ------------------------------------------------------
+  const settingsPath = join(ctx.root, '.claude', 'settings.json')
+  let settingsEnv = null
+  if (!existsSync(settingsPath))
+    add(
+      warn(
+        'no .claude/settings.json',
+        'Claude Code sessions get no hooks or credential helper. Run: graft setup project',
+      ),
+    )
+  else {
+    try {
+      const settings = JSON.parse(readFileSync(settingsPath, 'utf8'))
+      settingsEnv = settings?.env ?? null
+      const missing = missingFromSettings(settings)
+      if (missing.length) for (const m of missing) add(warn(`.claude/settings.json lacks ${m}`))
+      else add(ok('.claude/settings.json wires the credential helper and the graft hooks'))
+    } catch (err) {
+      add(fail('.claude/settings.json', /** @type {Error} */ (err).message))
+    }
+  }
+
+  // --- permissions ------------------------------------------------------------
+  try {
+    add(...permissionRuleFindings(readSettingsLayers({ root: ctx.root, home: ctx.env.HOME || undefined })))
+  } catch (err) {
+    add(warn('could not read the Claude Code settings layers', /** @type {Error} */ (err).message))
+  }
+
+  // --- this process ---------------------------------------------------------
+  // The files above say what a session WOULD get; this is what the one running
+  // doctor did get, which is loaded once at session start.
+  try {
+    const { url, helpers } = readRawGit({ cwd: ctx.root, env: ctx.env })
+    if (url)
+      add(...processFindings({ url, helpers, processEnv: ctx.env, settingsEnv, claude: ctx.env.CLAUDECODE === '1' }))
+  } catch (err) {
+    add(warn('could not ask git what raw `git fetch` would authenticate as', /** @type {Error} */ (err).message))
+  }
+
+  // --- maintainer mode ------------------------------------------------------
+  try {
+    const view = ctx.grant()
+    add(ok(describe(view)))
+    // A mismatch already names every grantee; otherwise list other sessions' grants.
+    const live = view.state === 'mismatch' ? [] : ctx.liveGrants()
+    if (live.length) add(ok(describeAll(live)))
+  } catch {
+    // no git dir: nothing to report
+  }
+
+  return finish(findings, argv)
+}
+
+function finish(findings, argv) {
+  if (has(argv, '--json')) console.log(JSON.stringify(findings, null, 2))
+  else console.log(render(findings))
+  const failed = findings.some((f) => f.level === 'fail')
+  if (failed) process.exitCode = 1
+  return findings
+}

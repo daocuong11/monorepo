@@ -1,0 +1,13 @@
+# Paths a human must approve. graft reads this file as the manifest of
+# protected paths; with "Require review from Code Owners" on main's ruleset,
+# GitHub will not merge them without the owner.
+
+# The protection itself, and what defines green.
+/.github/  @jamesloosli
+/.graft.json  @jamesloosli
+/.graft.json  @jamesloosli
+/.claude/settings.json  @jamesloosli
+/.githooks/  @jamesloosli
+/package.json  @jamesloosli
+/nx.json  @jamesloosli
+/biome.json  @jamesloosli

@@ -1,0 +1,451 @@
+// @ts-check
+/**
+ * `publish`, `merge`, `advance` — the write path, and the gates in front of it.
+ *
+ * Every gate runs before the first write, so a refusal leaves nothing on
+ * GitHub. In order:
+ *
+ *   1. scope          --paths or --all, named — before any credential is read
+ *   2. no-verify      skipping the repo's hooks needs a `no-verify` grant
+ *   3. validated base the green you are relying on is about THIS base
+ *   4. the tree       built locally; the pre-commit hook runs here, and what it
+ *                     stages ships
+ *   5. the candidate  protection → displacement → payload, judged on the tree
+ *                     as built (src/publish/plan.mjs), not on the path list
+ *   6. git hooks      commit-msg, then pre-push on a twin of the commit
+ *
+ * Then: blobs → tree (sha checked against the local tree) → commit (no
+ * author, committer or signature, so GitHub signs it) → fast-forward the ref
+ * → open the PR → advance the worktree onto the commit.
+ *
+ * This file is the command line around that: flags into overrides, the
+ * fetches the tree build needs, and what gets printed.
+ */
+
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { withClosingTrailers } from '../closing-refs.mjs'
+import { flag, has, positionals } from '../context.mjs'
+import { PublishError } from '../errors.mjs'
+import { BOTH_SCOPES_MESSAGE, noPrNote, sweepMessage } from '../gates/scope.mjs'
+import { checkValidatedBase, readReceipt } from '../gates/validated-base.mjs'
+import { hookRunner } from '../git-hooks.mjs'
+import { allows, grantAdvice } from '../maintainer.mjs'
+import { judgeCandidate } from '../publish/plan.mjs'
+import { advance, dirtyPaths, publishMerge, publishWorktree, resolveBranch } from '../publish/publish.mjs'
+import { localOnly, verdict } from '../status.mjs'
+import { COMMON_VALUE_FLAGS, contextFrom } from './common.mjs'
+
+export const PUBLISH_USAGE =
+  'usage: graft publish <branch> <message> (--paths a,b | --all) [--base <b>] [--pr <title>] ' +
+  '[--pr-body <text>|--pr-body-file <f>] [--draft] [--closes 82,196] [--no-advance] [--no-verify] ' +
+  '[--allow-large a,b] [--allow-displacement] [--stale-base-ok] [-C <dir>] [--repo <owner/repo>]'
+
+const PUBLISH_VALUE_FLAGS = [
+  ...COMMON_VALUE_FLAGS,
+  '--paths',
+  '--base',
+  '--pr',
+  '--pr-body',
+  '--pr-body-file',
+  '--closes',
+  '--allow-large',
+]
+
+/** @typedef {import('../context.mjs').Context} Context */
+
+// ---------------------------------------------------------------------------
+// The gates that run before the tree exists
+// ---------------------------------------------------------------------------
+
+/**
+ * Scope gate. First of all, and the only one before a credential is read: a
+ * publish naming neither --paths nor --all has not said what it carries, and
+ * the sweep it would default to is how a 55k-line build log once became a
+ * Verified commit. The refusal lists the sweep, so choosing takes one read.
+ *
+ * @returns {string[] | null} the --paths list, or null for --all
+ */
+function scopeGate({ git, argv }) {
+  const pathsArg = flag(argv, '--paths')
+  const all = has(argv, '--all')
+  if (pathsArg && all) throw new PublishError(BOTH_SCOPES_MESSAGE)
+  if (!pathsArg && !all) {
+    let wouldSweep = []
+    try {
+      wouldSweep = dirtyPaths(git)
+    } catch {
+      // Not a worktree, or no git: the refusal stands either way.
+    }
+    throw new PublishError(sweepMessage(wouldSweep, { usage: PUBLISH_USAGE }))
+  }
+  return pathsArg ? pathsArg.split(',').filter(Boolean) : null
+}
+
+/** `--no-verify` is a human's call: it needs a grant with the `no-verify` scope. */
+function noVerifyGate({ ctx, argv }) {
+  if (!has(argv, '--no-verify')) return false
+  const view = ctx.grant()
+  if (!allows(view, 'no-verify')) {
+    throw new PublishError(
+      "refusing to publish: --no-verify skips this repository's git hooks, and that is a human's call.\n\n" +
+        grantAdvice(view, 'no-verify'),
+    )
+  }
+  console.log(`--no-verify: hooks skipped under maintainer grant ("${/** @type {any} */ (view).grant.reason}").`)
+  return true
+}
+
+/** Validated-base gate. See gates/validated-base.mjs. */
+function validatedBaseGate({ ctx, base, argv }) {
+  const receipt = readReceipt({ gitDir: ctx.gitDir() })
+  if (has(argv, '--stale-base-ok')) {
+    // Said out loud: an escape hatch nobody can see is a silent default.
+    if (receipt) console.log('--stale-base-ok: publishing without checking the validated base.')
+    return
+  }
+  let publishBaseSha = null
+  try {
+    publishBaseSha = ctx.git(['rev-parse', `origin/${base}`]).trim()
+  } catch {
+    publishBaseSha = null // unresolvable base: no opinion
+  }
+  const refusal = checkValidatedBase({ receipt, publishBaseSha, ref: `origin/${base}` })
+  if (refusal) throw new PublishError(refusal)
+}
+
+// ---------------------------------------------------------------------------
+// Shared pieces
+// ---------------------------------------------------------------------------
+
+/** Fetch without failing: whatever cannot be fetched, a later step refuses by name. */
+function tryFetch(git, ref) {
+  try {
+    git(['fetch', 'origin', ref])
+  } catch {
+    // see above
+  }
+}
+
+/**
+ * The commit the tree builds on must exist locally — fetched, not assumed.
+ * Fails closed: an unverifiable base is exactly the case the displacement
+ * gate exists for.
+ */
+function ensureLocal({ git, head }) {
+  tryFetch(git, head.branch)
+  try {
+    git(['cat-file', '-e', `${head.sha}^{commit}`])
+  } catch {
+    throw new PublishError(
+      `refusing to publish: could not fetch ${head.sha.slice(0, 7)} (${head.branch}) to verify this worktree is up to date.\n` +
+        'Check that `git fetch origin` works here (graft doctor).',
+    )
+  }
+}
+
+/** The branch head on GitHub, or where the branch would start. */
+async function resolveTarget({ client, owner, repo, branch, base }) {
+  const head = await resolveBranch({ client, owner, repo, branch })
+  if (head) return { head: { ...head, branch }, baseHead: null }
+  const baseHead = await resolveBranch({ client, owner, repo, branch: base })
+  if (!baseHead) throw new PublishError(`base branch ${base} does not exist on GitHub`)
+  return { head: null, baseHead: { ...baseHead, branch: base } }
+}
+
+/**
+ * The open PR for `branch`, read-only: its URL, or `null`. A failure to find
+ * out counts as none — what this feeds is advice, and a second PR POST that
+ * GitHub refuses says so itself.
+ */
+async function openPr({ client, owner, repo, branch }) {
+  try {
+    const prs = await client.api(
+      `/repos/${owner}/${repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${branch}`)}`,
+    )
+    return Array.isArray(prs) && prs.length ? (prs[0].html_url ?? '(open)') : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The candidate gate, wired to this Context: the base's policy (as fetched)
+ * first, then the worktree's; the session's grant; the project's payload
+ * limits; the command line's overrides. Prints what it let through.
+ *
+ * @param {{ ctx: Context, base: string, branch: string, argv: string[] }} input
+ */
+function candidateGate({ ctx, base, branch, argv }) {
+  const policies = [ctx.localPolicy()]
+  try {
+    ctx.git(['rev-parse', '--verify', '--quiet', `origin/${base}^{commit}`])
+    policies.unshift(ctx.policyAt(`origin/${base}`))
+  } catch {
+    // Base not fetched: the worktree's policy is all there is to go on.
+  }
+  return (/** @type {import('../publish/publish.mjs').Candidate} */ candidate) => {
+    const notes = judgeCandidate({
+      git: ctx.git,
+      candidate,
+      policies,
+      grant: ctx.grant(),
+      payload: ctx.config.payload,
+      overrides: {
+        allowLarge: flag(argv, '--allow-large')?.split(',') ?? [],
+        allowDisplacement: has(argv, '--allow-displacement'),
+      },
+      names: { base, branch },
+    })
+    for (const n of notes) console.log(n)
+  }
+}
+
+/** The repository's hook runner, wired to the publish primitive's moments. */
+function publishHooks({ ctx, skip, branch, remoteSha }) {
+  const runner = hookRunner({
+    git: ctx.git,
+    root: /** @type {string} */ (ctx.root),
+    config: ctx.config,
+    skip,
+    report: (line) => console.error(line),
+  })
+  return { runner, hooks: runner.forPublish({ branch, remoteSha }) }
+}
+
+function reportAdvance(out, branch) {
+  if (!out.advanced) {
+    console.log(`worktree NOT advanced: ${out.reason}`)
+    return
+  }
+  const bits = []
+  const n = (k, word) => `${k} ${word}${k === 1 ? '' : 's'}`
+  if (out.restored.length) bits.push(`${n(out.restored.length, 'path')} brought up to the branch`)
+  if (out.recorded.length) bits.push(`${n(out.recorded.length, 'published path')} recorded`)
+  console.log(`worktree advanced to ${out.to.slice(0, 7)} (${branch})${bits.length ? `: ${bits.join(', ')}` : ''}`)
+}
+
+/** The Verified line — the whole point, so it is printed every time. */
+function reportCommit(commit) {
+  const state =
+    commit.verified === true ? 'Verified' : commit.verified === false ? `NOT verified (${commit.reason})` : 'existing'
+  console.log(`commit: ${commit.url ?? commit.sha}  [${state}]`)
+}
+
+// ---------------------------------------------------------------------------
+// `publish`
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {string[]} argv
+ * @param {{ client?: import('../github/app.mjs').Client | null }} [deps]   `client` replaces the minted one (tests)
+ */
+export async function runPublish(argv, { client: given = null } = {}) {
+  if (has(argv, '--help')) {
+    console.log(PUBLISH_USAGE)
+    return 0
+  }
+  const [branch, message] = positionals(argv, PUBLISH_VALUE_FLAGS)
+  if (!branch || !message) throw new PublishError(PUBLISH_USAGE)
+  if (branch.startsWith('-'))
+    throw new PublishError(`refusing to publish: "${branch}" is not a branch name.\n\n${PUBLISH_USAGE}`)
+
+  const ctx = contextFrom(argv, { client: given })
+  const { git } = ctx
+
+  // Before anything else, and before any credential is read: what is this
+  // publish carrying?
+  const paths = scopeGate({ git, argv })
+  const skipHooks = noVerifyGate({ ctx, argv })
+
+  const prTitle = flag(argv, '--pr')
+  const prBodyFile = flag(argv, '--pr-body-file')
+  const prBody = prBodyFile ? readFileSync(resolve(prBodyFile), 'utf8') : flag(argv, '--pr-body')
+
+  const client = await ctx.client()
+  const { owner, repo, full } = ctx.repo()
+  const base = flag(argv, '--base') ?? (await ctx.baseBranch())
+
+  // A closing keyword in a PR body fires only when the PR merges into the
+  // DEFAULT branch. When PRs land elsewhere (develop → main), only a keyword in
+  // a COMMIT message ever closes anything — so lift the body's refs into it.
+  const {
+    message: commitMessage,
+    added: closing,
+    skipped: notClosing,
+  } = withClosingTrailers({ message, prBody: prBody ?? undefined, closes: flag(argv, '--closes') ?? undefined })
+
+  tryFetch(git, base) // the gates below fail closed on what they cannot see
+  validatedBaseGate({ ctx, base, argv })
+
+  // READ-ONLY until every gate has passed: a refusal leaves nothing on GitHub.
+  const { head, baseHead } = await resolveTarget({ client, owner, repo, branch, base })
+  const target = /** @type {any} */ (head ?? baseHead)
+  ensureLocal({ git, head: target })
+  // Read before the write, said after the commit line: a branch nobody opened
+  // a PR for is a branch CI never runs on.
+  const existing = head ? await openPr({ client, owner, repo, branch }) : null
+
+  const { runner, hooks } = publishHooks({ ctx, skip: skipHooks, branch, remoteSha: head?.sha ?? null })
+  const out = await publishWorktree({
+    git,
+    client,
+    owner,
+    repo,
+    branch,
+    head,
+    base: baseHead,
+    message: commitMessage,
+    paths,
+    report: (line) => console.error(line),
+    hooks,
+    gate: candidateGate({ ctx, base, branch, argv }),
+  })
+  if (runner.ran.length) console.log(`hooks: ${runner.ran.join(', ')}`)
+  if (out.created && baseHead) console.log(`created ${branch} from ${base} @ ${baseHead.sha.slice(0, 7)}`)
+  console.log(
+    out.noop
+      ? // The retry after a lost response: the first run landed, so this one
+        // writes nothing and goes on to the PR and the advance.
+        `nothing to publish: ${full}@${branch} already has this content — no commit made`
+      : `published ${out.changed.length} path${out.changed.length === 1 ? '' : 's'} to ${full}@${branch}`,
+  )
+  reportCommit(out.commit)
+  if (closing.length)
+    // Say WHEN: "closes" reads as "closes now", and it does not — the keyword
+    // fires when this commit reaches the repository's default branch.
+    console.log(`closing when this commit reaches the default branch: ${closing.join(', ')}`)
+  if (notClosing.length)
+    // Dropping a keyword without a word would be invisible. Name it, and the flag.
+    console.log(`NOT closing (quoted or negated): ${notClosing.join(', ')} — use --closes if you meant it`)
+  if (!prTitle && !existing) console.log(noPrNote({ branch, base }))
+
+  if (prTitle && existing) console.log(`pr: ${existing} (already open)`)
+  else if (prTitle) {
+    // The body falls back to the commit message, not a bare "automated work"
+    // line, which told a reviewer nothing.
+    const pr = await client.json(`/repos/${owner}/${repo}/pulls`, 'POST', {
+      title: prTitle,
+      head: branch,
+      base,
+      body: prBody ?? message,
+      draft: has(argv, '--draft'),
+    })
+    console.log('pr:', pr.html_url)
+  }
+
+  // The worktree follows the publish. The fetch runs over HTTPS as the App,
+  // through the credential helper.
+  if (!has(argv, '--no-advance')) {
+    git(['fetch', 'origin', branch])
+    reportAdvance(advance({ git, target: out.commit.sha }), branch)
+  }
+  await reportLocalOnly({ git, client, owner, repo, base, branch, argv })
+  return 0
+}
+
+/**
+ * The last line of a publish: what the worktree still holds that GitHub does
+ * not. A worktree tool counting commits since the session began will call
+ * published work "discarded" (#5); this is the answer to check it against.
+ * Advice, so a failure to find out never fails the publish. Under
+ * --no-advance the published paths are still dirty against the old HEAD, so
+ * the line would be wrong: skipped.
+ *
+ * @param {Parameters<typeof localOnly>[0] & { argv: string[] }} input
+ */
+async function reportLocalOnly({ argv, ...input }) {
+  if (has(argv, '--no-advance')) return
+  try {
+    console.log(verdict(await localOnly(input)))
+  } catch (e) {
+    console.log(`could not check what is local only: ${/** @type {Error} */ (e)?.message ?? e} (graft status)`)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// `merge`
+// ---------------------------------------------------------------------------
+
+const MERGE_USAGE =
+  'usage: graft merge <branch> [--message <text>] [--base <b>] [--allow-large a,b] [--no-advance] [--no-verify] [--stale-base-ok] [-C <dir>] [--repo <owner/repo>]\n\n' +
+  "Publishes the worktree's local merge (git fetch → git merge --no-commit origin/<x> → resolve →\n" +
+  'git add) as a two-parent commit GitHub creates, Verified as the App. No local commit is needed;\n' +
+  'a merge already committed locally publishes the same way. --message overrides MERGE_MSG.'
+
+export async function runMerge(argv) {
+  if (has(argv, '--help')) {
+    console.log(MERGE_USAGE)
+    return 0
+  }
+  const [branch] = positionals(argv, [...COMMON_VALUE_FLAGS, '--message', '--base', '--allow-large'])
+  if (!branch) throw new PublishError(MERGE_USAGE)
+  const ctx = contextFrom(argv)
+  const { git } = ctx
+  const skipHooks = noVerifyGate({ ctx, argv })
+  const client = await ctx.client()
+  const { owner, repo, full } = ctx.repo()
+  const base = flag(argv, '--base') ?? (await ctx.baseBranch())
+
+  tryFetch(git, base)
+  // A merge of the base in is exactly when the receipt matters: a receipt
+  // older than the merge means the merged tree was never validated here.
+  validatedBaseGate({ ctx, base, argv })
+
+  const head = await resolveBranch({ client, owner, repo, branch })
+  if (!head)
+    throw new PublishError(`branch ${branch} does not exist on GitHub; merge publishes onto an existing branch`)
+  tryFetch(git, branch) // localMerge() reports a stale first parent with the fix
+
+  const { hooks } = publishHooks({ ctx, skip: skipHooks, branch, remoteSha: head.sha })
+  const out = await publishMerge({
+    git,
+    client,
+    owner,
+    repo,
+    branch,
+    head,
+    message: flag(argv, '--message') ?? undefined,
+    report: (line) => console.error(line),
+    hooks,
+    gate: candidateGate({ ctx, base, branch, argv }),
+  })
+  if (out.kind === 'fast-forward') {
+    console.log(`fast-forwarded ${full}@${branch} to ${out.commit.sha.slice(0, 7)}`)
+  } else {
+    const n = out.shipped.uploaded.length
+    console.log(
+      `merged ${out.parents[1].slice(0, 7)} into ${full}@${branch} (${n} resolved blob${n === 1 ? '' : 's'} shipped)`,
+    )
+    reportCommit(out.commit)
+  }
+  if (!has(argv, '--no-advance')) {
+    git(['fetch', 'origin', branch])
+    reportAdvance(advance({ git, target: out.commit.sha }), branch)
+  }
+  await reportLocalOnly({ git, client, owner, repo, base, branch, argv })
+  return 0
+}
+
+// ---------------------------------------------------------------------------
+// `advance`
+// ---------------------------------------------------------------------------
+
+export async function runAdvance(argv) {
+  const [branch] = positionals(argv, COMMON_VALUE_FLAGS)
+  if (!branch || has(argv, '--help')) {
+    console.log(
+      'usage: graft advance <branch> [-C <dir>] [--repo <owner/repo>]\n\n' +
+        "Moves the worktree's HEAD onto the branch head on GitHub without discarding uncommitted work —\n" +
+        'the replacement for `git fetch && git reset --hard`.',
+    )
+    return branch ? 0 : 1
+  }
+  const ctx = contextFrom(argv)
+  const { owner, repo } = ctx.repo()
+  const head = await resolveBranch({ client: await ctx.client(), owner, repo, branch })
+  if (!head) throw new PublishError(`branch ${branch} does not exist on GitHub`)
+  ctx.git(['fetch', 'origin', branch])
+  reportAdvance(advance({ git: ctx.git, target: head.sha }), branch)
+  return 0
+}
