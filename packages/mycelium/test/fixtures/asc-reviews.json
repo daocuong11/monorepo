@@ -1,0 +1,66 @@
+{
+  "page1": {
+    "data": [
+      {
+        "type": "customerReviews",
+        "id": "00000000-aaaa-4000-8000-000000000004",
+        "attributes": {
+          "rating": 1,
+          "title": "Crashes on launch",
+          "body": "Since the last update the app closes right after the splash screen.",
+          "reviewerNickname": "reviewer_four",
+          "createdDate": "2026-11-01T12:30:00-07:00",
+          "territory": "USA"
+        }
+      },
+      {
+        "type": "customerReviews",
+        "id": "00000000-aaaa-4000-8000-000000000003",
+        "attributes": {
+          "rating": 5,
+          "title": "Love it",
+          "body": "Works great.",
+          "reviewerNickname": "reviewer_three",
+          "createdDate": "2026-11-01T10:00:00-07:00",
+          "territory": "GBR"
+        }
+      }
+    ],
+    "links": {
+      "self": "https://api.appstoreconnect.apple.com/v1/apps/1000000001/customerReviews",
+      "next": "https://api.appstoreconnect.apple.com/v1/apps/1000000001/customerReviews?cursor=PAGE2"
+    }
+  },
+  "page2": {
+    "data": [
+      {
+        "type": "customerReviews",
+        "id": "00000000-aaaa-4000-8000-000000000002",
+        "attributes": {
+          "rating": 2,
+          "title": "Sync is slow",
+          "body": "Takes a minute to load my data.",
+          "reviewerNickname": "reviewer_two",
+          "createdDate": "2026-10-31T09:00:00-07:00",
+          "territory": "CAN"
+        }
+      },
+      {
+        "type": "customerReviews",
+        "id": "00000000-aaaa-4000-8000-000000000001",
+        "attributes": {
+          "rating": 3,
+          "title": "Old review",
+          "body": "From long ago.",
+          "reviewerNickname": "reviewer_one",
+          "createdDate": "2026-09-01T09:00:00-07:00",
+          "territory": "USA"
+        }
+      }
+    ],
+    "links": {
+      "self": "https://api.appstoreconnect.apple.com/v1/apps/1000000001/customerReviews?cursor=PAGE2",
+      "next": "https://api.appstoreconnect.apple.com/v1/apps/1000000001/customerReviews?cursor=PAGE3"
+    }
+  }
+}
