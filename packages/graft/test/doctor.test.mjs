@@ -9,7 +9,7 @@ import {
   render,
   rulesFindings,
 } from '../src/setup/doctor.mjs'
-import { githubChecklist, lineDiff, missingCodeownersLines, newCodeowners } from '../src/setup/project.mjs'
+import { closingNotes, lineDiff, missingCodeownersLines, newCodeowners } from '../src/setup/project.mjs'
 
 const levels = (fs) => fs.map((f) => f.level)
 
@@ -89,17 +89,13 @@ test('missingCodeownersLines: only what is not already owned, hooks dir included
   assert.match(newCodeowners(lines), /^# Paths a human must approve/)
 })
 
-test('lineDiff and the checklist', () => {
+test('lineDiff and the closing notes', () => {
   assert.deepEqual(lineDiff('a\nb\n', 'a\nc\n'), ['- b', '+ c'])
   assert.deepEqual(lineDiff(null, 'x\n'), ['+ x'])
-  const c = githubChecklist({ owner: 'o', repo: 'r', requiredCheck: 'ci', slug: 's' })
-  assert.match(c, /https:\/\/github.com\/o\/r\/settings\/rules/)
-  assert.doesNotMatch(
-    c,
-    /Require review from Code Owners/,
-    'setup applies the base ruleset; the checklist is only what is optional',
-  )
-  assert.doesNotMatch(c, /--required-check/)
-  assert.match(c, /apps\/s\/installations\/new/)
-  assert.match(githubChecklist({ owner: 'o', repo: 'r', requiredCheck: null, slug: null }), /--required-check <job>/)
+  const notes = closingNotes({ requiredCheck: 'ci', slug: 's' }).join('\n')
+  assert.doesNotMatch(notes, /settings\/rules|auto-merge/, 'setup asks about the optional steps; it does not list them')
+  assert.doesNotMatch(notes, /--required-check/)
+  assert.match(notes, /apps\/s\/installations\/new/)
+  assert.match(closingNotes({ requiredCheck: null, slug: null }).join('\n'), /--required-check <job>/)
+  assert.deepEqual(closingNotes({ requiredCheck: 'ci', slug: null }), [])
 })

@@ -5,12 +5,13 @@
  *
  * Every question has a flag. Without a TTY (an agent's Bash call, a `!`
  * command, CI) there is nobody to ask, so it runs as if `--yes` were given: a
- * question with a default takes it, a confirmation is a yes, and a question
- * without a default fails naming the flag that answers it — an unattended run
- * never blocks on stdin that will never come.
+ * question or a confirmation takes its default, and a question without a
+ * default fails naming the flag that answers it — an unattended run never
+ * blocks on stdin that will never come.
  */
 
 import { createInterface } from 'node:readline/promises'
+import { colorOn, palette } from './style.mjs'
 
 /**
  * @typedef {{
@@ -21,7 +22,7 @@ import { createInterface } from 'node:readline/promises'
  */
 
 /**
- * @param {{ yes?: boolean, interactive?: boolean, input?: NodeJS.ReadableStream, output?: NodeJS.WritableStream }} [opts]
+ * @param {{ yes?: boolean, interactive?: boolean, input?: NodeJS.ReadableStream, output?: NodeJS.WritableStream, env?: NodeJS.ProcessEnv }} [opts]
  * @returns {Prompter}
  */
 export function createPrompter({
@@ -29,7 +30,9 @@ export function createPrompter({
   interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY),
   input = process.stdin,
   output = process.stdout,
+  env = process.env,
 } = {}) {
+  const c = palette(colorOn(/** @type {any} */ (output), env))
   /** @type {import('node:readline/promises').Interface | null} */
   let rl = null
   const line = async (q) => {
@@ -47,14 +50,14 @@ export function createPrompter({
       if (unattended && def !== null) return def
       if (!interactive) throw unanswerable(question, flag)
       for (;;) {
-        const got = await line(`${question}${def ? ` [${def}]` : ''}: `)
+        const got = await line(`${c.code('?')} ${c.bold(question)}${def ? c.dim(` [${def}]`) : ''}: `)
         if (got) return got
         if (def !== null) return def
       }
     },
     async confirm(question, { default: def = true } = {}) {
-      if (unattended) return true
-      const got = (await line(`${question} ${def ? '[Y/n]' : '[y/N]'} `)).toLowerCase()
+      if (unattended) return def
+      const got = (await line(`${c.code('?')} ${c.bold(question)} ${c.dim(def ? '[Y/n]' : '[y/N]')} `)).toLowerCase()
       if (!got) return def
       return got.startsWith('y')
     },

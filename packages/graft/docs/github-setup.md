@@ -86,16 +86,30 @@ Don't add the App to the bypass list.
 
 ## 3. Optional: a branch-name ruleset for the App
 
-To confine the App to its own namespace, add a second ruleset. Target all
-branches except `agent/**` and restrict creations and updates. With this in
-place, a mangled command can't create a branch named `--api` or write to `main`
-directly.
+`graft setup project` asks whether to confine the App to its own namespace
+(`--app-branches <prefix | none>` answers without asking). Yes creates a second
+ruleset, `graft: app branches`, through `gh`, as you: it targets every branch
+except `agent/**` and restricts creations. Repository admins, maintainers and
+writers bypass it, so people can still create any branch; the App never can.
+With it in place, a mangled command can't create a branch named `--api`.
+
+It restricts creations only. Writing to the base directly is already blocked
+by the base ruleset's pull-request rule, and restricting updates outside
+`agent/**` would also block the App's own `graft pr merge`.
+
+Other bots that create branches — Dependabot, Renovate — are held to it too.
+When setup finds their config it says so and defaults to no; to have both, add
+them to the ruleset's bypass list.
 
 ## 4. Optional: auto-merge
 
-To let agents use `graft pr merge --auto`, turn on Settings → General → **Allow
-auto-merge**. The merge still waits for the ruleset's required checks and
-reviews.
+`graft setup project` asks whether to turn on **Allow auto-merge**, which
+`graft pr merge --auto` needs (`--auto-merge` / `--no-auto-merge` answer
+without asking). It defaults to yes when agents may merge into some base. The
+merge still waits for the ruleset's required checks and reviews.
+
+Without `gh` logged in as a repository admin, both steps print where to do them
+by hand instead.
 
 ## 5. Check
 
