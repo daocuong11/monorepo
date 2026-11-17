@@ -62,7 +62,13 @@
   },
   "release": {
     "projects": [
-      "graft"
+      "graft",
+      "canker",
+      "deadwood",
+      "cambium",
+      "mycelium",
+      "canopy",
+      "oakgreen"
     ],
     "projectsRelationship": "independent",
     "version": {
