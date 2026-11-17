@@ -20,7 +20,8 @@
  * And the base branch's ruleset on GitHub (rulesets.mjs) — what turns
  * CODEOWNERS from documentation into a boundary. The App detects it; the
  * human's `gh` writes it, because the App holds no Administration permission,
- * on purpose.
+ * on purpose. Then the optional steps (optional.mjs) — each a question, then
+ * done — and an offer to run `graft doctor`.
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -30,10 +31,13 @@ import { PACKAGE_FILE, PACKAGE_KEY, PROJECT_FILE, locateProjectConfig } from '..
 import { contextOptions } from '../cli/common.mjs'
 import { flag, has, resolveContext } from '../context.mjs'
 import { NoAppError, isNotFound, readAppCredentials } from '../github/app.mjs'
+import { run as doctor } from './doctor.mjs'
 import { installUrl } from './manifest.mjs'
+import { BRANCH_BOT_FILES, ensureAppBranches, ensureAutoMerge } from './optional.mjs'
 import { createPrompter } from './prompt.mjs'
 import { ensureBaseRuleset, ghAdmin } from './rulesets.mjs'
 import { claudeHooks, envToPairs, gitConfigEnv, mergeSettings } from './settings.mjs'
+import { colorOn, palette } from './style.mjs'
 
 const say = (line = '') => console.log(line)
 
@@ -113,20 +117,21 @@ export function lineDiff(before, after) {
   ]
 }
 
-/** What is left on GitHub after setup: optional, and the human's call. */
-export function githubChecklist({ owner, repo, requiredCheck, slug }) {
-  const rules = `https://github.com/${owner}/${repo}/settings/rules`
+/**
+ * What setup cannot do for you, said last: only what applies.
+ *
+ * @param {{ requiredCheck: string | null, slug: string | null, c?: import('./style.mjs').Palette }} input
+ * @returns {string[]}
+ */
+export function closingNotes({ requiredCheck, slug, c = palette(false) }) {
   return [
-    'Optional, on GitHub:',
     ...(requiredCheck
       ? []
-      : ['  Once CI exists: graft setup project --required-check <job> adds it to the base ruleset.']),
-    `  A second ruleset limiting what the App may create, e.g. branches \`agent/**\` only: ${rules}`,
-    `  Settings → General → Allow auto-merge, if agents will use \`graft pr merge --auto\`.`,
-    ...(slug ? ['', `  App installation (repositories it may touch): ${installUrl(slug)}`] : []),
-    '',
-    'Then check everything with: graft doctor',
-  ].join('\n')
+      : [
+          `Once CI exists, ${c.code('graft setup project --required-check <job>')} adds its check to the base ruleset.`,
+        ]),
+    ...(slug ? [`Which repositories the App may touch: ${c.code(installUrl(slug))}`] : []),
+  ]
 }
 
 /**
@@ -135,14 +140,15 @@ export function githubChecklist({ owner, repo, requiredCheck, slug }) {
  * what was just written — its raw git still authenticates as the human.
  */
 export const RESTART_NOTICE = [
-  '! Claude Code sessions already open in this repository are NOT protected by what was just written:',
+  'Claude Code sessions already open in this repository are NOT protected by what was just written:',
   '  they loaded .claude/settings.json (the git env and the hooks) when they started. Restart them.',
 ].join('\n')
 
 const USAGE = `usage: graft setup project [--config-in <.graft.json | package.json>] [--base <branch>]
                           [--validate "<command>"] [--required-check <name>]
                           [--mergeable <a,b | none>] [--codeowner <@handle>] [--hooks-path <dir>]
-                          [--no-claude] [--yes]`
+                          [--app-branches <prefix | none>] [--auto-merge | --no-auto-merge]
+                          [--no-claude] [--no-doctor] [--yes]`
 
 /** An answer to "where does the policy live", or `null` when it names neither place. */
 export function configLocation(answer) {
@@ -189,18 +195,26 @@ export function placePolicy({ target, policy, graftText, pkgText }) {
   return out
 }
 
+/** Where the policy is, in words: `.graft.json` or `package.json's "graft" key`. */
+const placeName = (p) => (p === PACKAGE_FILE ? `${PACKAGE_FILE}'s "${PACKAGE_KEY}" key` : p)
+
 /**
  * @param {string[]} argv
- * @param {{ prompt?: import('./prompt.mjs').Prompter, cwd?: string, env?: NodeJS.ProcessEnv, admin?: ReturnType<typeof ghAdmin> }} [deps]
+ * @param {{
+ *   prompt?: import('./prompt.mjs').Prompter, cwd?: string, env?: NodeJS.ProcessEnv,
+ *   admin?: ReturnType<typeof ghAdmin>, color?: boolean,
+ *   doctor?: (argv: string[], deps: { cwd?: string, env?: NodeJS.ProcessEnv }) => Promise<unknown>,
+ * }} [deps]
  */
 export async function setupProject(argv, deps = {}) {
   if (has(argv, '--help')) return say(USAGE)
+  const c = palette(deps.color ?? colorOn(process.stdout, deps.env ?? process.env))
   const prompt = deps.prompt ?? createPrompter({ yes: has(argv, '--yes') })
   try {
     const ctx = resolveContext(contextOptions(argv, deps))
     const root = ctx.requireRoot()
     const { owner, repo, full } = ctx.repo()
-    say(`Setting up ${full} in ${root}`)
+    say(`${c.bold('graft setup project')} ${c.dim('·')} ${c.code(full)} ${c.dim(`in ${root}`)}`)
 
     // --- the App must reach this repo -----------------------------------
     let meta
@@ -224,9 +238,10 @@ export async function setupProject(argv, deps = {}) {
       }
       throw err
     }
-    say(`✓ the App can reach ${full} (default branch: ${meta.default_branch})`)
+    say(c.ok(`the App can reach ${full} (default branch: ${meta.default_branch})`))
 
     // --- the policy: .graft.json, or package.json's "graft" key ------------
+    say(c.section('Policy'))
     const readRoot = (/** @type {string} */ p) =>
       existsSync(join(root, p)) ? readFileSync(join(root, p), 'utf8') : null
     let located
@@ -243,7 +258,8 @@ export async function setupProject(argv, deps = {}) {
       (pkgText === null
         ? PROJECT_FILE
         : await prompt.ask(
-            `Where should graft keep this repo's policy: ${PROJECT_FILE}, or the "${PACKAGE_KEY}" key in ${PACKAGE_FILE}?`,
+            `Where should graft keep this repo's policy: ${PROJECT_FILE}, or the "${PACKAGE_KEY}" key in ${PACKAGE_FILE}?` +
+              (located.source ? ` (now: ${located.source})` : ''),
             { default: located.source ?? PROJECT_FILE, flag: '--config-in' },
           ))
     const target = configLocation(configAnswer)
@@ -289,16 +305,23 @@ export async function setupProject(argv, deps = {}) {
     else delete project.requiredCheck
     if (validate) project.validate = { ...(current.validate ?? {}), command: validate }
     if (hooksDir) project.hooks = { ...(current.hooks ?? {}), path: hooksDir }
-    for (const w of placePolicy({ target, policy: project, graftText: readRoot(PROJECT_FILE), pkgText }))
-      if (w.content === null) await removeWithConfirm(prompt, join(root, w.path), root)
-      else await writeWithConfirm(prompt, join(root, w.path), w.content, root)
+    const writes = placePolicy({ target, policy: project, graftText: readRoot(PROJECT_FILE), pkgText })
+    const from = located.source && located.source !== target ? located.source : null
+    await applyWrites(prompt, writes, root, c, {
+      // A move is one change: both halves, or neither — never the policy in two places.
+      title: from ? `move the policy from ${placeName(from)} to ${placeName(target)}` : null,
+      declined: from ? `kept the policy in ${placeName(from)}; nothing was written` : null,
+    })
     if (target === PACKAGE_FILE)
       say(
-        `  note: graft protects the "${PACKAGE_KEY}" key, not the whole ${PACKAGE_FILE}. GitHub cannot enforce a key;\n` +
-          `  own /${PACKAGE_FILE} in CODEOWNERS too if every change to it should need review.`,
+        c.dim(
+          `  note: graft protects the "${PACKAGE_KEY}" key, not the whole ${PACKAGE_FILE}. GitHub cannot enforce a key;\n` +
+            `  own /${PACKAGE_FILE} in CODEOWNERS too if every change to it should need review.`,
+        ),
       )
 
     // --- CODEOWNERS ------------------------------------------------------
+    say(c.section('Code owners'))
     const found = findCodeowners((p) => (existsSync(join(root, p)) ? readFileSync(join(root, p), 'utf8') : null))
     const isOrg = meta.owner?.type === 'Organization'
     const coPath = found.path ?? CODEOWNERS_LOCATIONS[0]
@@ -319,12 +342,13 @@ export async function setupProject(argv, deps = {}) {
       const next = found.path
         ? `${found.text.replace(/\n*$/, '\n')}\n# The protection itself (added by graft setup).\n${missing.join('\n')}\n`
         : newCodeowners(missing)
-      await writeWithConfirm(prompt, join(root, coPath), next, root)
-    } else say(`✓ ${coPath} already owns the protection itself`)
+      await applyWrites(prompt, [{ path: coPath, content: next }], root, c)
+    } else say(c.ok(`${coPath} already owns the protection itself`))
 
     // --- .claude/settings.json ------------------------------------------
     let settingsWritten = false
     if (!has(argv, '--no-claude')) {
+      say(c.section('Claude Code'))
       const settingsPath = join(root, '.claude', 'settings.json')
       const existing = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, 'utf8')) : {}
       // Keep rewrites for other owners the file already names.
@@ -334,15 +358,26 @@ export async function setupProject(argv, deps = {}) {
         if (/^url\..*\.insteadOf$/.test(k) && m) owners.add(m[1])
       }
       const next = mergeSettings(existing, { env: gitConfigEnv({ owners: [...owners] }), hooks: claudeHooks() })
-      settingsWritten = await writeWithConfirm(prompt, settingsPath, `${JSON.stringify(next, null, 2)}\n`, root)
+      settingsWritten = await applyWrites(
+        prompt,
+        [{ path: join('.claude', 'settings.json'), content: `${JSON.stringify(next, null, 2)}\n` }],
+        root,
+        c,
+      )
     }
 
-    // --- the base branch's ruleset, on GitHub ---------------------------
+    // --- on GitHub: the base branch's ruleset, then the optional steps ---
+    say(c.section('GitHub'))
+    const admin = deps.admin ?? ghAdmin()
     let effective = null
     try {
       effective = await client.api(`/repos/${owner}/${repo}/rules/branches/${encodeURIComponent(baseBranch)}`)
     } catch (err) {
-      say(`! could not read the rules on ${baseBranch}: ${String(/** @type {Error} */ (err).message).slice(0, 200)}`)
+      say(
+        c.warn(
+          `could not read the rules on ${baseBranch}: ${String(/** @type {Error} */ (err).message).slice(0, 200)}`,
+        ),
+      )
     }
     if (effective)
       await ensureBaseRuleset({
@@ -351,50 +386,87 @@ export async function setupProject(argv, deps = {}) {
         base: baseBranch,
         requiredCheck: requiredCheck || null,
         effective,
-        admin: deps.admin ?? ghAdmin(),
+        admin,
         prompt,
         say,
         env: ctx.env,
+        c,
       })
+    const step = { owner, repo, admin, prompt, say, c }
+    await ensureAppBranches({
+      ...step,
+      answer: flag(argv, '--app-branches') ?? null,
+      bots: BRANCH_BOT_FILES.filter((f) => existsSync(join(root, f))),
+    })
+    await ensureAutoMerge({
+      ...step,
+      enabled: meta.allow_auto_merge,
+      agentsMerge: mergeable.length > 0,
+      answer: has(argv, '--auto-merge') ? true : has(argv, '--no-auto-merge') ? false : null,
+    })
 
-    say('')
-    say(githubChecklist({ owner, repo, requiredCheck: requiredCheck || null, slug }))
-    if (settingsWritten) say(`\n${RESTART_NOTICE}`)
+    const notes = closingNotes({ requiredCheck: requiredCheck || null, slug, c })
+    if (notes.length) {
+      say(c.section('Left to you'))
+      for (const n of notes) say(`  ${n}`)
+    }
+    if (settingsWritten) say(`\n${c.warn(c.yellow(RESTART_NOTICE))}`)
+
+    if (has(argv, '--no-doctor')) say(`\n${c.dim('Check everything with:')} ${c.code('graft doctor')}`)
+    else if (await prompt.confirm('Run graft doctor now?', { default: true })) {
+      say(c.section('graft doctor'))
+      await (deps.doctor ?? doctor)(argv, { cwd: deps.cwd, env: deps.env })
+    } else say(c.skip(`check everything later with ${c.code('graft doctor')}`))
   } finally {
     prompt.close()
   }
 }
 
-/** Confirm, then delete — the policy moved out of this file. */
-async function removeWithConfirm(prompt, path, root) {
-  const rel = path.slice(root.length + 1)
-  if (!existsSync(path)) return false
-  say(`\nremove ${rel} (the policy now lives elsewhere; two would be refused)`)
-  if (!(await prompt.confirm(`remove ${rel}?`, { default: true, flag: '--yes' }))) {
-    say(`  kept ${rel} — graft will refuse to run until one of the two is gone`)
-    return false
-  }
-  rmSync(path)
-  say(`  removed ${rel}`)
-  return true
-}
+/**
+ * Show what would change, confirm once, apply. Unchanged files are left alone.
+ * Several writes with a `title` are one change: confirmed together, applied
+ * together, or not at all.
+ *
+ * @param {import('./prompt.mjs').Prompter} prompt
+ * @param {{ path: string, content: string | null }[]} writes  `content: null` deletes
+ * @param {string} root
+ * @param {import('./style.mjs').Palette} c
+ * @param {{ title?: string | null, declined?: string | null }} [opts]
+ * @returns {Promise<boolean>} whether anything was written
+ */
+export async function applyWrites(prompt, writes, root, c, { title = null, declined = null } = {}) {
+  const changes = writes
+    .map((w) => {
+      const abs = join(root, w.path)
+      const before = existsSync(abs) ? readFileSync(abs, 'utf8') : null
+      return { ...w, abs, before }
+    })
+    .filter((w) => (w.content === null ? w.before !== null : w.before !== w.content))
+  for (const w of writes)
+    if (!changes.some((x) => x.path === w.path) && w.content !== null) say(c.ok(`${w.path} is up to date`))
+  if (!changes.length) return false
 
-/** Show what would change, confirm, write. Unchanged files are left alone. */
-async function writeWithConfirm(prompt, path, content, root) {
-  const rel = path.slice(root.length + 1)
-  const before = existsSync(path) ? readFileSync(path, 'utf8') : null
-  if (before === content) {
-    say(`✓ ${rel} is up to date`)
+  if (title) say(c.bold(title))
+  for (const w of changes) {
+    const verb = w.content === null ? 'remove' : w.before === null ? 'create' : 'update'
+    say(`${title ? '  ' : ''}${verb} ${c.code(w.path)}${w.content === null ? '' : ':'}`)
+    if (w.content !== null)
+      for (const l of lineDiff(w.before, w.content).slice(0, 40)) say(`${title ? '    ' : '  '}${c.diff(l)}`)
+  }
+  const question = title
+    ? `${title.charAt(0).toUpperCase()}${title.slice(1)}?`
+    : `${changes[0].before === null ? 'Create' : 'Update'} ${changes[0].path}?`
+  if (!(await prompt.confirm(question, { default: true, flag: '--yes' }))) {
+    say(c.skip(declined ?? `skipped ${changes.map((w) => w.path).join(', ')}`))
     return false
   }
-  say(`\n${before === null ? 'create' : 'update'} ${rel}:`)
-  for (const l of lineDiff(before, content).slice(0, 40)) say(`  ${l}`)
-  if (!(await prompt.confirm(`write ${rel}?`, { default: true, flag: '--yes' }))) {
-    say(`  skipped ${rel}`)
-    return false
+  for (const w of changes) {
+    if (w.content === null) rmSync(w.abs)
+    else {
+      mkdirSync(dirname(w.abs), { recursive: true })
+      writeFileSync(w.abs, w.content)
+    }
+    say(c.done(`${w.content === null ? 'removed' : 'wrote'} ${w.path}`))
   }
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, content)
-  say(`  wrote ${rel}`)
   return true
 }

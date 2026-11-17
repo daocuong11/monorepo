@@ -24,6 +24,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { graftHome } from '../config.mjs'
+import { palette } from './style.mjs'
 
 /** The ruleset graft owns on a base branch. Other rulesets are never touched. */
 export const rulesetName = (base) => `graft: ${base}`
@@ -201,6 +202,7 @@ export function ghAdmin({ run = spawnSync } = {}) {
  *   prompt: import('./prompt.mjs').Prompter,
  *   say?: (line?: string) => void,
  *   env?: NodeJS.ProcessEnv,
+ *   c?: import('./style.mjs').Palette,
  * }} input
  * @returns {Promise<{ state: 'ok' | 'created' | 'updated' | 'skipped' | 'file', file?: string }>}
  */
@@ -214,23 +216,24 @@ export async function ensureBaseRuleset({
   prompt,
   say = console.log,
   env = process.env,
+  c = palette(false),
 }) {
   const wanted = wantedRules({ requiredCheck })
   const missing = missingRules(effective, wanted)
   if (!missing.length) {
-    say(`✓ ${base} on GitHub: ${wanted.map(describeRule).join('; ')}`)
+    say(c.ok(`${base} on GitHub: ${wanted.map(describeRule).join('; ')}`))
     return { state: 'ok' }
   }
   const name = rulesetName(base)
   const rulesets = `/repos/${owner}/${repo}/rulesets`
-  say(`\n${base} on GitHub lacks:`)
-  for (const m of missing) say(`  + ${describeRule(m)}`)
+  say(`${base} on GitHub lacks:`)
+  for (const m of missing) say(c.green(`  + ${describeRule(m)}`))
 
   const toFile = (why) => {
     const file = join(graftHome(env), 'rulesets', `${owner}-${repo}-${base.replace(/[^\w.-]/g, '_')}.json`)
     mkdirSync(join(graftHome(env), 'rulesets'), { recursive: true })
     writeFileSync(file, `${JSON.stringify(rulesetBody({ base, wanted, missing }), null, 2)}\n`)
-    say(`! could not apply it as you (${why}).`)
+    say(c.warn(`could not apply it as you (${why}).`))
     say(`  A repository admin can import ${file}`)
     say(`  at https://github.com/${owner}/${repo}/settings/rules → New ruleset → Import a ruleset,`)
     say(`  or log in with \`gh auth login\` and run graft setup project again.`)
@@ -249,9 +252,9 @@ export async function ensureBaseRuleset({
   }
   const body = rulesetBody({ base, wanted, missing, existing })
   const verb = existing ? 'update' : 'create'
-  if (!existing) say(`  bypass: repository admins, through pull requests only (the App never)`)
+  if (!existing) say(c.dim(`  bypass: repository admins, through pull requests only (the App never)`))
   if (!(await prompt.confirm(`${verb} ruleset "${name}" on ${owner}/${repo}, as ${admin.who}?`, { default: true }))) {
-    say(`  skipped the ruleset`)
+    say(c.skip('skipped the ruleset'))
     return { state: 'skipped' }
   }
   try {
@@ -259,6 +262,6 @@ export async function ensureBaseRuleset({
   } catch (err) {
     return toFile(/** @type {Error} */ (err).message)
   }
-  say(`  ${verb}d ruleset "${name}"`)
+  say(c.done(`${verb}d ruleset "${name}"`))
   return { state: existing ? 'updated' : 'created' }
 }
