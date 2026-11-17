@@ -1,0 +1,44 @@
+{
+  "name": "@oakgreencc/canopy",
+  "version": "0.0.0",
+  "description": "A local read-only page over cambium's heartbeat and the GitHub queues: mode, ticks, workers, events, and the q:* columns with agent PRs.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oakgreencc/monorepo.git",
+    "directory": "packages/canopy"
+  },
+  "homepage": "https://github.com/oakgreencc/monorepo/tree/main/packages/canopy#readme",
+  "bugs": {
+    "url": "https://github.com/oakgreencc/monorepo/issues"
+  },
+  "keywords": [
+    "dashboard",
+    "github",
+    "queue",
+    "cambium",
+    "agent"
+  ],
+  "bin": {
+    "canopy": "bin/canopy.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/"
+  ],
+  "scripts": {
+    "lint": "biome check .",
+    "test": "node --test 'test/*.test.mjs'"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "nx": {
+    "name": "canopy"
+  }
+}
