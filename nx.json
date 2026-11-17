@@ -78,7 +78,9 @@
     },
     "git": {
       "commit": false,
-      "tag": true
+      "tag": true,
+      "push": true,
+      "pushArgs": "origin refs/tags/*:refs/tags/*"
     },
     "releaseTag": {
       "pattern": "{projectName}@{version}"
