@@ -1,0 +1,227 @@
+// @ts-check
+/**
+ * Fakes for the tick: a stateful GitHub (labels, one state comment per issue
+ * rendered and re-parsed through the real marker code, PRs), a clock, a
+ * spawner and a process table. Not a test file.
+ */
+import { resolveConfig } from '../src/config.mjs'
+import { parseMarker } from '../src/marker.mjs'
+import { openStore } from '../src/store.mjs'
+
+export const SLUG = 'o/r'
+export const T0 = Date.parse('2026-11-16T12:00:00Z')
+
+/**
+ * @typedef {{ number: number, title?: string, state?: 'OPEN' | 'CLOSED', createdAt?: string, body?: string,
+ *   labels?: string[], comment?: { id: number, body: string } | null }} FakeIssue
+ * @typedef {Partial<import('../src/github.mjs').PullRequest> & { number: number, closes: number[] }} FakePr
+ */
+
+/** @param {{ issues?: FakeIssue[], prs?: FakePr[] }} [seed] */
+export function fakeGitHub({ issues = [], prs = [] } = {}) {
+  /** @type {Map<number, Required<FakeIssue>>} */
+  const store = new Map()
+  for (const i of issues)
+    store.set(i.number, {
+      title: `Issue ${i.number}`,
+      state: 'OPEN',
+      createdAt: new Date(T0 - (1000 - i.number) * 60_000).toISOString(),
+      body: `Body of ${i.number}`,
+      labels: [],
+      comment: null,
+      ...i,
+    })
+  /** @type {import('../src/github.mjs').PullRequest[]} */
+  const pulls = prs.map((p) => ({
+    url: `https://github.com/${SLUG}/pull/${p.number}`,
+    branch: `agent/issue-${p.closes[0]}`,
+    state: 'OPEN',
+    headSha: 'sha1aaaaaaa',
+    branchExists: true,
+    inMergeQueue: false,
+    autoMerge: true,
+    checks: 'PENDING',
+    failing: [],
+    ...p,
+  }))
+  /** @type {{ op: string, args: any[] }[]} */
+  const calls = []
+  let nextComment = 1000
+  /** @type {{ readError: Error | null, labelError: Error | null, hang: boolean }} */
+  const faults = { readError: null, labelError: null, hang: false }
+
+  const toIssue = (/** @type {Required<FakeIssue>} */ i) => ({
+    number: i.number,
+    title: i.title,
+    url: `https://github.com/${SLUG}/issues/${i.number}`,
+    state: i.state,
+    createdAt: i.createdAt,
+    body: i.body,
+    labels: [...i.labels],
+    stateComment: i.comment ? { id: i.comment.id, marker: /** @type {any} */ (parseMarker(i.comment.body)) } : null,
+  })
+
+  /** @type {import('../src/github.mjs').GitHub} */
+  const github = {
+    async read(slug) {
+      calls.push({ op: 'read', args: [slug] })
+      if (faults.hang) await new Promise(() => {})
+      if (faults.readError) throw faults.readError
+      const issuesOut = new Map()
+      for (const i of store.values())
+        if (i.state === 'OPEN' && i.labels.some((l) => l.startsWith('q:'))) issuesOut.set(i.number, toIssue(i))
+      for (const p of pulls)
+        for (const n of p.closes)
+          if (store.has(n) && !issuesOut.has(n)) issuesOut.set(n, toIssue(/** @type {any} */ (store.get(n))))
+      return { issues: issuesOut, prs: pulls.map((p) => ({ ...p, closes: [...p.closes], failing: [...p.failing] })) }
+    },
+    async label(slug, number, { add, remove }) {
+      calls.push({ op: 'label', args: [slug, number, { add, remove }] })
+      if (faults.labelError) throw faults.labelError
+      const i = /** @type {Required<FakeIssue>} */ (store.get(number))
+      i.labels = [...i.labels.filter((l) => !remove.includes(l)), ...add.filter((l) => !i.labels.includes(l))]
+    },
+    async writeState(slug, number, commentId, body) {
+      calls.push({ op: 'writeState', args: [slug, number, commentId, body] })
+      const i = /** @type {Required<FakeIssue>} */ (store.get(number))
+      if (commentId && i.comment?.id !== commentId) throw new Error(`no comment ${commentId}`)
+      const id = commentId ?? nextComment++
+      i.comment = { id, body }
+      return id
+    },
+    async close(slug, number, body) {
+      calls.push({ op: 'close', args: [slug, number, body] })
+      const i = /** @type {Required<FakeIssue>} */ (store.get(number))
+      i.state = 'CLOSED'
+    },
+    async deleteBranch(slug, branch) {
+      calls.push({ op: 'deleteBranch', args: [slug, branch] })
+      for (const p of pulls) if (p.branch === branch) p.branchExists = false
+    },
+  }
+  return {
+    github,
+    calls,
+    faults,
+    pulls,
+    issue: (/** @type {number} */ n) => /** @type {Required<FakeIssue>} */ (store.get(n)),
+    marker: (/** @type {number} */ n) => parseMarker(store.get(n)?.comment?.body),
+    /** @param {FakePr} p */
+    addPr(p) {
+      pulls.push({
+        url: `https://github.com/${SLUG}/pull/${p.number}`,
+        branch: `agent/issue-${p.closes[0]}`,
+        state: 'OPEN',
+        headSha: 'sha1aaaaaaa',
+        branchExists: true,
+        inMergeQueue: false,
+        autoMerge: true,
+        checks: 'PENDING',
+        failing: [],
+        ...p,
+      })
+    },
+    pr: (/** @type {number} */ n) =>
+      /** @type {import('../src/github.mjs').PullRequest} */ (pulls.find((p) => p.number === n)),
+  }
+}
+
+export function fakeClock(t = T0) {
+  return {
+    t,
+    now() {
+      return this.t
+    },
+    advance(/** @type {number} */ ms) {
+      this.t += ms
+    },
+  }
+}
+
+export function fakeProcs() {
+  const alive = new Set()
+  /** @type {number[]} */
+  const killed = []
+  return {
+    alive: (/** @type {number} */ pid) => alive.has(pid),
+    kill(/** @type {number} */ pid) {
+      killed.push(pid)
+      alive.delete(pid)
+    },
+    live: alive,
+    killed,
+  }
+}
+
+/** @param {ReturnType<typeof fakeProcs>} procs */
+export function fakeSpawner(procs) {
+  let pid = 5000
+  /** @type {(import('../src/workers.mjs').StartSpec & { prompt: string })[]} */
+  const started = []
+  /** @type {string[]} */
+  const cleaned = []
+  const s = {
+    fail: /** @type {Error | null} */ (null),
+    started,
+    cleaned,
+    /** @param {import('../src/workers.mjs').StartSpec} spec */
+    async start(spec) {
+      if (s.fail) throw s.fail
+      const p = ++pid
+      procs.live.add(p)
+      const prompt = spec.buildPrompt('# AGENTS.md from the worktree')
+      started.push({ ...spec, prompt })
+      const base = `/logs/o__r/issue-${spec.issue}/a${spec.attempt}`
+      return {
+        pid: p,
+        worktree: `/wt/o__r/issue-${spec.issue}-a${spec.attempt}`,
+        stdout: `${base}.out.log`,
+        stderr: `${base}.err.log`,
+        prompt: `${base}.prompt.md`,
+        exited: Promise.resolve(0),
+      }
+    },
+    /** @param {{ worktree: string }} w */
+    async cleanup(w) {
+      cleaned.push(w.worktree)
+    },
+    tail: () => 'Error: the last stderr line',
+  }
+  return s
+}
+
+/**
+ * @param {{ issues?: FakeIssue[], prs?: FakePr[], config?: any, store?: import('../src/store.mjs').Store }} [seed]
+ */
+export function harness({ issues, prs, config: raw = {}, store } = {}) {
+  const config = resolveConfig({
+    host: 'mac',
+    stepTimeoutSeconds: 5,
+    repos: [{ slug: SLUG, path: '/repo' }],
+    paths: { home: '/nonexistent-cambium-home' },
+    ...raw,
+  })
+  const gh = fakeGitHub({ issues, prs })
+  const clock = fakeClock()
+  const procs = fakeProcs()
+  const spawner = fakeSpawner(procs)
+  /** @type {import('../src/tick.mjs').Event[]} */
+  const events = []
+  /** @type {import('../src/tick.mjs').HeartbeatState[]} */
+  const beats = []
+  /** @type {import('../src/tick.mjs').Deps} */
+  const deps = {
+    config,
+    clock,
+    github: gh.github,
+    store: store ?? openStore(':memory:'),
+    spawner,
+    procs,
+    log: (level, msg, where = {}) => events.push({ at: new Date(clock.now()).toISOString(), level, msg, ...where }),
+    events: () => events,
+    heartbeat: (s) => {
+      beats.push(structuredClone(s))
+    },
+  }
+  return { deps, gh, clock, procs, spawner, events, beats, config }
+}

@@ -1,0 +1,200 @@
+// @ts-check
+/**
+ * The verbs. `main(argv, io)` returns an exit code; every side effect beyond
+ * the config, the store and the heartbeat file goes through `io`, so tests
+ * drive it with fakes.
+ */
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { configPath, loadConfig } from './config.mjs'
+import { acquireLock, readHeartbeat, realDeps, runDaemon } from './daemon.mjs'
+import { plist, plistPath } from './launchd.mjs'
+import { openStore } from './store.mjs'
+import { finish, newCtx, startTask } from './tick.mjs'
+
+export const VERSION = '0.0.0'
+
+export const HELP = `cambium ${VERSION} — the scheduler daemon
+
+  cambium start [--once]                foreground daemon: one tick every tickSeconds
+  cambium status [--json]               last heartbeat, mode, workers
+  cambium pause                         read + heartbeat only: no transitions, no starts
+  cambium resume                        back to running
+  cambium drain                         reconcile and watch, start no new workers
+  cambium run task --issue <n> [--repo <owner/name>]
+                                        claim one q:task issue, run its worker in the foreground, transition
+  cambium install [--dry-run]           write the launchd agent (KeepAlive); --dry-run prints it
+
+Common: --config <file> (default $CAMBIUM_CONFIG, then ~/.cambium/config.json)`
+
+/** @param {string[]} argv @param {string} name */
+const flag = (argv, name) => {
+  const i = argv.indexOf(name)
+  return i === -1 ? undefined : argv[i + 1]
+}
+/** @param {string[]} argv @param {string} name */
+const has = (argv, name) => argv.includes(name)
+
+/**
+ * @typedef {{
+ *   out: (line: string) => void,
+ *   err: (line: string) => void,
+ *   env: NodeJS.ProcessEnv,
+ *   deps?: (config: import('./config.mjs').Config) => import('./tick.mjs').Deps,
+ *   signal?: AbortSignal,
+ *   now?: () => number,
+ * }} IO
+ */
+
+/** @param {string[]} argv @param {IO} io @returns {Promise<number>} */
+export async function main(argv, io) {
+  const [verb, ...rest] = argv
+  if (!verb || verb === 'help' || verb === '--help' || verb === '-h') {
+    io.out(HELP)
+    return verb ? 0 : 1
+  }
+  if (verb === 'version' || verb === '--version') {
+    io.out(VERSION)
+    return 0
+  }
+  const cfgPath = configPath(flag(rest, '--config'), io.env)
+  const config = loadConfig(cfgPath)
+  const depsFor = io.deps ?? ((c) => realDeps(c, { echo: io.out }))
+
+  switch (verb) {
+    case 'start': {
+      if (!config.repos.length) return fail(io, `no repos in ${cfgPath}; see the README for the config file`)
+      const deps = depsFor(config)
+      acquireLock(deps.store, deps.procs, deps.pid ?? process.pid)
+      await runDaemon(deps, { signal: io.signal, once: has(rest, '--once') })
+      return 0
+    }
+    case 'status':
+      return status(config, io, has(rest, '--json'))
+    case 'pause':
+    case 'resume':
+    case 'drain': {
+      const store = openStore(config.paths.db)
+      store.setMode(verb === 'pause' ? 'paused' : verb === 'drain' ? 'draining' : 'running')
+      io.out(`mode: ${store.mode()}`)
+      store.close()
+      return 0
+    }
+    case 'run':
+      return runOne(config, rest, io, depsFor)
+    case 'install':
+      return install(cfgPath, config, io, has(rest, '--dry-run'))
+  }
+  return fail(io, `unknown verb "${verb}"\n\n${HELP}`)
+}
+
+/** @param {IO} io @param {string} msg */
+function fail(io, msg) {
+  io.err(`cambium: ${msg}`)
+  return 1
+}
+
+/** @param {import('./config.mjs').Config} config @param {IO} io @param {boolean} json */
+function status(config, io, json) {
+  const hb = readHeartbeat(config.paths.heartbeat)
+  const store = openStore(config.paths.db)
+  const mode = store.mode()
+  store.close()
+  if (json) {
+    io.out(JSON.stringify({ mode, heartbeat: hb }, null, 2))
+    return 0
+  }
+  io.out(`mode: ${mode}`)
+  if (!hb) {
+    io.out(`no heartbeat at ${config.paths.heartbeat} (daemon never ticked)`)
+    return 1
+  }
+  const age = Math.round(((io.now ?? Date.now)() - Date.parse(hb.tick.finishedAt)) / 1000)
+  const stale = age > hb.daemon.tickSeconds * 3
+  io.out(
+    `last tick #${hb.tick.n} ${age}s ago on ${hb.host} (pid ${hb.pid})${stale ? ' — STALE: daemon not ticking' : ''}`,
+  )
+  const c = hb.counts
+  io.out(
+    `queues: intake ${c.intake} · task ${c.task} · human ${c.human} · promote ${c.promote} · running ${c.running} · in review ${c.review}`,
+  )
+  io.out(`workers: ${c.workers}/${hb.caps.task}`)
+  for (const w of hb.workers)
+    io.out(
+      `  ${w.repo}#${w.issue} ${w.phase} attempt ${w.attempt} pid ${w.pid}${w.alive ? '' : ' (gone)'} ` +
+        `${Math.round(w.elapsedMs / 60000)}/${Math.round(w.wallClockMs / 60000)} min · ${w.logs.stdout}`,
+    )
+  for (const s of hb.steps.filter((s) => !s.ok)) io.out(`  step ${s.name} failed: ${s.error}`)
+  return stale ? 1 : 0
+}
+
+/**
+ * `run task --issue N`: one Task phase in the foreground, with the daemon's
+ * claim and transitions, so the daemon sees the same state afterwards.
+ *
+ * @param {import('./config.mjs').Config} config @param {string[]} argv @param {IO} io
+ * @param {(config: import('./config.mjs').Config) => import('./tick.mjs').Deps} depsFor
+ */
+async function runOne(config, argv, io, depsFor) {
+  const n = Number(flag(argv, '--issue'))
+  if (argv[0] !== 'task' || !Number.isInteger(n) || n <= 0)
+    return fail(io, 'usage: cambium run task --issue <n> [--repo <owner/name>]')
+  const slug = flag(argv, '--repo') ?? (config.repos.length === 1 ? config.repos[0].slug : undefined)
+  if (!slug || !config.repos.some((r) => r.slug === slug))
+    return fail(
+      io,
+      `--repo must name one of the configured repos: ${config.repos.map((r) => r.slug).join(', ') || '(none)'}`,
+    )
+  const deps = depsFor(config)
+  if (deps.store.worker(slug, n)) return fail(io, `${slug}#${n} already has a tracked worker`)
+  const snap = await deps.github.read(slug)
+  const issue = snap.issues.get(n)
+  if (issue?.state !== 'OPEN' || !issue.labels.includes('q:task'))
+    return fail(io, `${slug}#${n} is not an open q:task issue`)
+  if (issue.labels.includes('running')) return fail(io, `${slug}#${n} is already running`)
+  const started = await startTask(deps, newCtx(deps), slug, issue, snap, { foreground: true })
+  if (!started) return fail(io, `${slug}#${n} was not started; see its state comment`)
+  io.out(`worker pid ${started.pid} in ${started.worktree}\n  stdout ${started.stdout}\n  stderr ${started.stderr}`)
+  const code = await started.exited
+  io.out(`worker exited ${code}`)
+  const worker = deps.store.worker(slug, n)
+  if (!worker) return 0
+  const ctx = newCtx(deps)
+  await finish(deps, ctx, worker, await deps.github.read(slug))
+  const after = (await deps.github.read(slug)).issues.get(n)
+  io.out(
+    `${slug}#${n}: ${after?.stateComment?.marker.stage ?? 'closed'} · labels ${after?.labels.join(', ') || '(none)'}`,
+  )
+  return 0
+}
+
+/**
+ * @param {string} cfgPath @param {import('./config.mjs').Config} config @param {IO} io @param {boolean} dryRun
+ */
+function install(cfgPath, config, io, dryRun) {
+  const home = io.env.HOME ?? homedir()
+  const text = plist({
+    node: process.execPath,
+    bin: resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'cambium.mjs'),
+    configPath: cfgPath,
+    logsDir: config.paths.logs,
+    home,
+    path: io.env.PATH ?? '/usr/bin:/bin',
+  })
+  const target = plistPath(home)
+  if (dryRun) {
+    io.out(`# would write ${target}\n${text}`)
+    return 0
+  }
+  if (!config.repos.length) return fail(io, `no repos in ${cfgPath}; write the config first (README)`)
+  if (!existsSync(cfgPath)) return fail(io, `${cfgPath} does not exist`)
+  mkdirSync(dirname(target), { recursive: true })
+  mkdirSync(config.paths.logs, { recursive: true })
+  writeFileSync(target, text)
+  io.out(
+    `wrote ${target}\nload it:   launchctl bootstrap gui/$(id -u) ${target}\nunload it: launchctl bootout gui/$(id -u)/${'com.oakgreencc.cambium'}`,
+  )
+  return 0
+}
