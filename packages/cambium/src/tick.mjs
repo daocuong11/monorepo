@@ -95,7 +95,6 @@ async function runStep(deps, ctx, name, fn) {
       fn(),
       new Promise((_, reject) => {
         timer = setTimeout(() => reject(new Error(`step exceeded ${deps.config.stepTimeoutSeconds}s`)), limit)
-        timer.unref?.()
       }),
     ])
     ctx.steps.push({ name, ok: true, ms: Math.round(performance.now() - t0), error: null })
