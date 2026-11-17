@@ -1,0 +1,45 @@
+{
+  "name": "@oakgreencc/mycelium",
+  "version": "0.0.0",
+  "description": "Intake connectors: Discord posts and App Store / Google Play reviews become deduplicated q:intake intent issues on GitHub.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oakgreencc/monorepo.git",
+    "directory": "packages/mycelium"
+  },
+  "homepage": "https://github.com/oakgreencc/monorepo/tree/main/packages/mycelium#readme",
+  "bugs": {
+    "url": "https://github.com/oakgreencc/monorepo/issues"
+  },
+  "keywords": [
+    "intake",
+    "github",
+    "discord",
+    "app-store-connect",
+    "google-play",
+    "reviews"
+  ],
+  "bin": {
+    "mycelium": "bin/mycelium.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/"
+  ],
+  "scripts": {
+    "lint": "biome check .",
+    "test": "node --test 'test/*.test.mjs'"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "nx": {
+    "name": "mycelium"
+  }
+}

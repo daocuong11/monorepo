@@ -1,0 +1,41 @@
+{
+  "active": {
+    "threads": [
+      {
+        "id": "1566421549056000000",
+        "parent_id": "900000000000000002",
+        "name": "Map does not load",
+        "applied_tags": ["700000000000000001"]
+      },
+      {
+        "id": "1566422807347200000",
+        "parent_id": "900000000000000002",
+        "name": "Typo on the welcome screen",
+        "applied_tags": []
+      },
+      {
+        "id": "1566422052372480000",
+        "parent_id": "900000000000000777",
+        "name": "A thread in another channel"
+      }
+    ],
+    "members": [],
+    "has_more": false
+  },
+  "starters": {
+    "1566421549056000000": {
+      "id": "1566421549056000000",
+      "type": 0,
+      "author": { "id": "800000000000000005", "username": "erin_example" },
+      "content": "Opening the map tab shows a blank grey screen.",
+      "attachments": []
+    },
+    "1566422807347200000": {
+      "id": "1566422807347200000",
+      "type": 0,
+      "author": { "id": "800000000000000006", "username": "frank_example" },
+      "content": "It says 'Welcom' instead of 'Welcome'.",
+      "attachments": []
+    }
+  }
+}

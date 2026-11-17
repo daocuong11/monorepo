@@ -1,0 +1,50 @@
+{
+  "token": { "access_token": "ya29.synthetic-access-token", "expires_in": 3599, "token_type": "Bearer" },
+  "page1": {
+    "reviews": [
+      {
+        "reviewId": "gp:SYNTHETIC-REVIEW-0002",
+        "authorName": "Play User Two",
+        "comments": [
+          {
+            "userComment": {
+              "text": "\tNotifications never arrive on my Pixel.",
+              "lastModified": { "seconds": "1793556000", "nanos": 500000000 },
+              "starRating": 2,
+              "reviewerLanguage": "en",
+              "device": "example_device",
+              "appVersionCode": 42,
+              "appVersionName": "1.4.0"
+            }
+          },
+          {
+            "developerComment": {
+              "text": "Thanks, we're looking into it.",
+              "lastModified": { "seconds": "1793559600", "nanos": 0 }
+            }
+          }
+        ]
+      }
+    ],
+    "tokenPagination": { "nextPageToken": "PAGE2" }
+  },
+  "page2": {
+    "reviews": [
+      {
+        "reviewId": "gp:SYNTHETIC-REVIEW-0001",
+        "authorName": "Play User One",
+        "comments": [
+          {
+            "userComment": {
+              "text": "Dark mode makes the text unreadable.",
+              "lastModified": { "seconds": "1793546000", "nanos": 0 },
+              "starRating": 3,
+              "reviewerLanguage": "de",
+              "appVersionName": "1.4.0"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

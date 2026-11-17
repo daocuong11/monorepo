@@ -28,6 +28,8 @@ importers:
 
   packages/graft: {}
 
+  packages/mycelium: {}
+
 packages:
 
   '@babel/code-frame@7.29.7':
