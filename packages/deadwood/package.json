@@ -1,0 +1,55 @@
+{
+  "name": "@oakgreencc/deadwood",
+  "version": "0.0.0",
+  "description": "The prose gate: a markdown allowlist and a comment-density ceiling per source file, over the files git tracks, with a shrink-only baseline.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oakgreencc/monorepo.git",
+    "directory": "packages/deadwood"
+  },
+  "homepage": "https://github.com/oakgreencc/monorepo/tree/main/packages/deadwood#readme",
+  "bugs": {
+    "url": "https://github.com/oakgreencc/monorepo/issues"
+  },
+  "keywords": [
+    "lint",
+    "comments",
+    "markdown",
+    "nx",
+    "agent"
+  ],
+  "bin": {
+    "deadwood": "bin/deadwood.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/"
+  ],
+  "scripts": {
+    "lint": "biome check .",
+    "test": "node --test 'test/*.test.mjs'"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "nx": {
+    "name": "deadwood",
+    "targets": {
+      "test": {
+        "inputs": [
+          "default",
+          "^production",
+          {
+            "runtime": "git --version"
+          }
+        ]
+      }
+    }
+  }
+}
