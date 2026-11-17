@@ -7,7 +7,10 @@
         "runtime": "node --version"
       }
     ],
-    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "default": [
+      "{projectRoot}/**/*",
+      "sharedGlobals"
+    ],
     "production": [
       "default",
       "!{projectRoot}/test/**",
@@ -18,37 +21,54 @@
       "{projectRoot}/**/*.{js,mjs,cjs,ts,tsx,jsx,json,jsonc}",
       "{workspaceRoot}/biome.json",
       {
-        "externalDependencies": ["@biomejs/biome"]
+        "externalDependencies": [
+          "@biomejs/biome"
+        ]
       }
     ]
   },
   "targetDefaults": {
     "lint": {
       "cache": true,
-      "inputs": ["lintable"]
+      "inputs": [
+        "lintable"
+      ]
     },
     "test": {
       "cache": true,
-      "inputs": ["default", "^production"]
+      "inputs": [
+        "default",
+        "^production"
+      ]
     },
     "typecheck": {
       "cache": true,
-      "inputs": ["default", "^production", "{workspaceRoot}/tsconfig.base.json"]
+      "inputs": [
+        "default",
+        "^production",
+        "{workspaceRoot}/tsconfig.base.json"
+      ]
     },
     "build": {
       "cache": true,
-      "dependsOn": ["^build"],
-      "inputs": ["production", "^production"]
+      "dependsOn": [
+        "^build"
+      ],
+      "inputs": [
+        "production",
+        "^production"
+      ]
     }
   },
   "release": {
-    "projects": ["graft"],
+    "projects": [
+      "graft"
+    ],
     "projectsRelationship": "independent",
-    "releaseTagPattern": "{projectName}@{version}",
     "version": {
-      "conventionalCommits": true,
-      "currentVersionResolver": "registry",
-      "fallbackCurrentVersionResolver": "disk"
+      "currentVersionResolver": "git-tag",
+      "fallbackCurrentVersionResolver": "disk",
+      "specifierSource": "conventional-commits"
     },
     "changelog": {
       "projectChangelogs": {
@@ -59,6 +79,9 @@
     "git": {
       "commit": false,
       "tag": true
+    },
+    "releaseTag": {
+      "pattern": "{projectName}@{version}"
     }
   }
 }
