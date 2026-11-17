@@ -1,0 +1,52 @@
+{
+  "name": "oakgreen",
+  "version": "0.0.0",
+  "description": "Umbrella CLI for the oakgreen stack: `oakgreen doctor` checks a machine and repository, `oakgreen setup` bootstraps what is missing, and `oakgreen <tool>` runs graft, canker, deadwood, cambium, mycelium or canopy.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oakgreencc/monorepo.git",
+    "directory": "packages/oakgreen"
+  },
+  "homepage": "https://github.com/oakgreencc/monorepo/tree/main/packages/oakgreen#readme",
+  "bugs": {
+    "url": "https://github.com/oakgreencc/monorepo/issues"
+  },
+  "keywords": [
+    "cli",
+    "doctor",
+    "setup",
+    "agent",
+    "claude-code",
+    "github"
+  ],
+  "bin": {
+    "oakgreen": "bin/oakgreen.mjs"
+  },
+  "files": [
+    "bin/",
+    "src/"
+  ],
+  "scripts": {
+    "lint": "biome check .",
+    "test": "node --test 'test/*.test.mjs'"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "dependencies": {
+    "@oakgreencc/cambium": "workspace:*",
+    "@oakgreencc/canker": "workspace:*",
+    "@oakgreencc/deadwood": "workspace:*",
+    "@oakgreencc/graft": "workspace:*",
+    "@oakgreencc/mycelium": "workspace:*"
+  },
+  "nx": {
+    "name": "oakgreen"
+  }
+}
