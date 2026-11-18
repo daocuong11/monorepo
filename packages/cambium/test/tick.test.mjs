@@ -681,3 +681,48 @@ scenario('a merged PR closes its issue even while the issue sits in q:task', asy
   assert.equal(h.gh.issue(38).state, 'CLOSED')
   assert.deepEqual(h.gh.issue(38).labels, [])
 })
+
+scenario('watch (#38): q:human removed by hand while its PR is open — red CI is still requeued', async () => {
+  const h = harness({
+    issues: [{ number: 39, labels: [] }],
+    prs: [{ number: 390, closes: [39], checks: 'FAILURE', headSha: 'f00d000' }],
+    config: { phases: { task: { cap: 0 } } },
+  })
+  h.gh.issue(39).comment = {
+    id: 12,
+    body: renderBack({ v: 1, phase: 'task', stage: 'human', attempt: 1, pr: 390, failedSha: 'old', history: [] }),
+  }
+  await tick(h.deps)
+  assert.equal(h.gh.marker(39)?.attempt, 2)
+  assert.equal(h.gh.marker(39)?.failedSha, 'f00d000')
+  assert.match(String(h.gh.marker(39)?.lastFailure), /CI red on PR #390/)
+  assert.deepEqual(h.gh.issue(39).labels, ['q:task'])
+})
+
+scenario('watch (#38): q:task removed by hand while its PR is open — queued, then stalled → q:human', async () => {
+  const h = harness({
+    issues: [{ number: 40, labels: [] }],
+    prs: [{ number: 400, closes: [40], checks: 'PENDING' }],
+    config: { phases: { task: { cap: 0 } } },
+  })
+  h.gh.issue(40).comment = {
+    id: 13,
+    body: renderBack({
+      v: 1,
+      phase: 'task',
+      stage: 'queued',
+      attempt: 2,
+      submittedAt: new Date(h.clock.now()).toISOString(),
+      history: [],
+    }),
+  }
+  await tick(h.deps)
+  assert.equal(h.gh.calls.filter((c) => c.op !== 'read').length, 0, 'pending CI: nothing to do')
+  Object.assign(h.gh.pr(400), { checks: 'SUCCESS', inMergeQueue: true })
+  await tick(h.deps)
+  assert.equal(h.gh.marker(40)?.queued, true)
+  h.clock.advance(121 * MIN)
+  await tick(h.deps)
+  assert.deepEqual(h.gh.issue(40).labels.sort(), ['q:human', 'why:budget'])
+  assert.match(String(h.gh.marker(40)?.lastFailure), /PR #400 not merged within 120 min/)
+})
