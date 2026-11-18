@@ -15,8 +15,9 @@ import { openStore } from './store.mjs'
 import { finish, newCtx, startTask } from './tick.mjs'
 import { runIssue } from './graph-engine.mjs'
 import { createTelemetry } from './tracing.mjs'
+import { defaultExec, realUpdater, runUpdate, VERSION } from './update.mjs'
 
-export const VERSION = '0.0.0'
+export { VERSION }
 
 export const HELP = `cambium ${VERSION} — the scheduler daemon
 
@@ -31,6 +32,9 @@ export const HELP = `cambium ${VERSION} — the scheduler daemon
                                         engine "graph": advance the issue in the foreground to the first wait
                                         that is not ready; --follow keeps polling until the graph ends
   cambium install [--dry-run]           write the launchd agent (KeepAlive); --dry-run prints it
+  cambium update [--check] [--version <v>]
+                                        install the latest (or <v>) from npm into this global install, then
+                                        restart the launchd agent onto it; --check only reports
 
 Common: --config <file> (default $CAMBIUM_CONFIG, then ~/.cambium/config.json)`
 
@@ -69,6 +73,9 @@ async function withTelemetry(deps, io, fn) {
  *   signal?: AbortSignal,
  *   now?: () => number,
  *   sleep?: (ms: number) => Promise<void>,
+ *   updater?: import('./update.mjs').Updater,
+ *   exec?: import('./update.mjs').Exec,
+ *   uid?: number,
  * }} IO
  */
 
@@ -83,6 +90,22 @@ export async function main(argv, io) {
     io.out(VERSION)
     return 0
   }
+  if (verb === 'update') {
+    try {
+      const r = await runUpdate(
+        { check: has(rest, '--check'), version: flag(rest, '--version') },
+        {
+          updater: io.updater ?? realUpdater(),
+          exec: io.exec ?? defaultExec,
+          uid: io.uid ?? process.getuid?.() ?? 0,
+          out: io.out,
+        },
+      )
+      return r.ok ? 0 : fail(io, /** @type {string} */ (r.error))
+    } catch (err) {
+      return fail(io, `update: ${/** @type {Error} */ (err)?.message ?? err}`)
+    }
+  }
   const cfgPath = configPath(flag(rest, '--config'), io.env)
   const config = loadConfig(cfgPath)
   const depsFor = io.deps ?? ((c) => realDeps(c, { echo: io.out }))
@@ -93,7 +116,12 @@ export async function main(argv, io) {
       const deps = depsFor(config)
       acquireLock(deps.store, deps.procs, deps.pid ?? process.pid)
       await withTelemetry(deps, io, () =>
-        runDaemon(deps, { signal: io.signal, once: has(rest, '--once'), reload: () => loadConfig(cfgPath) }),
+        runDaemon(deps, {
+          signal: io.signal,
+          once: has(rest, '--once'),
+          reload: () => loadConfig(cfgPath),
+          env: io.env,
+        }),
       )
       return 0
     }

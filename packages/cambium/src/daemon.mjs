@@ -6,6 +6,7 @@ import { applyReload } from './config.mjs'
 import { graftGitHub } from './github.mjs'
 import { openStore } from './store.mjs'
 import { tick } from './tick.mjs'
+import { autoUpdate, realUpdater } from './update.mjs'
 import { processSpawner, realProcs } from './workers.mjs'
 
 /** @param {string} path @param {unknown} state */
@@ -80,6 +81,7 @@ export function realDeps(config, { echo } = {}) {
     heartbeat: (state) => writeHeartbeat(config.paths.heartbeat, state),
     daemonStartedAt: Date.now(),
     pid: process.pid,
+    updater: realUpdater(),
   }
 }
 
@@ -101,12 +103,14 @@ export function acquireLock(store, procs, pid) {
  * @param {import('./tick.mjs').Deps} deps
  * @param {{
  *   signal?: AbortSignal, wait?: (ms: number, signal?: AbortSignal) => Promise<unknown>, once?: boolean,
- *   reload?: () => import('./config.mjs').Config,
+ *   reload?: () => import('./config.mjs').Config, env?: Record<string, string | undefined>,
  * }} [opts]
+ *   After each tick, with `update.auto`, {@link autoUpdate} may install a newer cambium; the loop then ends so
+ *   the process exits and launchd starts the new version.
  */
 export async function runDaemon(
   deps,
-  { signal, wait = (ms, s) => sleep(ms, undefined, { signal: s }), once = false, reload } = {},
+  { signal, wait = (ms, s) => sleep(ms, undefined, { signal: s }), once = false, reload, env = process.env } = {},
 ) {
   let n = 0
   /** @type {string | null} */
@@ -136,6 +140,10 @@ export async function runDaemon(
     }
     // Every span is ended within its tick; export them now rather than when the batch fills.
     await deps.telemetry?.flush().catch((err) => deps.log('warn', `telemetry flush: ${err?.message ?? err}`))
+    if (deps.updater && !signal?.aborted) {
+      const installed = await autoUpdate(deps, { updater: deps.updater, env, now: deps.clock.now() })
+      if (installed) break
+    }
     if (once) break
     try {
       await wait(deps.config.tickSeconds * 1000, signal)
