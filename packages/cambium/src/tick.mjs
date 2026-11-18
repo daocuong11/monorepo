@@ -340,7 +340,8 @@ async function watch(deps, ctx) {
             pr: pr.number,
             failedSha: pr.headSha,
           })
-        if (pr.inMergeQueue && !m.queued) await setMarker(deps, slug, issue, { ...m, queued: true })
+        // `submitted` too: an issue whose queue label was removed by hand is still at its old stage (#38).
+        if (pr.inMergeQueue && !m.queued) await setMarker(deps, slug, issue, { ...m, stage: 'submitted', queued: true })
         const settled = pr.checks !== 'PENDING' && pr.checks !== 'EXPECTED'
         if (m.queued && !pr.inMergeQueue && !pr.autoMerge && settled)
           return requeue(deps, ctx, slug, issue, {

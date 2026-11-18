@@ -6,8 +6,9 @@
  * same order; each step only chooses where an issue's turn starts:
  *
  * - Reconcile: every tracked worker's issue at `worker-running`.
- * - Watch: issues resting at `ci-running` / `merge-queue` (from the marker); a merged PR goes to `close-out`
- *   from wherever the issue is.
+ * - Watch: issues resting at `ci-running` / `merge-queue` (from the marker), and any task issue in no queue with
+ *   an open PR (a queue label removed by hand), which starts at `ci-running` (`merge-queue` if `queued`); a
+ *   merged PR goes to `close-out` from wherever the issue is.
  * - Sweep: a stale `running` lease runs its node's `recover` (default: `requeue`).
  * - Schedule: the gate on the entry node. Caps and priority pick the issues; each starts at `start-worker`.
  *
@@ -166,8 +167,13 @@ async function watch(deps, ctx) {
         }
         if (pr.state !== 'OPEN' || issue.state !== 'OPEN' || !watched(deps, slug, issue)) return
         const at = locate(issue, ctx.now)
-        if (at?.note) return restart(deps, ctx, slug, issue, at.note)
-        if (at?.node === 'ci-running' || at?.node === 'merge-queue') await drive(deps, ctx, subject, at)
+        if (!at) return
+        if (at.note) return restart(deps, ctx, slug, issue, at.note)
+        if (at.node === 'ci-running' || at.node === 'merge-queue') return drive(deps, ctx, subject, at)
+        // Out of every queue with an open PR, but resting elsewhere (a queue label removed by hand): watch the PR
+        // from where it is, as the legacy Watch does.
+        const node = markerOf(issue).queued ? 'merge-queue' : 'ci-running'
+        await drive(deps, ctx, subject, { node, input: { pr: pr.number, branch: pr.branch } })
       },
       ([, issue]) => ({ repo: slug, issue: issue.number }),
     )
