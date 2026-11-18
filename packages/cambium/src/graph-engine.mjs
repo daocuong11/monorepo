@@ -159,6 +159,9 @@ async function reconcile(deps, ctx) {
   )
 }
 
+/** The waits Watch drives: an open PR on its way to a merge. */
+const WATCHED = new Set(['ci-running', 'merging', 'merge-queue'])
+
 /** @param {Deps} deps @param {Ctx} ctx */
 async function watch(deps, ctx) {
   for (const [slug, snap] of ctx.snaps) {
@@ -180,7 +183,7 @@ async function watch(deps, ctx) {
         const at = locate(issue, ctx.now)
         if (!at) return
         if (at.note) return restart(deps, ctx, slug, issue, at.note)
-        if (at.node === 'ci-running' || at.node === 'merge-queue') return drive(deps, ctx, subject, at)
+        if (WATCHED.has(at.node)) return drive(deps, ctx, subject, at)
         // Out of every queue with an open PR, but resting elsewhere (a queue label removed by hand): watch the PR
         // from where it is, as the legacy Watch does.
         const node = markerOf(issue).queued ? 'merge-queue' : 'ci-running'

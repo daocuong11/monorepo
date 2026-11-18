@@ -110,6 +110,7 @@ const PrIn = z.object({ pr: z.number().int().nullable(), branch: z.string().null
 const PrOut = z.discriminatedUnion('to', [
   z.object({ to: z.literal('merged'), pr: z.number().int() }),
   z.object({ to: z.literal('queued'), pr: z.number().int(), branch: z.string() }),
+  z.object({ to: z.literal('merge'), pr: z.number().int(), branch: z.string() }),
   z.object({ to: z.literal('human'), ...failure }),
   z.object({ to: z.literal('requeue'), ...failure }),
 ])
@@ -122,6 +123,7 @@ const issueGone = (/** @type {{ exit: string }} */ o) => o.exit === 'gone'
 const submitted = (/** @type {{ exit: string }} */ o) => o.exit === 'submitted'
 const merged = (/** @type {{ to: string }} */ o) => o.to === 'merged'
 const inMergeQueue = (/** @type {{ to: string }} */ o) => o.to === 'queued'
+const green = (/** @type {{ to: string }} */ o) => o.to === 'merge'
 const stalled = (/** @type {{ to: string }} */ o) => o.to === 'human'
 const attemptsLeft = (/** @type {{ to: string }} */ o) => o.to === 'start'
 
@@ -162,6 +164,21 @@ function stall(ctx, pr, m) {
     outcome: 'stalled',
     pr: pr.number,
   })
+}
+
+/** How long a refused merge holds before cambium asks again on the same head (a red base clears without a push). */
+export const MERGE_RETRY_MINUTES = 10
+
+/**
+ * Green, and cambium merges this repo's PRs (`merge: "green"`): nothing armed yet, and no refusal on this head
+ * within {@link MERGE_RETRY_MINUTES}.
+ * @param {TaskCtx} ctx @param {PullRequest} pr @param {Marker} m
+ */
+function mergeDue(ctx, pr, m) {
+  const repo = ctx.config.repos.find((r) => r.slug === ctx.subject.slug)
+  if (repo?.merge !== 'green' || pr.checks !== 'SUCCESS' || pr.autoMerge || pr.inMergeQueue) return false
+  const r = m.mergeRefusal
+  return !r || r.sha !== pr.headSha || ctx.tick.now - Date.parse(r.at) > MERGE_RETRY_MINUTES * MIN
 }
 
 /** Delete a merged PR's branch once per tick. @param {TaskCtx} ctx @param {PullRequest} pr */
@@ -245,7 +262,16 @@ const startWorker = declare(
           // This node's cambium.node span, so Claude Code's own spans (when worker.env turns them on) join the trace.
           env: ctx.traceparent ? { TRACEPARENT: ctx.traceparent } : undefined,
           buildPrompt: (agentsMd) =>
-            taskPrompt({ repo: slug, issue, marker, branch, pr, agentsMd, maxAttempts: caps.maxAttempts }),
+            taskPrompt({
+              repo: slug,
+              issue,
+              marker,
+              branch,
+              pr,
+              agentsMd,
+              maxAttempts: caps.maxAttempts,
+              merge: repo.merge,
+            }),
         })
       } catch (err) {
         // The claim already put the marker at worker-running; the failure is this node's.
@@ -370,6 +396,7 @@ const ciRunning = declare(
       const red = redCi(pr, m)
       if (red) return { ready: true, output: red }
       if (pr.inMergeQueue) return { ready: true, output: { to: 'queued', pr: pr.number, branch: pr.branch } }
+      if (mergeDue(ctx, pr, m)) return { ready: true, output: { to: 'merge', pr: pr.number, branch: pr.branch } }
       const late = stall(ctx, pr, m)
       return late ? { ready: true, output: late } : { ready: false }
     },
@@ -391,6 +418,86 @@ const ciRunning = declare(
         input: { pr: input.pr, branch: input.branch },
       })
       ctx.log('info', `submitted PR #${input.pr}; watching CI`, { repo: ctx.subject.slug, issue: ctx.subject.number })
+    },
+  },
+)
+
+const MergeIn = z.object({ pr: z.number().int(), branch: z.string() })
+
+const merge = declare(
+  defineNode({
+    name: 'merge',
+    input: MergeIn,
+    output: z.object({ pr: z.number().int(), branch: z.string(), refused: z.string().nullable() }),
+    /**
+     * Green: merge through `graft pr merge --auto` (a merge now when the PR is clean, else auto-merge), so graft's
+     * merge policy decides. A refusal is not a failure of the work: `merging` holds and asks again later.
+     * @param {z.infer<typeof MergeIn>} input @param {TaskCtx} ctx
+     */
+    run: async (input, ctx) => {
+      try {
+        await ctx.github.mergePull(ctx.subject.slug, input.pr)
+        return { ...input, refused: null }
+      } catch (err) {
+        return { ...input, refused: `merge refused: ${/** @type {Error} */ (err)?.message ?? err}` }
+      }
+    },
+  }),
+  { queue: null, running: false },
+)
+
+const MergingIn = PrIn.extend({ refused: z.string().nullable().optional() })
+
+const merging = declare(
+  defineWait({
+    name: 'merging',
+    input: MergingIn,
+    output: PrOut,
+    /**
+     * Merged → close out. Red → requeue. Due again (a refusal on an older head, or one past the retry window) →
+     * merge. Otherwise hold until `mergeQueueMinutes` after submission.
+     * @param {z.infer<typeof MergingIn>} input @param {TaskCtx} ctx
+     */
+    poll: async (input, ctx) => {
+      const issue = issueOf(ctx)
+      const pr = prOf(ctx, input)
+      if (!pr) return { ready: false }
+      if (pr.state === 'MERGED') return { ready: true, output: { to: 'merged', pr: pr.number } }
+      if (pr.state !== 'OPEN' || issue.state !== 'OPEN') return { ready: false }
+      const m = markerOf(issue)
+      const red = redCi(pr, m)
+      if (red) return { ready: true, output: red }
+      if (m.mergeRefusal && mergeDue(ctx, pr, m))
+        return { ready: true, output: { to: 'merge', pr: pr.number, branch: pr.branch } }
+      const late = stall(ctx, pr, m)
+      return late ? { ready: true, output: late } : { ready: false }
+    },
+  }),
+  {
+    queue: null,
+    running: false,
+    /** @param {z.infer<typeof MergeIn> & { refused: string | null }} input @param {TaskCtx} ctx */
+    enter: async (input, ctx) => {
+      const { slug } = ctx.subject
+      const issue = issueOf(ctx)
+      const m = markerOf(issue)
+      const pr = prOf(ctx, input)
+      const at = iso(ctx.tick.now)
+      const { refused } = input
+      await land(ctx, 'merging', {
+        ...withHistory(m, {
+          at,
+          attempt: m.attempt,
+          outcome: refused ? 'merge-refused' : 'merge-armed',
+          pr: input.pr,
+          ...(refused ? { reason: refused } : {}),
+        }),
+        mergeRefusal: refused ? { sha: pr?.headSha ?? null, at, reason: refused } : null,
+        lastFailure: refused ?? m.lastFailure ?? null,
+        input: { pr: input.pr, branch: input.branch },
+      })
+      if (refused) ctx.log('warn', refused.split('\n')[0], { repo: slug, issue: issue.number })
+      else ctx.log('info', `merging PR #${input.pr}`, { repo: slug, issue: issue.number })
     },
   },
 )
@@ -539,7 +646,7 @@ export const task = defineGraph({
   name: 'task',
   version: 1,
   entry: { queue: Q.task, node: 'start-worker', input: () => ({}) },
-  nodes: [startWorker, workerRunning, ciRunning, mergeQueue, closeOut, requeue, toHuman],
+  nodes: [startWorker, workerRunning, ciRunning, merge, merging, mergeQueue, closeOut, requeue, toHuman],
   edges: [
     ['start-worker', 'worker-running', started],
     ['start-worker', 'to-human', budgetSpent],
@@ -549,8 +656,14 @@ export const task = defineGraph({
     ['worker-running', 'requeue'],
     ['ci-running', 'close-out', merged],
     ['ci-running', 'merge-queue', inMergeQueue],
+    ['ci-running', 'merge', green],
     ['ci-running', 'to-human', stalled],
     ['ci-running', 'requeue'],
+    ['merge', 'merging'],
+    ['merging', 'close-out', merged],
+    ['merging', 'merge', green],
+    ['merging', 'to-human', stalled],
+    ['merging', 'requeue'],
     ['merge-queue', 'close-out', merged],
     ['merge-queue', 'to-human', stalled],
     ['merge-queue', 'requeue'],
@@ -584,6 +697,6 @@ export const TASK_QUEUES = {
 /** The input a resting node resumes with, rebuilt from the marker. @param {string} node @param {Marker} m */
 export function inputFor(node, m) {
   if (node === 'worker-running') return { branch: m.branch, attempt: m.attempt }
-  if (node === 'ci-running' || node === 'merge-queue') return { pr: m.pr, branch: m.branch }
+  if (node === 'ci-running' || node === 'merging' || node === 'merge-queue') return { pr: m.pr, branch: m.branch }
   return {}
 }

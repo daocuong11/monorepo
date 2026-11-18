@@ -48,8 +48,8 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
   /** @type {{ op: string, args: any[] }[]} */
   const calls = []
   let nextComment = 1000
-  /** @type {{ readError: Error | null, labelError: Error | null, hang: boolean }} */
-  const faults = { readError: null, labelError: null, hang: false }
+  /** @type {{ readError: Error | null, labelError: Error | null, hang: boolean, mergeError: Error | null }} */
+  const faults = { readError: null, labelError: null, hang: false, mergeError: null }
 
   const toIssue = (/** @type {Required<FakeIssue>} */ i) => ({
     number: i.number,
@@ -101,6 +101,10 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
     async deleteBranch(slug, branch) {
       calls.push({ op: 'deleteBranch', args: [slug, branch] })
       for (const p of pulls) if (p.branch === branch) p.branchExists = false
+    },
+    async mergePull(slug, number) {
+      calls.push({ op: 'mergePull', args: [slug, number] })
+      if (faults.mergeError) throw faults.mergeError
     },
   }
   return {
@@ -251,6 +255,7 @@ const STAGE_OF = {
   'start-worker': 'queued',
   'worker-running': 'running',
   'ci-running': 'submitted',
+  merging: 'submitted',
   'merge-queue': 'submitted',
   'to-human': 'human',
   'close-out': 'done',

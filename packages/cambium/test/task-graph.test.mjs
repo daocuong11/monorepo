@@ -11,15 +11,25 @@ import { newMarker, parseMarker } from '../src/marker.mjs'
 import { tick } from '../src/tick.mjs'
 import { harness, T0 } from './fakes.mjs'
 
-test('task graph: seven nodes, three waits, valid', () => {
+test('task graph: nine nodes, four waits, valid', () => {
   assert.deepEqual(validateGraph(task), [])
   assert.deepEqual(
     task.nodes.map((n) => n.name),
-    ['start-worker', 'worker-running', 'ci-running', 'merge-queue', 'close-out', 'requeue', 'to-human'],
+    [
+      'start-worker',
+      'worker-running',
+      'ci-running',
+      'merge',
+      'merging',
+      'merge-queue',
+      'close-out',
+      'requeue',
+      'to-human',
+    ],
   )
   assert.deepEqual(
     task.nodes.filter((n) => n.kind === 'wait').map((n) => n.name),
-    ['worker-running', 'ci-running', 'merge-queue'],
+    ['worker-running', 'ci-running', 'merging', 'merge-queue'],
   )
   assert.equal(task.entry.queue, 'q:task')
   assert.equal(task.entry.node, 'start-worker')
@@ -31,6 +41,8 @@ test('each node declares its queue label and whether it holds running', () => {
     'start-worker': ['q:task', false],
     'worker-running': ['q:task', true],
     'ci-running': [null, false],
+    merge: [null, false],
+    merging: [null, false],
     'merge-queue': [null, false],
     'close-out': [null, false],
     requeue: ['q:task', false],
