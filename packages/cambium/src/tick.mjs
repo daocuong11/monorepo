@@ -531,7 +531,16 @@ export async function startTask(deps, ctx, slug, issue, snap, { foreground = fal
       maxTurns: caps.maxTurns,
       foreground,
       buildPrompt: (agentsMd) =>
-        taskPrompt({ repo: slug, issue, marker, branch, pr, agentsMd, maxAttempts: caps.maxAttempts }),
+        taskPrompt({
+          repo: slug,
+          issue,
+          marker,
+          branch,
+          pr,
+          agentsMd,
+          maxAttempts: caps.maxAttempts,
+          merge: repo.merge,
+        }),
     })
   } catch (err) {
     await requeue(deps, ctx, slug, issue, {

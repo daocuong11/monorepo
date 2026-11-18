@@ -12,7 +12,11 @@ import { join, resolve } from 'node:path'
  *   The promotion PR (`engine: "graph"`): `from` (default: the repo's `baseBranch`) is promoted into `to`
  *   (default `main`) once a day at `time`. `enabled`/`time` default to the top-level `release`. Off when
  *   `from === to`.
- * @typedef {{ slug: string, path: string, baseBranch: string, release: RepoRelease }} Repo
+ * @typedef {'none' | 'green'} MergePolicy
+ *   Who merges a Task PR. `none`: not cambium (a merge queue, auto-merge, or a human; past `mergeQueueMinutes`
+ *   the issue goes to `q:human`). `green`: cambium, once its checks are green, through `graft pr merge --auto`
+ *   (so graft's merge policy still decides). `green` needs `engine: "graph"`.
+ * @typedef {{ slug: string, path: string, baseBranch: string, release: RepoRelease, merge: MergePolicy }} Repo
  * @typedef {{ cap: number, wallClockMinutes: number, maxTurns: number, maxAttempts: number }} PhaseCaps
  * @typedef {{
  *   host: string,
@@ -22,6 +26,7 @@ import { join, resolve } from 'node:path'
  *   repos: Repo[],
  *   phases: { task: PhaseCaps, dispatch: PhaseCaps & { maxRounds: number } },
  *   mergeQueueMinutes: number,
+ *   merge: MergePolicy,
  *   priorityLabels: string[],
  *   release: { enabled: boolean, time: string },
  *   paths: { home: string, db: string, heartbeat: string, logs: string },
@@ -31,6 +36,9 @@ import { join, resolve } from 'node:path'
  *   update: { auto: boolean, checkMinutes: number },
  * }} Config
  */
+
+/** @type {readonly MergePolicy[]} */
+const MERGE_POLICIES = Object.freeze(['none', 'green'])
 
 export const DEFAULT_HOME = join(homedir(), '.cambium')
 
@@ -47,6 +55,7 @@ export function defaults(home = DEFAULT_HOME) {
       dispatch: { cap: 0, wallClockMinutes: 15, maxTurns: 50, maxAttempts: 3, maxRounds: 3 },
     },
     mergeQueueMinutes: 120,
+    merge: 'none',
     priorityLabels: ['priority:critical', 'priority:high', 'priority:medium', 'priority:low'],
     release: { enabled: false, time: '06:00' },
     paths: {
@@ -103,8 +112,13 @@ export function resolveConfig(raw = {}) {
       ...r.release,
     }
     if (!/^\d{2}:\d{2}$/.test(release.time)) throw new Error(`config: repo ${r.slug} release.time must be HH:MM`)
-    return { slug: r.slug, path: untilde(r.path), baseBranch, release }
+    const merge = r.merge ?? config.merge
+    if (!MERGE_POLICIES.includes(merge))
+      throw new Error(`config: repo ${r.slug} merge must be "none" or "green", got ${JSON.stringify(merge)}`)
+    return { slug: r.slug, path: untilde(r.path), baseBranch, release, merge }
   })
+  if (!MERGE_POLICIES.includes(config.merge))
+    throw new Error(`config: merge must be "none" or "green", got ${JSON.stringify(config.merge)}`)
   const wenv = config.worker.env
   if (
     !wenv ||
@@ -117,6 +131,9 @@ export function resolveConfig(raw = {}) {
   if (!(Number(config.update.checkMinutes) >= 5)) throw new Error('config: update.checkMinutes must be at least 5')
   if (config.engine !== 'legacy' && config.engine !== 'graph')
     throw new Error(`config: engine must be "legacy" or "graph", got ${JSON.stringify(config.engine)}`)
+  const merging = config.repos.filter((r) => r.merge === 'green')
+  if (merging.length && config.engine !== 'graph')
+    throw new Error(`config: merge "green" (${merging.map((r) => r.slug).join(', ')}) needs engine "graph"`)
   return config
 }
 

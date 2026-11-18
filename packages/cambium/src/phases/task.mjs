@@ -3,9 +3,11 @@
  * @param {{
  *   repo: string, issue: import('../github.mjs').Issue, marker: import('../marker.mjs').Marker,
  *   branch: string, pr: import('../github.mjs').PullRequest | null, agentsMd: string | null, maxAttempts: number,
+ *   merge: import('../config.mjs').MergePolicy,
  * }} input
  */
-export function taskPrompt({ repo, issue, marker, branch, pr, agentsMd, maxAttempts }) {
+export function taskPrompt({ repo, issue, marker, branch, pr, agentsMd, maxAttempts, merge }) {
+  const merges = merge === 'green' ? 'cambium merges the PR once CI is green' : 'the PR is merged outside this session'
   const history = marker.history
     .map(
       (h) =>
@@ -19,7 +21,7 @@ Your contract (the repository's AGENTS.md, four points):
 1. Task: GitHub issue #${issue.number} (below). Its acceptance checks are the definition of done.
 2. Verify: \`pnpm verify\` (lint + tests). Green means committable; the pre-commit hook runs the same command.
 3. Push: \`graft publish ${branch} "<conventional commit message>" --paths <a,b> --pr "<title>" --closes ${issue.number}\`. Never \`git commit\`, \`git push\`, \`git fetch\` or \`git pull\`.
-4. Done: \`graft ci wait ${branch}\`. Green: stop, the PR merges through the queue. Red: read why (\`graft jobs <run>\`), fix, publish again.
+4. Done: \`graft ci wait ${branch}\`. Green: stop; ${merges}. Red: read why (\`graft jobs <run>\`), fix, publish again.
 
 Rules:
 - Publish to exactly the branch \`${branch}\` and pass \`--closes ${issue.number}\`: that is how cambium finds your PR.
