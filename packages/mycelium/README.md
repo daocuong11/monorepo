@@ -2,7 +2,7 @@
 
 Intake connectors. An external event (a Discord post, an App Store review, a Google Play review) is normalized into an **envelope**, fingerprinted, and either opens one `q:intake` intent issue or, when an open intent already has that fingerprint, becomes a comment on it.
 
-Zero dependencies, Node ≥ 22. GitHub access goes through [`graft api`](../graft), so `graft` must be on `PATH` and set up for the target repository.
+Node ≥ 22; the only dependencies are OpenTelemetry's (see [Tracing](#tracing)). GitHub access goes through [`graft api`](../graft), so `graft` must be on `PATH` and set up for the target repository.
 
 ## Usage
 
@@ -34,6 +34,17 @@ The fingerprint is the first 24 hex chars of `sha256("<source>:<identity>")`, lo
 A new intent's body is a fixed template: the marker `<!-- mycelium:fingerprint=<fp> -->` on the **first line** (the only place it is read), an `## Intake` table (source, fingerprint, external id, author, received, url, `meta.*`), and `## Report` holding the reporter's text in a fence, so it cannot mention anyone or inject markup. Label: `q:intake`.
 
 Dedupe reads every open `q:intake` issue once per pass (`GET /repos/<repo>/issues?state=open&labels=q:intake`, paginated), so it never depends on the search index.
+
+## Tracing
+
+Each filed envelope records one short `mycelium.intake` span (`service.name=mycelium`), the root of its own trace, with attributes `mycelium.source`, `mycelium.external_id`, `mycelium.fingerprint`, `mycelium.action` (`create` or `comment`) and `mycelium.issue.number`.
+
+- **Create:** the span starts before the issue is written, and its W3C traceparent goes into the first-line marker: `<!-- mycelium:fingerprint=<fp> traceparent=00-<trace-id>-<span-id>-<flags> -->`. The issue number is set on the span once GitHub returns it. Bodies without a traceparent (filed before tracing, or with tracing off) still parse.
+- **Comment** (a duplicate): a new trace whose span has a **link** (not a parent) to the issue's traceparent, when it has one.
+
+`parseTraceparent(body)` (exported from `@oakgreencc/mycelium`) returns that span context, `{ traceId, spanId, traceFlags, isRemote, traceparent }`, or null; like the fingerprint, only the first line counts.
+
+Configuration is the standard `OTEL_*` environment only. Spans export over OTLP/HTTP when `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set (headers, timeout etc. from `OTEL_EXPORTER_OTLP_*`; `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` override the resource). With no endpoint, or `OTEL_SDK_DISABLED=true`, or `OTEL_TRACES_EXPORTER=none`, tracing is a no-op: the SDK is not loaded and no traceparent is written. Spans are batched and flushed before the CLI exits; `--dry-run` never records or exports.
 
 ## State
 
