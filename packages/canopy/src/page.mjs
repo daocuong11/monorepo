@@ -15,7 +15,23 @@ code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12p
 #top{position:sticky;top:0;z-index:1}
 header{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px var(--s4);padding:10px var(--s4);border-bottom:1px solid var(--line);background:var(--panel)}
 header h1{font-size:14px;margin:0;font-weight:600}
+.tabs{display:flex;gap:var(--s5);padding:0 var(--s4);border-bottom:1px solid var(--line);background:var(--panel);overflow-x:auto;scrollbar-width:none}
+.tab{appearance:none;background:none;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;padding:9px 0 8px;font:inherit;font-weight:500;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.tab:hover{color:var(--text)}.tab[aria-selected=true]{color:var(--text);border-bottom-color:var(--text);font-weight:600}
+.tab:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:3px}
+.tab .count{min-width:18px;padding:0 6px;border-radius:9px;background:var(--chip);color:var(--muted);font-size:12px;font-weight:500;text-align:center}
+.tab .count.attn{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn);font-weight:600}
+.tab .dot{margin:0}
 main{padding:var(--s4) var(--s4) var(--s5);display:grid;gap:var(--s4);max-width:1600px}
+.inbox{list-style:none;margin:0;padding:0}
+.inbox li{padding:var(--s3) 0;border-top:1px solid var(--line)}.inbox li:first-child{border-top:0;padding-top:var(--s1)}
+.inbox .title{font-size:14px;font-weight:500;overflow-wrap:anywhere}.inbox .title .faint{font-weight:400}
+.inbox .why{display:inline-block;padding:0 7px;border-radius:9px;font-size:12px;font-weight:600;color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.inbox .meta{margin-top:var(--s1);align-items:center}
+.calm{padding:var(--s5) 0;text-align:center}.calm p{margin:0}.calm p+p{margin-top:var(--s1)}.calm b{font-size:14px;font-weight:600}
+.lane-label{font-weight:400;text-transform:none;letter-spacing:0;color:var(--faint);margin-left:6px}
+.linkish{appearance:none;background:none;border:0;padding:0;font:inherit;color:var(--accent);cursor:pointer}.linkish:hover{text-decoration:underline}
+.linkish:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
 section{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:var(--s3) var(--s4);min-width:0}
 section.attn{border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}section.attn>h2 .n{color:var(--warn)}
 h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 var(--s2);font-weight:600}
@@ -26,7 +42,6 @@ h2 .n{color:var(--faint);margin-left:4px}
 .pill.err{background:color-mix(in srgb,var(--err) 16%,transparent)}.pill .faint{color:var(--muted)}
 .banner{padding:var(--s2) var(--s3);border-radius:6px;border:1px solid var(--line);background:var(--panel)}
 .banner.err{border-color:color-mix(in srgb,var(--err) 45%,var(--line))}.banner.warn{border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}
-.top{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:var(--s4)}
 .detail{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:var(--s4);align-items:start}
 .stats{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s4);margin-top:var(--s3);padding-top:var(--s3);border-top:1px solid var(--line)}.stat b{font-size:16px;font-weight:600;margin-right:var(--s1)}
 .steps{display:flex;flex-wrap:wrap;gap:var(--s1)}.steps+.err{margin-top:var(--s1)}
@@ -35,6 +50,7 @@ h2 .n{color:var(--faint);margin-left:4px}
 .col{min-width:0}.col ul{list-style:none;margin:0;padding:0}
 .col li{padding:6px 0;border-top:1px solid var(--line)}.col li:first-child{border-top:0}
 .t{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.col .t{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
 .meta{font-size:12px;color:var(--muted);display:flex;flex-wrap:wrap;gap:2px 8px}
 .empty{color:var(--faint);font-size:12px}
 table{border-collapse:collapse;width:100%}th{text-align:left;font-weight:500;color:var(--muted);font-size:12px}
@@ -50,7 +66,8 @@ body.down #top,body.down main>:not(#down){opacity:.5;transition:opacity .3s ease
 @media (max-width:1100px){.cols{grid-template-columns:repeat(4,minmax(0,1fr))}.detail{grid-template-columns:1fr}
 .col.prs{grid-column:1/-1;border-left:0;padding-left:0;border-top:1px solid var(--line);padding-top:var(--s3)}}
 @media (max-width:760px){.cols{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:480px){main{padding:var(--s3) var(--s3) var(--s5);gap:var(--s3)}section{padding:var(--s3)}.cols{grid-template-columns:1fr}}
+@media (max-width:480px){main{padding:var(--s3) var(--s3) var(--s5);gap:var(--s3)}section{padding:var(--s3)}.cols{grid-template-columns:1fr}
+.tabs{padding:0 var(--s3);gap:var(--s4)}}
 `
 
 const JS = `
@@ -144,17 +161,39 @@ function pr(p, multi, now) {
 const isMulti = (gh) => new Set(gh.repos.map((r) => r.slug)).size > 1
 const list = (xs, render, multi, now) => xs.length ? h('ul', {}, xs.map((x) => render(x, multi, now))) : h('div', { class: 'empty' }, 'empty')
 
-function human(s, now) {
-  const xs = s.github.columns.human
-  return h('section', { class: 'col' + (xs.length ? ' attn' : '') }, h('h2', {}, 'Human', h('span', { class: 'n' }, xs.length)), list(xs, item, isMulti(s.github), now))
+const LANES = [['intake', 'Intake', 'q:intake'], ['task', 'Task', 'q:task'], ['running', 'Running', 'running'], ['promote', 'Promote', 'q:promote']]
+const inFlight = (gh) => LANES.reduce((n, [k]) => n + gh.columns[k].length, 0)
+
+function inbox(s, now) {
+  const gh = s.github, xs = gh.columns.human, multi = isMulti(gh)
+  if (!xs.length) return h('section', { class: 'calm' },
+    h('p', {}, h('b', {}, 'Nothing needs you.')),
+    h('p', { class: 'muted' }, inFlight(gh) + ' in the queue · ' + gh.prs.length + ' agent PR' + (gh.prs.length === 1 ? '' : 's') + ' · ',
+      h('button', { class: 'linkish', type: 'button', 'data-go': 'queue' }, 'see the queue')))
+  return h('section', { class: 'attn' }, h('h2', {}, 'Needs you', h('span', { class: 'n' }, xs.length), h('span', { class: 'lane-label mono' }, 'q:human')),
+    h('ul', { class: 'inbox' }, xs.map((i) => h('li', {},
+      link(i.url, h('span', { class: 'title', title: i.title }, h('span', { class: 'faint' }, '#' + i.number + ' '), i.title)),
+      h('div', { class: 'meta' },
+        i.why ? h('span', { class: 'why' }, 'why:' + i.why) : h('span', { class: 'faint' }, 'no why:* reason'),
+        i.priority ? h('span', {}, 'priority:' + i.priority) : null,
+        multi ? h('span', {}, i.repo) : null,
+        h('span', { class: 'faint', title: i.updatedAt || i.createdAt || '' }, ago(i.updatedAt || i.createdAt, now)))))))
 }
 
 function queues(s, now) {
   const gh = s.github, multi = isMulti(gh)
-  const col = (title, xs, render, cls) => h('div', { class: 'col' + (cls ? ' ' + cls : '') }, h('h2', {}, title, h('span', { class: 'n' }, xs.length)), list(xs, render, multi, now))
+  const col = (title, label, xs, render, cls) => h('div', { class: 'col' + (cls ? ' ' + cls : '') },
+    h('h2', {}, title, h('span', { class: 'n' }, xs.length), label ? h('span', { class: 'lane-label mono' }, label) : null), list(xs, render, multi, now))
   return h('section', {}, h('div', { class: 'cols' },
-    col('Intake', gh.columns.intake, item), col('Task', gh.columns.task, item), col('Running', gh.columns.running, item),
-    col('Promote', gh.columns.promote, item), col('Agent PRs', gh.prs, pr, 'prs')))
+    LANES.map(([k, title, label]) => col(title, label, gh.columns[k], item)), col('Agent PRs', 'agent/*', gh.prs, pr, 'prs')))
+}
+
+function loopTrouble(s) {
+  const hb = s.heartbeat, d = hb.data
+  if (hb.status !== 'ok' || !d) return 'err'
+  if (d.steps.some((st) => !st.ok) || d.workers.some((w) => w.killedReason)) return 'err'
+  if (hb.stale || d.mode !== 'running') return 'warn'
+  return null
 }
 
 function workers(d, ageMs) {
@@ -188,16 +227,60 @@ function events(d) {
   })) : h('div', { class: 'empty' }, 'no events'))
 }
 
+const TABS = ['inbox', 'queue', 'loop']
+const tabFromHash = () => (TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'inbox')
+let tab = tabFromHash(), last = null
+
+function tabs(s) {
+  const human = s.github.columns.human.length, trouble = loopTrouble(s)
+  $('n-inbox').textContent = human
+  $('n-inbox').className = 'count' + (human ? ' attn' : '')
+  $('n-queue').textContent = inFlight(s.github)
+  $('d-loop').className = 'dot ' + (trouble || 'ok')
+  $('d-loop').title = trouble === 'err' ? 'something failed' : trouble === 'warn' ? 'stale or not running' : 'healthy'
+  for (const t of TABS) {
+    const b = $('tab-' + t), on = t === tab
+    b.setAttribute('aria-selected', on)
+    b.tabIndex = on ? 0 : -1
+  }
+  $('main').setAttribute('aria-labelledby', 'tab-' + tab)
+}
+
+function go(t, focus) {
+  if (!TABS.includes(t)) return
+  tab = t
+  history.replaceState(null, '', '#' + t)
+  window.scrollTo(0, 0)
+  if (last) render(last)
+  if (focus) $('tab-' + t).focus()
+}
+
+$('tabs').addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (b) go(b.dataset.tab) })
+$('tabs').addEventListener('keydown', (e) => {
+  const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key]
+  if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); return go(e.key === 'Home' ? TABS[0] : TABS[TABS.length - 1], true) }
+  if (!step) return
+  e.preventDefault()
+  go(TABS[(TABS.indexOf(tab) + step + TABS.length) % TABS.length], true)
+})
+$('main').addEventListener('click', (e) => { const b = e.target.closest('[data-go]'); if (b) go(b.dataset.go, true) })
+addEventListener('hashchange', () => { tab = tabFromHash(); if (last) render(last) })
+
 function render(s) {
+  last = s
   const now = Date.parse(s.now) || Date.now()
   const d = s.heartbeat.data
   const body = [...banners(s)]
-  body.push(h('div', { class: 'top' }, human(s, now), d ? summary(d) : null))
-  body.push(queues(s, now))
-  if (d) body.push(h('div', { class: 'detail' }, workers(d, s.heartbeat.ageMs), events(d)))
+  if (tab === 'inbox') body.push(inbox(s, now))
+  if (tab === 'queue') body.push(queues(s, now))
+  if (tab === 'loop') {
+    if (d) body.push(summary(d), h('div', { class: 'detail' }, workers(d, s.heartbeat.ageMs), events(d)))
+    else body.push(section('Loop', null, h('div', { class: 'empty' }, 'no heartbeat to show: ' + s.heartbeat.status)))
+  }
+  tabs(s)
   const focused = document.activeElement, href = focused && focused.getAttribute && focused.getAttribute('href')
   const scrolled = [...document.querySelectorAll('.events,.scroll')].map((el) => [el.className, el.scrollTop, el.scrollLeft])
-  $('top').replaceChildren(header(s, now))
+  $('head').replaceChildren(header(s, now))
   $('main').replaceChildren(...body)
   document.body.classList.remove('down')
   for (const [cls, top, left] of scrolled) {
@@ -206,7 +289,8 @@ function render(s) {
   }
   if (href) [...document.querySelectorAll('a')].find((a) => a.getAttribute('href') === href)?.focus({ preventScroll: true })
   else if (focused && focused.classList && (focused.classList.contains('events') || focused.classList.contains('scroll'))) document.getElementsByClassName(focused.className)[0]?.focus({ preventScroll: true })
-  document.title = 'canopy' + (d ? ' · ' + d.mode : '') + (s.heartbeat.stale ? ' · stale' : '')
+  const human = s.github.columns.human.length
+  document.title = (human ? '(' + human + ') ' : '') + 'canopy' + (d ? ' · ' + d.mode : '') + (s.heartbeat.stale ? ' · stale' : '')
 }
 
 let pollMs = 5000
@@ -238,8 +322,13 @@ export const PAGE = `<!doctype html>
 <style>${CSS}</style>
 </head>
 <body>
-<div id="top"><header><h1>canopy</h1><span class="faint">loading…</span></header></div>
-<main id="main"></main>
+<div id="top"><div id="head"><header><h1>canopy</h1><span class="faint">loading…</span></header></div>
+<nav class="tabs" id="tabs" role="tablist" aria-label="Views">
+<button class="tab" role="tab" type="button" id="tab-inbox" data-tab="inbox" aria-controls="main">Inbox <span class="count" id="n-inbox">–</span></button>
+<button class="tab" role="tab" type="button" id="tab-queue" data-tab="queue" aria-controls="main" tabindex="-1">Queue <span class="count" id="n-queue">–</span></button>
+<button class="tab" role="tab" type="button" id="tab-loop" data-tab="loop" aria-controls="main" tabindex="-1">Loop <span class="dot" id="d-loop"></span></button>
+</nav></div>
+<main id="main" role="tabpanel" aria-labelledby="tab-inbox"></main>
 <script>${JS}</script>
 </body>
 </html>
