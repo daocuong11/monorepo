@@ -1264,6 +1264,61 @@ test('a POST git/commits that answers 502 is never repeated — the error surfac
   )
 })
 
+// A keep-alive socket that went stale while git hooks ran: undici's `fetch failed`.
+const droppedSocket = (code) =>
+  new TypeError('fetch failed', { cause: Object.assign(new Error('other side closed'), { code }) })
+
+test('a POST git/trees that dies on a dropped connection is repeated, reported, and the merge lands', async () => {
+  let treePosts = 0
+  const client = fakeClient(
+    mergeRoutes({
+      'POST /repos/o/r/git/trees': () => {
+        if (++treePosts === 1) throw droppedSocket('UND_ERR_SOCKET')
+        return { sha: NEW_TREE }
+      },
+    }),
+  )
+  const reports = []
+  const out = await merge(staleMerge(), client, reports)
+  assert.equal(treePosts, 2)
+  assert.equal(out.commit.sha, sha('e'))
+  assert.equal(
+    reports.filter((r) => /^connection dropped \(UND_ERR_SOCKET\) on POST \/repos\/o\/r\/git\/trees/.test(r)).length,
+    1,
+  )
+})
+
+test('a POST git/blobs that dies on EPIPE is repeated and the blob checked', async () => {
+  let blobPosts = 0
+  const git = staleMerge({ [`cat-file blob ${BLOB_NEW}`]: Buffer.from([0x00, 0x01]) })
+  const client = fakeClient(
+    mergeRoutes({
+      'POST /repos/o/r/git/blobs': () => {
+        if (++blobPosts === 1) throw droppedSocket('EPIPE')
+        return { sha: BLOB_NEW }
+      },
+    }),
+  )
+  await merge(git, client)
+  assert.equal(blobPosts, 2)
+})
+
+test('a commit or ref write that dies on a dropped connection is never repeated', async () => {
+  for (const write of ['POST /repos/o/r/git/commits', 'PATCH /repos/o/r/git/refs/heads/agent/x']) {
+    let posts = 0
+    const client = fakeClient(
+      mergeRoutes({
+        [write]: () => {
+          posts++
+          throw droppedSocket('ECONNRESET')
+        },
+      }),
+    )
+    await assert.rejects(merge(staleMerge(), client), /fetch failed/)
+    assert.equal(posts, 1, write)
+  }
+})
+
 test('a 422 on a tree write is never repeated; a 5xx that persists is surfaced after the retries', async () => {
   let posts = 0
   const refused = fakeClient(

@@ -10,7 +10,8 @@
  * in. `--auto` arms auto-merge instead — a deferred merge is still a merge,
  * and it is judged the same way, at arm time: arming it before a code owner's
  * approval exists is refused like the merge. (Its green therefore ages until
- * the merge lands; the base's own post-merge CI is the backstop.)
+ * the merge lands; the base's own post-merge CI is the backstop.) A PR that is
+ * already mergeable, which GitHub will not arm, is merged on the spot.
  *
  * `update` brings a PR up to date with its base (`update-branch`). It lands
  * nothing on the base, so it carries no policy — and it is the first step of
@@ -158,12 +159,20 @@ export async function run(argv, { client: given } = {}) {
   for (const n of out.notes) console.log(n)
 
   if (has(argv, '--auto')) {
-    await client.graphql(
-      'mutation($id:ID!,$m:PullRequestMergeMethod!){enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:$m}){clientMutationId}}',
-      { id: pr.node_id, m: method.toUpperCase() },
-    )
-    console.log(`auto-merge armed on ${full}#${number} (${method}) — lands when its required checks pass`)
-    return
+    try {
+      await client.graphql(
+        'mutation($id:ID!,$m:PullRequestMergeMethod!){enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:$m}){clientMutationId}}',
+        { id: pr.node_id, m: method.toUpperCase() },
+      )
+      console.log(`auto-merge armed on ${full}#${number} (${method}) — lands when its required checks pass`)
+      return
+    } catch (err) {
+      // GitHub will not arm auto-merge on a PR that can merge right now
+      // ("Pull request is in clean status"): nothing is left to wait for, so
+      // it merges now — judged by the same verdict as above.
+      if (!/is in clean status/.test(String(/** @type {Error} */ (err)?.message))) throw err
+      console.log(`${full}#${number} is already mergeable — merging now instead of arming auto-merge`)
+    }
   }
   // `sha` pins the head the policy judged: a push in between is refused (409).
   const merged = await client.json(`/repos/${owner}/${repo}/pulls/${number}/merge`, 'PUT', {
