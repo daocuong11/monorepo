@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import { parseArgs } from 'node:util'
 import { doctorOk, formatDoctor, runDoctor } from './doctor.mjs'
 import { graftGithub } from './github.mjs'
+import { runServices } from './services.mjs'
 import { runSetup } from './setup.mjs'
 import { TOOLS, defaultExec, defaultSpawn, isTool, toolCommand, toolRunner, which } from './tools.mjs'
 
@@ -13,6 +14,9 @@ const USAGE = `oakgreen ${PKG.version} — the oakgreen stack in one command
 
   oakgreen doctor [--json] [--repo owner/name] [--config <file>]
   oakgreen setup [--dry-run] [--repo owner/name] [--config <file>]
+  oakgreen services [--json]    the stack's launchd agents (otelcol, cambium) and whether they run
+  oakgreen restart [service...] new process for each (default: all installed), e.g. after an npm update
+  oakgreen reload [service...]  also re-read each agent's plist (its env), waiting for the old one to stop
   oakgreen <tool> [args...]     run ${Object.keys(TOOLS).join(', ')}
 
 --config is cambium's config (default $CAMBIUM_CONFIG, then ~/.cambium/config.json).
@@ -32,6 +36,10 @@ const USAGE = `oakgreen ${PKG.version} — the oakgreen stack in one command
  *   resolve?: (id: string) => string,
  *   which?: (name: string) => string | null,
  *   github?: import('./github.mjs').GithubClient,
+ *   uid?: number,
+ *   platform?: string,
+ *   exists?: (path: string) => boolean,
+ *   sleep?: (ms: number) => Promise<unknown>,
  * }} Ports
  */
 
@@ -83,6 +91,30 @@ export async function main(argv, ports = {}) {
       stderr(`oakgreen: ${verb} not found; install it: npm install -g ${TOOLS[verb]}\n`)
       return 127
     }
+  }
+  if (verb === 'services' || verb === 'restart' || verb === 'reload') {
+    const flags = rest.filter((a) => a.startsWith('-'))
+    const bad = flags.filter((f) => !(verb === 'services' && f === '--json'))
+    if (bad.length) {
+      stderr(`oakgreen ${verb}: unknown option ${bad.join(' ')}\n`)
+      return 2
+    }
+    return runServices(
+      verb,
+      rest.filter((a) => !a.startsWith('-')),
+      {
+        exec,
+        home,
+        uid: ports.uid ?? process.getuid?.() ?? 0,
+        platform: ports.platform,
+        exists: ports.exists,
+        sleep: ports.sleep,
+        now,
+        json: flags.includes('--json'),
+      },
+      stdout,
+      stderr,
+    )
   }
   if (verb !== 'doctor' && verb !== 'setup') {
     stderr(`oakgreen: unknown command '${verb}'\n\n${USAGE}`)

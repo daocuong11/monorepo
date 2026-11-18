@@ -1,6 +1,6 @@
 # oakgreen
 
-One command for the stack: `oakgreen doctor` checks a machine and repository, `oakgreen setup` creates what is missing, and `oakgreen <tool>` runs any of the stack's tools.
+One command for the stack: `oakgreen doctor` checks a machine and repository, `oakgreen setup` creates what is missing, `oakgreen restart`/`reload` cycle its services, and `oakgreen <tool>` runs any of the stack's tools.
 
 Zero third-party dependencies, Node ≥ 22.13 (cambium needs `node:sqlite`). GitHub access goes through [`graft api`](../graft).
 
@@ -11,6 +11,8 @@ npm install -g oakgreen
 oakgreen setup --repo owner/name    # labels + cambium config skeleton, then the human steps
 oakgreen doctor                     # one checklist, exit 1 if a required check fails
 oakgreen graft status               # any tool, args passed through
+oakgreen services                    # are otelcol and cambium running?
+oakgreen restart                     # new processes, e.g. after npm updates
 ```
 
 | Command                                                     | What                                                                                                           |
@@ -18,10 +20,27 @@ oakgreen graft status               # any tool, args passed through
 | `oakgreen <tool> [args...]`                                 | Run `graft`, `canker`, `deadwood`, `cambium`, `mycelium` or `canopy`; stdio inherited, its exit code returned. |
 | `oakgreen doctor [--json] [--repo o/n] [--config <file>]`   | The checklist below, `✓`/`✗` with a fix per failing line; `--json` prints `{ ok, checks }`.                    |
 | `oakgreen setup [--dry-run] [--repo o/n] [--config <file>]` | Idempotent bootstrap; `--dry-run` prints what it would do and writes nothing.                                  |
+| `oakgreen services [--json] [service...]`                   | The stack's launchd agents: installed, loaded, running, pid. See [Services](#services).                        |
+| `oakgreen restart [service...]`                             | A new process for each (all installed ones by default), on the same agent definition.                          |
+| `oakgreen reload [service...]`                              | Re-read each agent's plist too (its env, its program), then start it.                                          |
 
 A tool runs from its installed package's `bin` (resolved from `oakgreen`'s own `node_modules`) with the current Node; if the package is not installed, the bare name is looked up on `PATH`. A tool found in neither exits 127 with the install command.
 
 `--config` is cambium's config file; the default is `$CAMBIUM_CONFIG`, then `~/.cambium/config.json`.
+
+## Services
+
+The long-running parts of the stack are launchd user agents (macOS only for now), handled in this order:
+
+| Service   | Agent                    | What                                                                                 |
+| --------- | ------------------------ | ------------------------------------------------------------------------------------ |
+| `otelcol` | `com.oakgreencc.otelcol` | The local OpenTelemetry collector (cambium's `otel/`), whose trace file canopy reads |
+| `cambium` | `com.oakgreencc.cambium` | The scheduler daemon (`cambium install` writes the agent)                            |
+
+- **`restart`** sends SIGTERM (`launchctl kill TERM`) and waits for KeepAlive to bring up a new pid. cambium finishes its current tick first; its workers keep running and are re-adopted. Use it after `npm i -g` of a new version (or let `cambium update` do both, see cambium's [Self-update](../cambium/README.md#self-update)). An installed agent that is not loaded is loaded.
+- **`reload`** is for a changed plist (an added `OTEL_*` variable, a new Node path): `launchctl bootout`, then it **waits until launchd has let go of the old process** before `launchctl bootstrap` (retried a few times). Bootstrapping while cambium is still finishing a tick is what fails with `Bootstrap failed: 5: Input/output error`.
+- With no names, every service is handled and one that is not installed is skipped; a named one that is not installed fails. Each waits up to 3 minutes for its process; exit 1 if any did not come up.
+- canopy and mycelium are not services here: canopy runs in the foreground (`canopy`, or `pnpm start` in the monorepo), mycelium's `run` likewise.
 
 ## Doctor
 
@@ -54,7 +73,7 @@ Running it again creates nothing.
 npm test
 ```
 
-The GitHub client, command runner, spawner and `PATH` lookup are injected; nothing touches the network, GitHub or `claude`.
+The GitHub client, command runner, spawner and `PATH` lookup are injected; nothing touches the network, GitHub or `claude`. Services run against a fake launchd that, like the real one, refuses a bootstrap while the old process is still stopping.
 
 ## License
 

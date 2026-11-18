@@ -28,6 +28,7 @@ import { join, resolve } from 'node:path'
  *   logs: { keepPerIssue: number, daemonMaxBytes: number },
  *   graft: { command: string, app: string | null, botLogin: string | null },
  *   worker: { command: string, args: string[], graftApp: string | null, fetch: boolean, env: Record<string, string> },
+ *   update: { auto: boolean, checkMinutes: number },
  * }} Config
  */
 
@@ -57,6 +58,7 @@ export function defaults(home = DEFAULT_HOME) {
     logs: { keepPerIssue: 20, daemonMaxBytes: 10 * 1024 * 1024 },
     graft: { command: 'graft', app: null, botLogin: null },
     worker: { command: 'claude', args: [], graftApp: null, fetch: true, env: {} },
+    update: { auto: false, checkMinutes: 360 },
   }
 }
 
@@ -111,6 +113,8 @@ export function resolveConfig(raw = {}) {
     Object.values(wenv).some((v) => typeof v !== 'string')
   )
     throw new Error('config: worker.env must be an object of string values')
+  if (typeof config.update.auto !== 'boolean') throw new Error('config: update.auto must be true or false')
+  if (!(Number(config.update.checkMinutes) >= 5)) throw new Error('config: update.checkMinutes must be at least 5')
   if (config.engine !== 'legacy' && config.engine !== 'graph')
     throw new Error(`config: engine must be "legacy" or "graph", got ${JSON.stringify(config.engine)}`)
   return config

@@ -29,6 +29,7 @@ cambium status
 | `cambium run task --issue <n> [--repo <owner/name>]`               | Claim one open `q:task` issue, run its worker in the foreground, then make the same transition the daemon would.                                                                                                                                                                                                                                          |
 | `cambium run <graph> --issue <n> [--repo <owner/name>] [--follow]` | `engine: "graph"` only (`task` is the one graph today). Advance one issue through the graph runtime in the foreground: a `q:task` issue without a lease starts with a foreground worker; anything else resumes where its marker rests. Stops at the first wait that is not ready; `--follow` re-reads and polls every `tickSeconds` until the graph ends. |
 | `cambium install [--dry-run]`                                      | Write the launchd agent (`KeepAlive`, `RunAtLoad`) for `start --config <this config>`; `--dry-run` prints it. It does not call `launchctl`; it prints the command.                                                                                                                                                                                        |
+| `cambium update [--check] [--version <v>]`                         | Install the latest version (or `<v>`, even an older one) from npm into this global install, then SIGTERM the launchd agent so it finishes its tick and KeepAlive starts the new version. `--check` only reports. No config file needed. See [Self-update](#self-update).                                                                                  |
 
 Every command takes `--config <file>`; the default is `$CAMBIUM_CONFIG`, then `~/.cambium/config.json`.
 
@@ -111,7 +112,8 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
   },
   "logs": { "keepPerIssue": 20, "daemonMaxBytes": 10485760 },
   "graft": { "command": "graft", "app": null, "botLogin": null },
-  "worker": { "command": "claude", "args": [], "graftApp": null, "fetch": true, "env": {} }
+  "worker": { "command": "claude", "args": [], "graftApp": null, "fetch": true, "env": {} },
+  "update": { "auto": false, "checkMinutes": 360 }
 }
 ```
 
@@ -151,6 +153,14 @@ How a repo's worktrees are made is the repo's call: a `"cambium"` key in its roo
 - Unknown keys, wrong types, paths outside the repo and an unparseable `package.json` fail the start (requeued as `spawn-failed`) with the error.
 
 The key decides which commands run on this host, so list `package.json` as protected (CODEOWNERS) in the target repo, next to its `"graft"` policy.
+
+## Self-update
+
+cambium updates itself only when it is a **global npm install** (`<prefix>/lib/node_modules/@oakgreencc/cambium`, e.g. nvm's or Homebrew's prefix), and only into that same prefix, so the launchd agent's node and bin paths stay valid. A source checkout (`pnpm start`), an `npm link` or a copy inside another package's `node_modules` is left to whoever installed it. npm is the one next to the running Node, else `npm` on `PATH`; the version is the registry's `latest` dist-tag.
+
+- **`cambium update`** installs, then `launchctl kill TERM gui/<uid>/com.oakgreencc.cambium`: the daemon finishes its tick and exits, and KeepAlive starts the new version. Workers keep running and are re-adopted. When the agent is not loaded it only installs.
+- **`"update": { "auto": true }`** (off by default; reloaded with the config) makes the daemon check every `update.checkMinutes` (default 360, at least 5) between ticks. On a newer version it installs it, logs `updating cambium a → b`, and ends its loop; the process exits and launchd starts the new one. Only when it is the launchd agent (`XPC_SERVICE_NAME=com.oakgreencc.cambium`), since nothing else would bring it back; otherwise, or when it is not a global install, it logs why once and skips. A failed check or install is a warning and is retried at the next check. The last check time is `update.lastCheck` in the SQLite `control` table.
+- The plist is never rewritten, so env added by hand (e.g. `OTEL_*`) survives an update. To pick up a plist change, `oakgreen reload cambium`.
 
 ## Heartbeat (`state.json`)
 
