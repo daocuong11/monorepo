@@ -92,7 +92,8 @@ function dur(ms) {
 const ago = (iso, now) => (!iso ? '–' : now - Date.parse(iso) < 1000 ? 'just now' : dur(now - Date.parse(iso)) + ' ago')
 const section = (title, n, ...kids) => h('section', {}, h('h2', {}, title, n == null ? null : h('span', { class: 'n' }, n)), ...kids)
 const MODE = { running: 'ok', draining: 'warn', paused: 'warn' }
-const CHECK = { SUCCESS: ['ok', 'green'], FAILURE: ['err', 'red'], ERROR: ['err', 'error'], PENDING: ['warn', 'pending'], EXPECTED: ['warn', 'expected'] }
+const CHECK = { SUCCESS: ['ok', 'checks pass'], FAILURE: ['err', 'checks fail'], ERROR: ['err', 'checks errored'], PENDING: ['warn', 'checks running'], EXPECTED: ['warn', 'checks expected'] }
+const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many)
 
 function header(s, now) {
   const hb = s.heartbeat, d = hb.data
@@ -103,21 +104,25 @@ function header(s, now) {
     kids.push(h('span', { class: hb.stale ? 'warn' : 'muted' }, 'tick ', d.tick.n ?? '–', ' · ', ago(d.tick.finishedAt, now), d.tick.durationMs != null ? ' · took ' + dur(d.tick.durationMs) : ''))
     if (d.tick.nextAt && !hb.stale) {
       const left = Date.parse(d.tick.nextAt) - now
-      kids.push(h('span', { class: 'faint' }, left > 0 ? 'next in ' + dur(left) : 'next tick due'))
+      kids.push(h('span', { class: 'faint' }, left > 0 ? 'next in ' + dur(left) : 'next tick due now'))
     }
   }
   const gh = s.github
-  kids.push(h('span', { class: 'faint', style: 'margin-left:auto' }, 'GitHub ', gh.fetchedAt ? ago(gh.fetchedAt, now) : '–', s.cacheMs ? ' (cached ' + dur(s.cacheMs) + ')' : ''))
+  kids.push(h('span', { class: 'faint', style: 'margin-left:auto', title: s.cacheMs ? 'Each repo is re-read from GitHub at most every ' + dur(s.cacheMs) : null },
+    gh.fetchedAt ? 'GitHub read ' + ago(gh.fetchedAt, now) : 'GitHub not read yet'))
   return h('header', {}, kids)
 }
 
-function banners(s) {
+const HB_TITLE = { missing: 'No heartbeat yet', unreadable: "Can't read the heartbeat", 'unknown-version': 'Heartbeat version mismatch' }
+
+function banners(s, now) {
   const out = []
   const hb = s.heartbeat
-  if (hb.status !== 'ok') out.push(h('div', { class: 'banner err' }, h('b', {}, 'Heartbeat ' + hb.status + ': '), hb.message))
-  else if (hb.stale) out.push(h('div', { class: 'banner warn' }, h('b', {}, 'Stale: '), hb.message))
-  for (const r of s.github.repos) if (!r.ok) out.push(h('div', { class: 'banner err' }, h('b', {}, r.slug + ': '), r.error))
-  for (const r of (hb.data && hb.data.repos) || []) if (!r.ok) out.push(h('div', { class: 'banner warn' }, h('b', {}, 'cambium read ' + r.slug + ': '), r.error || 'failed'))
+  if (hb.status !== 'ok') out.push(h('div', { class: 'banner err' }, h('b', {}, (HB_TITLE[hb.status] || 'Heartbeat ' + hb.status) + ': '), hb.message))
+  else if (hb.stale) out.push(h('div', { class: 'banner warn' }, h('b', {}, 'cambium may have stopped: '), hb.message))
+  for (const r of s.github.repos) if (!r.ok) out.push(h('div', { class: 'banner err' }, h('b', {}, 'GitHub read failed for ' + r.slug + ': '), r.error,
+    r.fetchedAt ? '. Showing what it returned ' + ago(r.fetchedAt, now) + '.' : ". Its issues and PRs aren't shown."))
+  for (const r of (hb.data && hb.data.repos) || []) if (!r.ok) out.push(h('div', { class: 'banner warn' }, h('b', {}, 'cambium could not read ' + r.slug + ': '), r.error || 'no reason given'))
   for (const n of s.notes || []) out.push(h('div', { class: 'banner' }, n))
   return out
 }
@@ -128,9 +133,9 @@ function summary(d) {
   const live = d.workers.filter((w) => w.alive && w.phase === 'task').length
   const stats = h('div', { class: 'stats' },
     stat('intake', c.intake), stat('task', c.task), stat('running', c.running), stat('human', c.human),
-    stat('promote', c.promote), stat('review', c.review), stat('workers', c.workers, caps.task != null ? '(task ' + live + '/' + caps.task + (caps.dispatch ? ', dispatch cap ' + caps.dispatch : '') + ')' : null))
+    stat('promote', c.promote), stat('review', c.review), stat('workers', c.workers, caps.task != null ? '(' + live + ' of ' + caps.task + ' task slots in use' + (caps.dispatch ? ', dispatch cap ' + caps.dispatch : '') + ')' : null))
   const steps = h('div', { class: 'steps' }, d.steps.length ? d.steps.map((st) =>
-    h('span', { class: 'pill ' + (st.ok ? 'ok' : 'err'), title: st.error || '' }, st.name, ' ', h('span', { class: 'faint' }, st.ms != null ? st.ms + 'ms' : ''))) : h('span', { class: 'empty' }, 'no steps recorded'))
+    h('span', { class: 'pill ' + (st.ok ? 'ok' : 'err'), title: st.error || '' }, st.name, ' ', h('span', { class: 'faint' }, st.ms != null ? dur(st.ms) : ''))) : h('span', { class: 'empty' }, 'no steps recorded for this tick'))
   const errs = d.steps.filter((st) => !st.ok && st.error).map((st) => h('div', { class: 'err mono' }, st.name + ': ' + st.error))
   return section('Last tick', null, steps, errs, stats)
 }
@@ -141,7 +146,7 @@ function item(i, multi, now) {
     h('div', { class: 'meta' },
       multi ? h('span', {}, i.repo) : null,
       i.why ? h('span', { class: 'warn' }, 'why:' + i.why) : null,
-      i.priority ? h('span', {}, i.priority) : null,
+      i.priority ? h('span', {}, 'priority:' + i.priority) : null,
       h('span', { class: 'faint' }, ago(i.updatedAt || i.createdAt, now))))
 }
 
@@ -151,7 +156,7 @@ function pr(p, multi, now) {
     link(p.url, h('span', { class: 't', title: p.title }, h('span', { class: 'faint' }, '#' + p.number + ' '), p.title)),
     h('div', { class: 'meta' },
       h('span', {}, h('span', { class: 'dot ' + cls }), word),
-      p.inMergeQueue ? h('span', { class: 'ok' }, 'in queue') : p.autoMerge ? h('span', {}, 'auto-merge') : null,
+      p.inMergeQueue ? h('span', { class: 'ok' }, 'in merge queue') : p.autoMerge ? h('span', {}, 'auto-merge') : null,
       p.draft ? h('span', { class: 'faint' }, 'draft') : null,
       p.closes.length ? h('span', {}, 'closes ' + p.closes.map((n) => '#' + n).join(' ')) : null,
       multi ? h('span', {}, p.repo) : null,
@@ -166,15 +171,18 @@ const inFlight = (gh) => LANES.reduce((n, [k]) => n + gh.columns[k].length, 0)
 
 function inbox(s, now) {
   const gh = s.github, xs = gh.columns.human, multi = isMulti(gh)
-  if (!xs.length) return h('section', { class: 'calm' },
-    h('p', {}, h('b', {}, 'Nothing needs you.')),
-    h('p', { class: 'muted' }, inFlight(gh) + ' in the queue · ' + gh.prs.length + ' agent PR' + (gh.prs.length === 1 ? '' : 's') + ' · ',
-      h('button', { class: 'linkish', type: 'button', 'data-go': 'queue' }, 'see the queue')))
+  const failed = gh.repos.filter((r) => !r.ok).map((r) => r.slug)
+  const calm = (title, ...rest) => h('section', { class: 'calm' }, h('p', {}, h('b', {}, title)), h('p', { class: 'muted' }, ...rest))
+  if (!xs.length && !gh.repos.length) return calm('No repositories to read.', "Pass --repo owner/name to canopy, or list repos in cambium's config.")
+  if (!xs.length && failed.length) return calm('The inbox may be incomplete.', 'GitHub read failed for ' + failed.join(', ') + '; see the error above.')
+  if (!xs.length) return calm('Nothing needs you.',
+    plural(inFlight(gh), 'issue', 'issues') + ' queued · ' + plural(gh.prs.length, 'agent PR', 'agent PRs') + ' open · ',
+    h('button', { class: 'linkish', type: 'button', 'data-go': 'queue' }, 'see the queue'))
   return h('section', { class: 'attn' }, h('h2', {}, 'Needs you', h('span', { class: 'n' }, xs.length), h('span', { class: 'lane-label mono' }, 'q:human')),
     h('ul', { class: 'inbox' }, xs.map((i) => h('li', {},
       link(i.url, h('span', { class: 'title', title: i.title }, h('span', { class: 'faint' }, '#' + i.number + ' '), i.title)),
       h('div', { class: 'meta' },
-        i.why ? h('span', { class: 'why' }, 'why:' + i.why) : h('span', { class: 'faint' }, 'no why:* reason'),
+        i.why ? h('span', { class: 'why' }, 'why:' + i.why) : h('span', { class: 'faint' }, 'no why: label'),
         i.priority ? h('span', {}, 'priority:' + i.priority) : null,
         multi ? h('span', {}, i.repo) : null,
         h('span', { class: 'faint', title: i.updatedAt || i.createdAt || '' }, ago(i.updatedAt || i.createdAt, now)))))))
@@ -188,12 +196,15 @@ function queues(s, now) {
     LANES.map(([k, title, label]) => col(title, label, gh.columns[k], item)), col('Agent PRs', 'agent/*', gh.prs, pr, 'prs')))
 }
 
-function loopTrouble(s) {
+function healthOf(s) {
   const hb = s.heartbeat, d = hb.data
-  if (hb.status !== 'ok' || !d) return 'err'
-  if (d.steps.some((st) => !st.ok) || d.workers.some((w) => w.killedReason)) return 'err'
-  if (hb.stale || d.mode !== 'running') return 'warn'
-  return null
+  if (hb.status !== 'ok' || !d) return ['err', 'no readable heartbeat']
+  const failedSteps = d.steps.filter((st) => !st.ok).map((st) => st.name)
+  if (failedSteps.length) return ['err', failedSteps.join(', ') + ' failed in the last tick']
+  if (d.workers.some((w) => w.killedReason)) return ['err', 'a worker was killed']
+  if (hb.stale) return ['warn', 'no recent tick']
+  if (d.mode !== 'running') return ['warn', 'cambium is ' + d.mode]
+  return ['ok', 'healthy']
 }
 
 function workers(d, ageMs) {
@@ -224,20 +235,23 @@ function events(d) {
     return h('div', {}, h('span', { class: 'faint', title: e.at || '' }, t ? t.toLocaleTimeString([], { hour12: false }) : '–'),
       h('span', { class: e.level === 'error' ? 'err' : e.level === 'warn' ? 'warn' : 'faint' }, e.level || ''),
       h('span', {}, e.repo && e.issue ? h('span', { class: 'faint' }, e.repo.split('/')[1] + '#' + e.issue + ' ') : null, e.msg || ''))
-  })) : h('div', { class: 'empty' }, 'no events'))
+  })) : h('div', { class: 'empty' }, 'no events recorded yet'))
 }
 
-const TABS = ['inbox', 'queue', 'loop']
+const TABS = ['inbox', 'queue', 'health']
 const tabFromHash = () => (TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'inbox')
 let tab = tabFromHash(), last = null
 
 function tabs(s) {
-  const human = s.github.columns.human.length, trouble = loopTrouble(s)
+  const human = s.github.columns.human.length, queued = inFlight(s.github), [tone, why] = healthOf(s)
   $('n-inbox').textContent = human
   $('n-inbox').className = 'count' + (human ? ' attn' : '')
-  $('n-queue').textContent = inFlight(s.github)
-  $('d-loop').className = 'dot ' + (trouble || 'ok')
-  $('d-loop').title = trouble === 'err' ? 'something failed' : trouble === 'warn' ? 'stale or not running' : 'healthy'
+  $('tab-inbox').setAttribute('aria-label', 'Inbox: ' + plural(human, 'issue needs', 'issues need') + ' you')
+  $('n-queue').textContent = queued
+  $('tab-queue').setAttribute('aria-label', 'Queue: ' + plural(queued, 'issue', 'issues') + ' queued')
+  $('d-health').className = 'dot ' + tone
+  $('d-health').title = why
+  $('tab-health').setAttribute('aria-label', 'Health: ' + why)
   for (const t of TABS) {
     const b = $('tab-' + t), on = t === tab
     b.setAttribute('aria-selected', on)
@@ -270,12 +284,12 @@ function render(s) {
   last = s
   const now = Date.parse(s.now) || Date.now()
   const d = s.heartbeat.data
-  const body = [...banners(s)]
+  const body = [...banners(s, now)]
   if (tab === 'inbox') body.push(inbox(s, now))
   if (tab === 'queue') body.push(queues(s, now))
-  if (tab === 'loop') {
+  if (tab === 'health') {
     if (d) body.push(summary(d), h('div', { class: 'detail' }, workers(d, s.heartbeat.ageMs), events(d)))
-    else body.push(section('Loop', null, h('div', { class: 'empty' }, 'no heartbeat to show: ' + s.heartbeat.status)))
+    else body.push(section('Health', null, h('div', { class: 'empty' }, 'Ticks, workers and events appear once cambium writes a readable heartbeat; see the message above.')))
   }
   tabs(s)
   const focused = document.activeElement, href = focused && focused.getAttribute && focused.getAttribute('href')
@@ -305,7 +319,8 @@ async function poll() {
     $('down')?.remove()
     document.body.classList.add('down')
     document.title = 'canopy · unreachable'
-    $('main').prepend(h('div', { id: 'down', class: 'banner err' },'canopy server unreachable: ' + (err && err.message)))
+    $('main').prepend(h('div', { id: 'down', class: 'banner err' }, h('b', {}, "Can't reach the canopy server: "), (err && err.message) || 'no answer',
+      '. Showing the last data it sent; retrying every ' + dur(pollMs) + '. Is canopy still running?'))
   }
   setTimeout(poll, pollMs)
 }
@@ -322,11 +337,11 @@ export const PAGE = `<!doctype html>
 <style>${CSS}</style>
 </head>
 <body>
-<div id="top"><div id="head"><header><h1>canopy</h1><span class="faint">loading…</span></header></div>
+<div id="top"><div id="head"><header><h1>canopy</h1><span class="faint">reading cambium and GitHub…</span></header></div>
 <nav class="tabs" id="tabs" role="tablist" aria-label="Views">
 <button class="tab" role="tab" type="button" id="tab-inbox" data-tab="inbox" aria-controls="main">Inbox <span class="count" id="n-inbox">–</span></button>
 <button class="tab" role="tab" type="button" id="tab-queue" data-tab="queue" aria-controls="main" tabindex="-1">Queue <span class="count" id="n-queue">–</span></button>
-<button class="tab" role="tab" type="button" id="tab-loop" data-tab="loop" aria-controls="main" tabindex="-1">Loop <span class="dot" id="d-loop"></span></button>
+<button class="tab" role="tab" type="button" id="tab-health" data-tab="health" aria-controls="main" tabindex="-1">Health <span class="dot" id="d-health"></span></button>
 </nav></div>
 <main id="main" role="tabpanel" aria-labelledby="tab-inbox"></main>
 <script>${JS}</script>
