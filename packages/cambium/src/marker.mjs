@@ -31,7 +31,7 @@
  *   traceparent: string | null,
  *   enteredAt: string | null,
  *   history: HistoryEntry[],
- *   phase: 'task' | 'dispatch',
+ *   phase: 'task' | 'dispatch' | 'release',
  *   stage?: Stage,
  *   pr: number | null,
  *   branch: string | null,

@@ -14,6 +14,7 @@ import { prFor, taskExit, taskPrompt } from './phases/task.mjs'
 import { branchName } from './convention.mjs'
 import { PREPARE_FAILED_LINE } from './prepare.mjs'
 import { releaseDue, releaseNotBuilt } from './phases/release.mjs'
+import { releaseGraphs } from './graphs/release.mjs'
 import { DISPATCH_NOT_BUILT, dispatchNotBuilt } from './phases/dispatch.mjs'
 
 /**
@@ -47,9 +48,9 @@ import { DISPATCH_NOT_BUILT, dispatchNotBuilt } from './phases/dispatch.mjs'
 /**
  * @typedef {(deps: Deps, ctx: Ctx) => Promise<void>} StepFn
  * @typedef {{ reconcile: StepFn, watch: StepFn, sweep: StepFn, scheduleTasks: StepFn, scheduleDispatch?: StepFn }} Engine
- *   The Task-phase steps (the graph engine also folds the Dispatch phase into reconcile and sweep, and brings its
- *   own `scheduleDispatch`; without one, the dispatch stub runs). `config.engine` picks the legacy stage tick (this file) or the `task` graph
- *   (graph-engine.mjs); Read, dispatch, Release and Heartbeat are shared.
+ *   The Task-phase steps. `config.engine` picks the legacy stage tick (this file) or the `task` graph
+ *   (graph-engine.mjs). The graph engine also folds the Dispatch phase into reconcile and sweep and brings its own
+ *   `scheduleDispatch` (without one, the dispatch stub runs). Read and Heartbeat are shared.
  */
 
 /** @param {Deps} deps @returns {Ctx} */
@@ -561,10 +562,12 @@ export async function startTask(deps, ctx, slug, issue, snap, { foreground = fal
   return { ...started, attempt: marker.attempt }
 }
 
-// ---- Release (once a day, no agent): schedule is real, the run is a seam.
+// ---- Release (no agent). Legacy: once a day, the run is a seam. Graph: the release-prepare / release-promote
+// graphs (graphs/release.mjs), per repo.
 
 /** @param {Deps} deps @param {Ctx} ctx */
 async function release(deps, ctx) {
+  if (deps.config.engine === 'graph') return releaseGraphs(deps, ctx)
   const { config, store } = deps
   if (!config.release.enabled) return
   const last = store.get('release.lastRun')

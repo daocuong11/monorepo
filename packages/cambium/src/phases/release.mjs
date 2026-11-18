@@ -1,4 +1,5 @@
 // @ts-check
+/** The legacy engine's Release seam. `engine: "graph"` runs graphs/release.mjs instead; `releaseDue` serves both. */
 /** @typedef {(input: { repo: import('../config.mjs').Repo, now: number }) => Promise<{ done: boolean, note: string }>} Release */
 
 /** @param {number} now @param {number | null} lastRun @param {string} time host-local HH:MM */
