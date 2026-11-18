@@ -5,10 +5,16 @@ const QUEUE_LABEL = { intake: 'q:intake', task: 'q:task', human: 'q:human', prom
 const RUNNING = 'running'
 const LABELS = [...Object.values(QUEUE_LABEL), RUNNING]
 
-/** One query per repo: the queued issues and the open PRs with their check rollup. */
+/**
+ * One query per repo: the queued issues, the closed ones still in `q:promote` (merged, not yet promoted; cambium
+ * takes the label off once promoted), and the open PRs with their check rollup.
+ */
 export const QUEUES_QUERY = `query($owner: String!, $name: String!, $labels: [String!]) {
   repository(owner: $owner, name: $name) {
     issues(labels: $labels, states: OPEN, first: 100, orderBy: { field: CREATED_AT, direction: ASC }) {
+      nodes { number title url createdAt updatedAt labels(first: 30) { nodes { name } } }
+    }
+    awaiting: issues(labels: ["${QUEUE_LABEL.promote}"], states: CLOSED, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) {
       nodes { number title url createdAt updatedAt labels(first: 30) { nodes { name } } }
     }
     pullRequests(states: OPEN, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) {
@@ -68,9 +74,13 @@ export function group(answer, repo) {
   const r = (answer?.data ?? answer)?.repository
   if (!r) throw new Error(`${repo}: no repository in the GraphQL answer`)
   const columns = emptyColumns()
-  for (const n of r.issues?.nodes ?? []) {
+  // Open issues first; a closed one counts only in Promote.
+  const awaiting = (r.awaiting?.nodes ?? []).filter(
+    (/** @type {any} */ n) => n && !(r.issues?.nodes ?? []).some((/** @type {any} */ o) => o?.number === n.number),
+  )
+  for (const n of [...(r.issues?.nodes ?? []), ...awaiting.map((/** @type {any} */ n) => ({ ...n, closed: true }))]) {
     const labels = (n?.labels?.nodes ?? []).map((/** @type {any} */ l) => l.name)
-    const col = columnOf(labels)
+    const col = n.closed ? (labels.includes(QUEUE_LABEL.promote) ? 'promote' : null) : columnOf(labels)
     if (!col) continue
     columns[col].push({
       repo,

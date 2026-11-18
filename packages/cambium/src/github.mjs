@@ -71,6 +71,7 @@ export const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $labels: [
     merged: pullRequests(states: MERGED, first: 30, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { ${PR_FIELDS} } }
     promoteRef: pullRequests(headRefName: $from, baseRefName: $to, states: OPEN, first: 10) @include(if: $release) { nodes { ...P } }
     promoteLabelled: pullRequests(labels: ["${Q.promote}"], first: 10, orderBy: { field: UPDATED_AT, direction: DESC }) @include(if: $release) { nodes { ...P } }
+    awaiting: issues(labels: ["${Q.promote}"], states: CLOSED, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) @include(if: $release) { nodes { ...I } }
     toRef: ref(qualifiedName: $to) @include(if: $release) {
       compare(headRef: $from) {
         aheadBy
@@ -183,7 +184,7 @@ export function normalize(data, { botLogin = null, release = null } = {}) {
     }
     return n.number
   }
-  for (const n of repo.issues?.nodes ?? []) addIssue(n)
+  for (const n of [...(repo.issues?.nodes ?? []), ...(repo.awaiting?.nodes ?? [])]) addIssue(n)
   /** @type {PullRequest[]} */
   const prs = []
   for (const p of [...(repo.open?.nodes ?? []), ...(repo.merged?.nodes ?? [])]) {
@@ -255,7 +256,9 @@ export function graftGitHub({ config, exec: run = exec }) {
     async read(slug) {
       const [owner, name] = slug.split('/')
       const r = config.repos.find((x) => x.slug === slug)?.release
-      const release = r?.enabled && r.from !== r.to ? { from: r.from, to: r.to } : null
+      // Read whenever there is a promotion (`from` ≠ `to`), on or off: the `q:promote` issues need the comparison
+      // (promotion.mjs); the release graphs check `enabled` themselves.
+      const release = r && r.from !== r.to ? { from: r.from, to: r.to } : null
       const branches = release ?? { from: '', to: '' }
       const vars = JSON.stringify({ owner, name, labels: QUEUE_LABELS, release: Boolean(release), ...branches })
       const data = await json(graft(slug, ['graphql', SNAPSHOT_QUERY, '--vars', vars]))

@@ -1,6 +1,6 @@
 # canopy
 
-A local, read-only page over [cambium](../cambium)'s heartbeat and the GitHub queues: mode, last tick and its staleness, step results, counts and caps, workers (attempt, elapsed against the wall-clock cap, log paths), recent events, the `q:human` items with their `why:*`, issues stranded when their agent PR closed unmerged, and one swim lane per queue (`q:intake`, `q:task`, `running`, `q:promote`) next to the open `agent/*` PRs and their checks.
+A local, read-only page over [cambium](../cambium)'s heartbeat and the GitHub queues: mode, last tick and its staleness, step results, counts and caps, workers (attempt, elapsed against the wall-clock cap, log paths), recent events, the `q:human` items with their `why:*`, issues stranded when their agent PR closed unmerged, and one swim lane per queue (`q:intake`, `q:task`, `running`, `q:promote`, which also lists closed issues merged but not yet promoted) next to the open `agent/*` PRs and their checks.
 
 The page has four tabs under a header that always shows mode and tick: **Inbox** (what needs you: `q:human`, and stranded issues), **Queue** (the swim lanes and agent PRs), **Traces** (workflow runs, see [Traces](#traces)) and **Health** (last tick, workers, events). Tab badges carry the inbox count, the queued-issue count, the traced-run count (amber when a run has a failed span) and a health dot whose tooltip names the problem, and the browser tab title is prefixed with the inbox count. The tab is kept in the URL hash (`#inbox`, `#queue`, `#traces`, `#traces/<trace id>`, `#health`).
 

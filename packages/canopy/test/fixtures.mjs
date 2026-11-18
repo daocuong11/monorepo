@@ -70,6 +70,8 @@ export function graphqlAnswer() {
           issue(6, ['bug']),
         ],
       },
+      // Closed, merged, not yet promoted; 5 is also open above and is listed once.
+      awaiting: { nodes: [issue(11, ['q:promote']), issue(5, ['q:promote'])] },
       pullRequests: {
         nodes: [
           {
