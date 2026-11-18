@@ -19,15 +19,16 @@ cambium status
 
 ## Commands
 
-| Command                                              | What                                                                                                                                                                         |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cambium start [--once]`                             | Foreground daemon, one tick every `tickSeconds`. SIGTERM/SIGINT stop it after the current tick; workers keep running and are re-adopted on restart. One daemon per database. |
-| `cambium status [--json]`                            | Mode, last tick, queue counts, workers, failed steps. Exit 1 when there is no heartbeat or it is older than 3 ticks.                                                         |
-| `cambium pause`                                      | Read and heartbeat only: no transitions, no starts. Running workers are left alone.                                                                                          |
-| `cambium drain`                                      | Reconcile, watch and sweep as usual; start nothing new.                                                                                                                      |
-| `cambium resume`                                     | Back to `running`.                                                                                                                                                           |
-| `cambium run task --issue <n> [--repo <owner/name>]` | Claim one open `q:task` issue, run its worker in the foreground, then make the same transition the daemon would.                                                             |
-| `cambium install [--dry-run]`                        | Write the launchd agent (`KeepAlive`, `RunAtLoad`) for `start --config <this config>`; `--dry-run` prints it. It does not call `launchctl`; it prints the command.           |
+| Command                                                            | What                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cambium start [--once]`                                           | Foreground daemon, one tick every `tickSeconds`. SIGTERM/SIGINT stop it after the current tick; workers keep running and are re-adopted on restart. One daemon per database.                                                                                                                                                                              |
+| `cambium status [--json]`                                          | Mode, last tick, queue counts, workers, failed steps. Exit 1 when there is no heartbeat or it is older than 3 ticks.                                                                                                                                                                                                                                      |
+| `cambium pause`                                                    | Read and heartbeat only: no transitions, no starts. Running workers are left alone.                                                                                                                                                                                                                                                                       |
+| `cambium drain`                                                    | Reconcile, watch and sweep as usual; start nothing new.                                                                                                                                                                                                                                                                                                   |
+| `cambium resume`                                                   | Back to `running`.                                                                                                                                                                                                                                                                                                                                        |
+| `cambium run task --issue <n> [--repo <owner/name>]`               | Claim one open `q:task` issue, run its worker in the foreground, then make the same transition the daemon would.                                                                                                                                                                                                                                          |
+| `cambium run <graph> --issue <n> [--repo <owner/name>] [--follow]` | `engine: "graph"` only (`task` is the one graph today). Advance one issue through the graph runtime in the foreground: a `q:task` issue without a lease starts with a foreground worker; anything else resumes where its marker rests. Stops at the first wait that is not ready; `--follow` re-reads and polls every `tickSeconds` until the graph ends. |
+| `cambium install [--dry-run]`                                      | Write the launchd agent (`KeepAlive`, `RunAtLoad`) for `start --config <this config>`; `--dry-run` prints it. It does not call `launchctl`; it prints the command.                                                                                                                                                                                        |
 
 Every command takes `--config <file>`; the default is `$CAMBIUM_CONFIG`, then `~/.cambium/config.json`.
 
@@ -91,6 +92,7 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
 ```json
 {
   "host": "<os.hostname()>",
+  "engine": "legacy",
   "tickSeconds": 30,
   "stepTimeoutSeconds": 20,
   "repos": [{ "slug": "oakgreencc/monorepo", "path": "~/OGCC/monorepo", "baseBranch": "main" }],
@@ -115,6 +117,7 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
 
 - `repos[].path` is a local clone; worktrees are added from it and `graft` runs in it.
 - `graft.app` is the App cambium acts as (`GRAFT_APP` for its own `graft` calls); `worker.graftApp` the one workers act as. Neither leaks into the other.
+- `engine` picks how the Task phase runs: `"legacy"` (the stage tick, the default) or `"graph"` (the [`task` graph](#the-task-graph)). Both make the same moves; see [The task graph](#the-task-graph).
 - Setting `paths.home` moves every default path under it.
 - `release.time` is host-local `HH:MM`.
 
@@ -218,9 +221,62 @@ Written at the end of every tick to `paths.heartbeat` (default `~/.cambium/state
 
 The mode lives in the SQLite file (`paths.db`, table `control`), so `cambium status --json` returns `{ "mode", "heartbeat" }` even when the daemon is down. The daemon's own log is `<paths.logs>/cambium.log` (one `.1` kept); launchd's stderr goes to `<paths.logs>/cambium.launchd.err.log`.
 
+## The task graph
+
+With `"engine": "graph"` the tick's Task-phase steps (Reconcile, Watch, Sweep, Schedule) drive the `task` graph (`src/graphs/task.mjs`) instead of the stage tick in `src/tick.mjs`. The default stays `"legacy"`; flipping it and deleting the legacy path is a follow-up.
+
+```mermaid
+flowchart TD
+  start_(["q:task"])
+  n0["start-worker"]
+  n1{{"worker-running"}}
+  n2{{"ci-running"}}
+  n3{{"merge-queue"}}
+  n4["close-out"]
+  n5["requeue"]
+  n6["to-human"]
+  end_(("end"))
+  start_ --> n0
+  n0 -->|"started"| n1
+  n0 -->|"budgetSpent"| n6
+  n0 --> n5
+  n1 -->|"issueGone"| end_
+  n1 -->|"submitted"| n2
+  n1 --> n5
+  n2 -->|"merged"| n4
+  n2 -->|"inMergeQueue"| n3
+  n2 -->|"stalled"| n6
+  n2 --> n5
+  n3 -->|"merged"| n4
+  n3 -->|"stalled"| n6
+  n3 --> n5
+  n5 -->|"attemptsLeft"| n0
+  n5 --> n6
+  n4 --> end_
+  n6 --> end_
+```
+
+Generated by `toMermaid(task)`; a test keeps this copy current. Boxes are step nodes, hexagons are waits.
+
+| Node             | Kind | Queue label | Holds `running` |
+| ---------------- | ---- | ----------- | --------------- |
+| `start-worker`   | step | `q:task`    | no              |
+| `worker-running` | wait | `q:task`    | yes             |
+| `ci-running`     | wait | none        | no              |
+| `merge-queue`    | wait | none        | no              |
+| `close-out`      | step | none        | no              |
+| `requeue`        | step | `q:task`    | no              |
+| `to-human`       | step | `q:human`   | no              |
+
+- **Labels are a projection.** Each node declares its queue label and whether it holds `running`. When an issue lands on a node, the marker is written first, then the labels come from `move()` (`labels.mjs`) with that declaration.
+- **Where a turn starts.** Reconcile polls `worker-running` for every tracked worker. Watch polls `ci-running` / `merge-queue` for agent PRs whose issue is in no queue; a merged PR goes to `close-out` wherever the issue is, as in the stage tick. Sweep sends a stale `running` lease to its node's `recover` (default: `requeue`). Schedule is the gate on the entry node: caps and priority pick the issues, each starts at `start-worker`.
+- **Where a turn stops.** At a wait that is not ready, on entering a wait (it is polled next tick; `merge-queue` is polled on entry, so a stall is caught in the same pass), on reaching `start-worker` again (only Schedule admits it), or at the end.
+- **Markers.** The graph writes marker v2 without `stage`: `node` is where the issue rests. `merge-queue` is the stage tick's `submitted` with `queued: true`, and a stage-era marker in that state resumes at `merge-queue`. A marker whose node the current graph version no longer has restarts at `start-worker` with a `graph-changed` history entry.
+- **Same moves.** Every scenario in `test/tick.test.mjs` runs on both engines; the test compares their GitHub calls in order (markers semantically, not by rendered text), worker starts with their prompts, kills, teardowns and logs.
+
 ## Graph module (preview)
 
-`@oakgreencc/cambium/graph` is the start of typed workflows: nodes with schemas, edges as data, and a loop that advances a position through them. Nothing in the tick uses it yet.
+`@oakgreencc/cambium/graph` is the start of typed workflows: nodes with schemas, edges as data, and a loop that advances a position through them. The Task phase runs on it with `engine: "graph"` ([The task graph](#the-task-graph)).
 
 ```js
 import { z } from 'zod'

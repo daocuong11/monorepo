@@ -2,6 +2,10 @@
 /**
  * The tick against a fake clock, GitHub, spawner and process table: every
  * queue transition, and each row of the plan's "Lessons from the old Clock".
+ *
+ * Every scenario runs on both engines (`engine: "legacy"` and `"graph"`): its
+ * own assertions must hold on each, and then the differential check compares
+ * what the two did (see `trace` in fakes.mjs).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -10,7 +14,46 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openStore } from '../src/store.mjs'
 import { tick } from '../src/tick.mjs'
-import { harness, SLUG } from './fakes.mjs'
+import { harness as baseHarness, SLUG, stageOf, trace } from './fakes.mjs'
+
+/** The harness the running scenario builds with: {@link baseHarness} pinned to one engine, recorded for tracing. */
+let harness = baseHarness
+
+/**
+ * A scenario, replayed through both engines: its own assertions must hold on each, then the harnesses it built
+ * are traced and compared.
+ * @param {string} name @param {() => Promise<void>} fn
+ */
+function scenario(name, fn) {
+  test(name, async () => {
+    /** @type {Record<string, unknown[]>} */
+    const traces = {}
+    for (const engine of ['legacy', 'graph']) {
+      /** @type {ReturnType<typeof baseHarness>[]} */
+      const made = []
+      harness = (seed = {}) => {
+        const h = baseHarness({ ...seed, config: { ...seed.config, engine } })
+        made.push(h)
+        return h
+      }
+      try {
+        await fn()
+      } catch (err) {
+        const e = /** @type {Error} */ (err)
+        e.message = `[engine ${engine}] ${e.message}`
+        throw e
+      } finally {
+        harness = baseHarness
+      }
+      if (engine === 'graph')
+        for (const h of made)
+          for (const c of h.gh.calls.filter((c) => c.op === 'writeState'))
+            assert.doesNotMatch(c.args[3], /"stage":/, 'the graph engine writes markers without a stage')
+      traces[engine] = made.map(trace)
+    }
+    assert.deepEqual(traces.graph, traces.legacy, 'the graph engine makes the same moves as the legacy tick')
+  })
+}
 
 const MIN = 60_000
 const task = (/** @type {number} */ number, /** @type {string[]} */ extra = []) => ({
@@ -18,7 +61,7 @@ const task = (/** @type {number} */ number, /** @type {string[]} */ extra = []) 
   labels: ['q:task', ...extra],
 })
 
-test('schedule: claims q:task issues up to the cap, priority then age, with the four-point prompt', async () => {
+scenario('schedule: claims q:task issues up to the cap, priority then age, with the four-point prompt', async () => {
   const h = harness({
     issues: [task(1), task(2, ['priority:low']), task(3, ['priority:high']), task(4)],
     config: { phases: { task: { cap: 2 } } },
@@ -44,7 +87,7 @@ test('schedule: claims q:task issues up to the cap, priority then age, with the 
     assert.ok(first.prompt.includes(needle), needle)
   assert.deepEqual(h.gh.issue(3).labels.sort(), ['priority:high', 'q:task', 'running'])
   const m = h.gh.marker(3)
-  assert.equal(m?.stage, 'running')
+  assert.equal(stageOf(m), 'running')
   assert.equal(m?.host, 'mac')
   assert.equal(m?.attempt, 1)
   assert.equal(m?.start, new Date(h.clock.now()).toISOString())
@@ -53,7 +96,7 @@ test('schedule: claims q:task issues up to the cap, priority then age, with the 
   assert.equal(state.counts.running, 2)
 })
 
-test('lesson #4309: capacity is counted from live workers, nothing is queued locally', async () => {
+scenario('lesson #4309: capacity is counted from live workers, nothing is queued locally', async () => {
   const h = harness({ issues: [1, 2, 3, 4, 5].map((n) => task(n)), config: { phases: { task: { cap: 2 } } } })
   await tick(h.deps)
   await tick(h.deps)
@@ -70,7 +113,7 @@ test('lesson #4309: capacity is counted from live workers, nothing is queued loc
   assert.equal(h.deps.store.workers().length, 2)
 })
 
-test('reconcile: a finished worker with an open PR → submitted, out of every queue, worktree pruned', async () => {
+scenario('reconcile: a finished worker with an open PR → submitted, out of every queue, worktree pruned', async () => {
   const h = harness({ issues: [task(7)] })
   await tick(h.deps)
   const w = /** @type {any} */ (h.deps.store.worker(SLUG, 7))
@@ -79,7 +122,7 @@ test('reconcile: a finished worker with an open PR → submitted, out of every q
   await tick(h.deps)
   assert.deepEqual(h.gh.issue(7).labels, [])
   const m = h.gh.marker(7)
-  assert.equal(m?.stage, 'submitted')
+  assert.equal(stageOf(m), 'submitted')
   assert.equal(m?.pr, 70)
   assert.equal(m?.attempt, 1)
   assert.equal(h.deps.store.worker(SLUG, 7), null)
@@ -88,7 +131,7 @@ test('reconcile: a finished worker with an open PR → submitted, out of every q
   assert.equal(new Set(h.gh.calls.filter((c) => c.op === 'writeState').map((c) => c.args[2] ?? 'new')).size, 2)
 })
 
-test('lesson #4349: a dead worker without a result is requeued with attempt + 1 and the stderr tail', async () => {
+scenario('lesson #4349: a dead worker without a result is requeued with attempt + 1 and the stderr tail', async () => {
   const h = harness({ issues: [task(8)], config: { phases: { task: { cap: 0 } } } })
   h.deps.store.addWorker({
     repo: SLUG,
@@ -107,7 +150,7 @@ test('lesson #4349: a dead worker without a result is requeued with attempt + 1 
   await tick(h.deps)
   const m = h.gh.marker(8)
   assert.equal(m?.attempt, 2)
-  assert.equal(m?.stage, 'queued')
+  assert.equal(stageOf(m), 'queued')
   assert.match(String(m?.lastFailure), /without a published PR/)
   assert.match(String(m?.lastFailure), /the last stderr line/)
   assert.equal(m?.history.at(-1)?.outcome, 'failed')
@@ -116,7 +159,7 @@ test('lesson #4349: a dead worker without a result is requeued with attempt + 1 
   assert.equal(h.deps.store.workers().length, 0, 'the slot is free')
 })
 
-test('lesson #4349: over the wall-clock cap → kill the process group, requeue', async () => {
+scenario('lesson #4349: over the wall-clock cap → kill the process group, requeue', async () => {
   const h = harness({ issues: [task(9)] })
   await tick(h.deps)
   const w = /** @type {any} */ (h.deps.store.worker(SLUG, 9))
@@ -134,7 +177,7 @@ test('lesson #4349: over the wall-clock cap → kill the process group, requeue'
   assert.deepEqual(h.gh.issue(9).labels, ['q:task'])
 })
 
-test('attempts spent → q:human + why:budget, and nothing restarts it', async () => {
+scenario('attempts spent → q:human + why:budget, and nothing restarts it', async () => {
   const h = harness({ issues: [task(10, ['running'])], config: { phases: { task: { maxAttempts: 2 } } } })
   h.gh.issue(10).comment = {
     id: 3,
@@ -155,14 +198,14 @@ test('attempts spent → q:human + why:budget, and nothing restarts it', async (
   })
   await tick(h.deps)
   assert.deepEqual(h.gh.issue(10).labels.sort(), ['q:human', 'why:budget'])
-  assert.equal(h.gh.marker(10)?.stage, 'human')
+  assert.equal(stageOf(h.gh.marker(10)), 'human')
   assert.equal(h.gh.marker(10)?.host, null)
   assert.match(String(h.gh.marker(10)?.lastFailure), /2 attempts spent/)
   await tick(h.deps)
   assert.equal(h.spawner.started.length, 0)
 })
 
-test('lesson #4565: one loop decides and spawns — a requeued task restarts in the same tick', async () => {
+scenario('lesson #4565: one loop decides and spawns — a requeued task restarts in the same tick', async () => {
   const h = harness({ issues: [task(29)] })
   await tick(h.deps)
   h.procs.live.clear()
@@ -184,26 +227,29 @@ function renderBack(m) {
   return `<!-- cambium:state ${JSON.stringify(m)} -->`
 }
 
-test('lesson #4303: cambium never merges — a green PR waits for the queue; merged → close, delete branch', async () => {
-  const h = harness({ issues: [task(11)] })
-  await tick(h.deps)
-  h.procs.live.clear()
-  h.gh.addPr({ number: 110, closes: [11], checks: 'SUCCESS' })
-  await tick(h.deps)
-  await tick(h.deps)
-  assert.equal(h.gh.issue(11).state, 'OPEN', 'green and armed: waiting on the merge queue')
-  Object.assign(h.gh.pr(110), { state: 'MERGED' })
-  await tick(h.deps)
-  assert.equal(h.gh.issue(11).state, 'CLOSED')
-  assert.equal(h.gh.marker(11)?.stage, 'done')
-  assert.ok(h.gh.calls.some((c) => c.op === 'deleteBranch' && c.args[1] === 'agent/issue-11'))
-  const ops = new Set(h.gh.calls.map((c) => c.op))
-  assert.deepEqual([...ops].sort(), ['close', 'deleteBranch', 'label', 'read', 'writeState'])
-  await tick(h.deps)
-  assert.equal(h.gh.calls.filter((c) => c.op === 'deleteBranch').length, 1)
-})
+scenario(
+  'lesson #4303: cambium never merges — a green PR waits for the queue; merged → close, delete branch',
+  async () => {
+    const h = harness({ issues: [task(11)] })
+    await tick(h.deps)
+    h.procs.live.clear()
+    h.gh.addPr({ number: 110, closes: [11], checks: 'SUCCESS' })
+    await tick(h.deps)
+    await tick(h.deps)
+    assert.equal(h.gh.issue(11).state, 'OPEN', 'green and armed: waiting on the merge queue')
+    Object.assign(h.gh.pr(110), { state: 'MERGED' })
+    await tick(h.deps)
+    assert.equal(h.gh.issue(11).state, 'CLOSED')
+    assert.equal(stageOf(h.gh.marker(11)), 'done')
+    assert.ok(h.gh.calls.some((c) => c.op === 'deleteBranch' && c.args[1] === 'agent/issue-11'))
+    const ops = new Set(h.gh.calls.map((c) => c.op))
+    assert.deepEqual([...ops].sort(), ['close', 'deleteBranch', 'label', 'read', 'writeState'])
+    await tick(h.deps)
+    assert.equal(h.gh.calls.filter((c) => c.op === 'deleteBranch').length, 1)
+  },
+)
 
-test('watch: red CI → requeue with the failing log summary, the next worker resumes the PR', async () => {
+scenario('watch: red CI → requeue with the failing log summary, the next worker resumes the PR', async () => {
   const h = harness({ issues: [task(12)] })
   await tick(h.deps)
   h.procs.live.clear()
@@ -234,7 +280,7 @@ test('watch: red CI → requeue with the failing log summary, the next worker re
   assert.match(String(h.gh.marker(12)?.lastFailure), /without pushing a fix/)
 })
 
-test('watch: the same red commit is not requeued twice', async () => {
+scenario('watch: the same red commit is not requeued twice', async () => {
   const h = harness({
     issues: [{ number: 13, labels: [] }],
     prs: [{ number: 130, closes: [13], checks: 'FAILURE', headSha: 'abc' }],
@@ -248,7 +294,7 @@ test('watch: the same red commit is not requeued twice', async () => {
   assert.equal(h.gh.calls.filter((c) => c.op !== 'read').length, 0)
 })
 
-test('watch: dequeued from the merge queue → requeue', async () => {
+scenario('watch: dequeued from the merge queue → requeue', async () => {
   const h = harness({ issues: [task(14)], config: { phases: { task: { cap: 1 } } } })
   await tick(h.deps)
   h.procs.live.clear()
@@ -265,7 +311,7 @@ test('watch: dequeued from the merge queue → requeue', async () => {
   assert.deepEqual(h.gh.issue(14).labels, ['q:task'])
 })
 
-test('watch: not merged within mergeQueueMinutes → q:human', async () => {
+scenario('watch: not merged within mergeQueueMinutes → q:human', async () => {
   const h = harness({ issues: [task(15)] })
   await tick(h.deps)
   h.procs.live.clear()
@@ -277,7 +323,7 @@ test('watch: not merged within mergeQueueMinutes → q:human', async () => {
   assert.match(String(h.gh.marker(15)?.lastFailure), /not merged within 120 min/)
 })
 
-test('restart re-adopts live pids: a fresh tick over the same store starts nothing and moves nothing', async () => {
+scenario('restart re-adopts live pids: a fresh tick over the same store starts nothing and moves nothing', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cambium-'))
   const db = join(dir, 'c.db')
   const h = harness({ issues: [task(16), task(17)], store: openStore(db), config: { phases: { task: { cap: 1 } } } })
@@ -291,20 +337,23 @@ test('restart re-adopts live pids: a fresh tick over the same store starts nothi
   assert.equal(h.deps.store.workers()[0].issue, 16)
 })
 
-test('lesson #4416: losing SQLite costs a requeue — `running` with no tracked worker on this host is swept', async () => {
-  const h = harness({ issues: [task(18)], config: { phases: { task: { cap: 0 } } } })
-  h.gh.issue(18).labels.push('running')
-  h.gh.issue(18).comment = {
-    id: 5,
-    body: renderBack({ v: 1, phase: 'task', stage: 'running', attempt: 1, host: 'mac', history: [] }),
-  }
-  await tick(h.deps)
-  assert.deepEqual(h.gh.issue(18).labels, ['q:task'])
-  assert.equal(h.gh.marker(18)?.attempt, 2)
-  assert.equal(h.gh.marker(18)?.history.at(-1)?.outcome, 'lost')
-})
+scenario(
+  'lesson #4416: losing SQLite costs a requeue — `running` with no tracked worker on this host is swept',
+  async () => {
+    const h = harness({ issues: [task(18)], config: { phases: { task: { cap: 0 } } } })
+    h.gh.issue(18).labels.push('running')
+    h.gh.issue(18).comment = {
+      id: 5,
+      body: renderBack({ v: 1, phase: 'task', stage: 'running', attempt: 1, host: 'mac', history: [] }),
+    }
+    await tick(h.deps)
+    assert.deepEqual(h.gh.issue(18).labels, ['q:task'])
+    assert.equal(h.gh.marker(18)?.attempt, 2)
+    assert.equal(h.gh.marker(18)?.history.at(-1)?.outcome, 'lost')
+  },
+)
 
-test("sweep leaves another host's lease alone", async () => {
+scenario("sweep leaves another host's lease alone", async () => {
   const h = harness({ issues: [task(19)], config: { phases: { task: { cap: 0 } } } })
   h.gh.issue(19).labels.push('running')
   h.gh.issue(19).comment = {
@@ -315,7 +364,7 @@ test("sweep leaves another host's lease alone", async () => {
   assert.equal(h.gh.calls.filter((c) => c.op !== 'read').length, 0)
 })
 
-test('lesson #4416: thousands of queued issues are just a sort — the cap still holds', async () => {
+scenario('lesson #4416: thousands of queued issues are just a sort — the cap still holds', async () => {
   const h = harness({
     issues: Array.from({ length: 2000 }, (_, i) => task(i + 1)),
     config: { phases: { task: { cap: 3 } } },
@@ -326,7 +375,7 @@ test('lesson #4416: thousands of queued issues are just a sort — the cap still
   assert.ok(state.steps.every((s) => s.ok))
 })
 
-test('a failed spawn requeues (attempt + 1) instead of holding the lease', async () => {
+scenario('a failed spawn requeues (attempt + 1) instead of holding the lease', async () => {
   const h = harness({ issues: [task(20)] })
   h.spawner.fail = new Error('spawn claude ENOENT')
   await tick(h.deps)
@@ -336,7 +385,7 @@ test('a failed spawn requeues (attempt + 1) instead of holding the lease', async
   assert.equal(h.deps.store.workers().length, 0)
 })
 
-test('a failing step is logged and the tick moves on to the heartbeat', async () => {
+scenario('a failing step is logged and the tick moves on to the heartbeat', async () => {
   const h = harness({ issues: [task(21)] })
   h.gh.faults.readError = new Error('graft graphql exited 1: rate limited')
   const state = await tick(h.deps)
@@ -350,7 +399,7 @@ test('a failing step is logged and the tick moves on to the heartbeat', async ()
   assert.ok(h.events.some((e) => e.level === 'error' && /rate limited/.test(e.msg)))
 })
 
-test('one failing write does not stop the other items in the step', async () => {
+scenario('one failing write does not stop the other items in the step', async () => {
   const h = harness({ issues: [task(22), task(23)] })
   let n = 0
   const label = h.deps.github.label
@@ -363,7 +412,7 @@ test('one failing write does not stop the other items in the step', async () => 
   assert.ok(h.events.some((e) => /label 502/.test(e.msg) && e.issue === 22))
 })
 
-test('each step is bounded: a hung read times out and the tick still finishes', async () => {
+scenario('each step is bounded: a hung read times out and the tick still finishes', async () => {
   const h = harness({ issues: [task(24)], config: { stepTimeoutSeconds: 0.05 } })
   h.gh.faults.hang = true
   const state = await tick(h.deps)
@@ -371,7 +420,7 @@ test('each step is bounded: a hung read times out and the tick still finishes', 
   assert.equal(h.beats.length, 1)
 })
 
-test('pause: read and heartbeat only; drain: reconcile but start nothing', async () => {
+scenario('pause: read and heartbeat only; drain: reconcile but start nothing', async () => {
   const h = harness({ issues: [task(25), task(26)], config: { phases: { task: { cap: 1 } } } })
   h.deps.store.setMode('paused')
   const paused = await tick(h.deps)
@@ -390,12 +439,12 @@ test('pause: read and heartbeat only; drain: reconcile but start nothing', async
   h.procs.live.delete(w.pid)
   h.gh.addPr({ number: 250, closes: [25] })
   const drained = await tick(h.deps)
-  assert.equal(h.gh.marker(25)?.stage, 'submitted', 'reconcile still runs')
+  assert.equal(stageOf(h.gh.marker(25)), 'submitted', 'reconcile still runs')
   assert.equal(h.spawner.started.length, 1, 'nothing new while draining')
   assert.ok(!drained.steps.some((s) => s.name === 'schedule'))
 })
 
-test('a worker is gone and its issue was closed meanwhile → dropped quietly', async () => {
+scenario('a worker is gone and its issue was closed meanwhile → dropped quietly', async () => {
   const h = harness({ issues: [task(27)] })
   await tick(h.deps)
   h.procs.live.clear()
@@ -406,7 +455,7 @@ test('a worker is gone and its issue was closed meanwhile → dropped quietly', 
   assert.equal(h.gh.calls.filter((c) => c.op !== 'read').length, writes)
 })
 
-test('read failure: a dead worker waits for a readable snapshot instead of guessing', async () => {
+scenario('read failure: a dead worker waits for a readable snapshot instead of guessing', async () => {
   const h = harness({ issues: [task(28)] })
   await tick(h.deps)
   h.procs.live.clear()
@@ -416,10 +465,10 @@ test('read failure: a dead worker waits for a readable snapshot instead of guess
   h.gh.faults.readError = null
   h.gh.addPr({ number: 280, closes: [28] })
   await tick(h.deps)
-  assert.equal(h.gh.marker(28)?.stage, 'submitted')
+  assert.equal(stageOf(h.gh.marker(28)), 'submitted')
 })
 
-test('release: the daily seam runs once at its time; dispatch: the stub is reached only with a cap', async () => {
+scenario('release: the daily seam runs once at its time; dispatch: the stub is reached only with a cap', async () => {
   const h = harness({
     issues: [{ number: 30, labels: ['q:intake'] }],
     config: { release: { enabled: true, time: '00:00' }, phases: { dispatch: { cap: 1 } } },
@@ -440,7 +489,7 @@ test('release: the daily seam runs once at its time; dispatch: the stub is reach
   assert.deepEqual(h.gh.issue(30).labels, ['q:intake'], 'intake is untouched')
 })
 
-test('heartbeat: the documented shape', async () => {
+scenario('heartbeat: the documented shape', async () => {
   const h = harness({ issues: [task(31), { number: 32, labels: ['q:human', 'why:budget'] }] })
   h.deps.tickNumber = 4
   h.deps.daemonStartedAt = h.clock.now() - 1000
@@ -484,7 +533,7 @@ test('heartbeat: the documented shape', async () => {
   assert.equal(Date.parse(s.tick.nextAt) - Date.parse(s.tick.finishedAt), 30_000)
 })
 
-test("worktree convention: the repo's branch template names the branch; a retry keeps it", async () => {
+scenario("worktree convention: the repo's branch template names the branch; a retry keeps it", async () => {
   const h = harness({ issues: [{ number: 30, title: 'Teach the tick: hydrate!', labels: ['q:task'] }] })
   h.spawner.pkgCambium = { worktree: { branch: 'bot/{issue}/{slug}' } }
   await tick(h.deps)
@@ -498,7 +547,7 @@ test("worktree convention: the repo's branch template names the branch; a retry 
   assert.equal(retry.branch, 'bot/30/teach-the-tick-hydrate', 'sticky across attempts')
 })
 
-test('an invalid "cambium" key in the repo fails the start cleanly: requeued, no lease held', async () => {
+scenario('an invalid "cambium" key in the repo fails the start cleanly: requeued, no lease held', async () => {
   const h = harness({ issues: [task(31)] })
   h.spawner.pkgCambium = { worktree: { brnch: 'x' } }
   await tick(h.deps)
@@ -509,7 +558,7 @@ test('an invalid "cambium" key in the repo fails the start cleanly: requeued, no
   assert.equal(h.gh.marker(31)?.history.at(-1)?.outcome, 'spawn-failed')
 })
 
-test('a prepare failure requeues as spawn-failed with its stderr tail, even with an open PR', async () => {
+scenario('a prepare failure requeues as spawn-failed with its stderr tail, even with an open PR', async () => {
   const h = harness({ issues: [task(32)], config: { phases: { task: { cap: 0 } } } })
   h.gh.addPr({ number: 320, closes: [32] })
   h.deps.store.addWorker({
@@ -535,16 +584,88 @@ test('a prepare failure requeues as spawn-failed with its stderr tail, even with
   assert.match(String(m?.lastFailure), /ERR_PNPM_OUTDATED_LOCKFILE/)
 })
 
-test('teardown: a worktree graft status says holds local-only work is kept, and the log says why', async () => {
+scenario('teardown: a worktree graft status says holds local-only work is kept, and the log says why', async () => {
   const h = harness({ issues: [task(33)] })
   await tick(h.deps)
   h.procs.live.clear()
   h.gh.addPr({ number: 330, closes: [33] })
   h.spawner.keep = 'local only (not on GitHub): 1 commit'
   await tick(h.deps)
-  assert.equal(h.gh.marker(33)?.stage, 'submitted')
+  assert.equal(stageOf(h.gh.marker(33)), 'submitted')
   assert.deepEqual(h.spawner.cleaned, [])
   assert.ok(
     h.events.some((e) => e.level === 'warn' && /kept worktree .*: local only \(not on GitHub\): 1 commit/.test(e.msg)),
   )
+})
+
+scenario('schedule: an issue past its attempt budget goes to q:human without a worker', async () => {
+  const h = harness({ issues: [task(34)], config: { phases: { task: { maxAttempts: 2 } } } })
+  h.gh.issue(34).comment = {
+    id: 7,
+    body: renderBack({ v: 1, phase: 'task', stage: 'queued', attempt: 3, history: [] }),
+  }
+  await tick(h.deps)
+  assert.equal(h.spawner.started.length, 0)
+  assert.deepEqual(h.gh.issue(34).labels.sort(), ['q:human', 'why:budget'])
+  assert.equal(h.gh.marker(34)?.history.at(-1)?.outcome, 'budget')
+})
+
+scenario('watch: queued in the merge queue, then merged → close from there', async () => {
+  const h = harness({ issues: [task(35)] })
+  await tick(h.deps)
+  h.procs.live.clear()
+  h.gh.addPr({ number: 350, closes: [35], checks: 'SUCCESS' })
+  await tick(h.deps)
+  Object.assign(h.gh.pr(350), { inMergeQueue: true })
+  await tick(h.deps)
+  assert.equal(h.gh.marker(35)?.queued, true)
+  await tick(h.deps)
+  Object.assign(h.gh.pr(350), { state: 'MERGED', inMergeQueue: false })
+  await tick(h.deps)
+  assert.equal(h.gh.issue(35).state, 'CLOSED')
+  assert.equal(stageOf(h.gh.marker(35)), 'done')
+})
+
+scenario('watch: a queued PR that goes red is requeued with its failing sha', async () => {
+  const h = harness({ issues: [task(36)], config: { phases: { task: { cap: 1 } } } })
+  await tick(h.deps)
+  h.procs.live.clear()
+  h.gh.addPr({ number: 360, closes: [36], checks: 'SUCCESS', inMergeQueue: true })
+  await tick(h.deps)
+  await tick(h.deps)
+  Object.assign(h.gh.pr(360), { checks: 'FAILURE', headSha: 'bad0000' })
+  h.deps.config.phases.task.cap = 0
+  await tick(h.deps)
+  assert.equal(h.gh.marker(36)?.failedSha, 'bad0000')
+  assert.equal(h.gh.marker(36)?.attempt, 2)
+  assert.deepEqual(h.gh.issue(36).labels, ['q:task'])
+})
+
+scenario('a human moving q:human back to q:task restarts it at the next attempt', async () => {
+  const h = harness({ issues: [{ number: 37, labels: ['q:human', 'why:budget'] }] })
+  h.gh.issue(37).comment = {
+    id: 9,
+    body: renderBack({ v: 1, phase: 'task', stage: 'human', attempt: 2, history: [] }),
+  }
+  await tick(h.deps)
+  assert.equal(h.spawner.started.length, 0, 'q:human waits for a human')
+  h.gh.issue(37).labels = ['q:task']
+  await tick(h.deps)
+  assert.deepEqual(
+    h.spawner.started.map((s) => [s.issue, s.attempt]),
+    [[37, 2]],
+  )
+  assert.deepEqual(h.gh.issue(37).labels.sort(), ['q:task', 'running'])
+})
+
+scenario('a merged PR closes its issue even while the issue sits in q:task', async () => {
+  const h = harness({ issues: [task(38)], config: { phases: { task: { cap: 0 } } } })
+  h.gh.issue(38).comment = {
+    id: 11,
+    body: renderBack({ v: 1, phase: 'task', stage: 'queued', attempt: 2, history: [] }),
+  }
+  h.gh.addPr({ number: 380, closes: [38], state: 'MERGED' })
+  await tick(h.deps)
+  assert.equal(h.gh.issue(38).state, 'CLOSED')
+  assert.deepEqual(h.gh.issue(38).labels, [])
 })

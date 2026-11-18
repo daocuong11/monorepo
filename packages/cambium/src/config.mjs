@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path'
  * @typedef {{ cap: number, wallClockMinutes: number, maxTurns: number, maxAttempts: number }} PhaseCaps
  * @typedef {{
  *   host: string,
+ *   engine: 'legacy' | 'graph',
  *   tickSeconds: number,
  *   stepTimeoutSeconds: number,
  *   repos: Repo[],
@@ -32,6 +33,7 @@ export const DEFAULT_HOME = join(homedir(), '.cambium')
 export function defaults(home = DEFAULT_HOME) {
   return {
     host: hostname(),
+    engine: 'legacy',
     tickSeconds: 30,
     stepTimeoutSeconds: 20,
     repos: [],
@@ -86,6 +88,8 @@ export function resolveConfig(raw = {}) {
     if (!r.path) throw new Error(`config: repo ${r.slug} needs "path" (a local clone)`)
     return { slug: r.slug, path: untilde(r.path), baseBranch: r.baseBranch ?? 'main' }
   })
+  if (config.engine !== 'legacy' && config.engine !== 'graph')
+    throw new Error(`config: engine must be "legacy" or "graph", got ${JSON.stringify(config.engine)}`)
   if (!/^\d{2}:\d{2}$/.test(config.release.time)) throw new Error(`config: release.time must be HH:MM`)
   return config
 }
