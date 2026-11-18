@@ -19,7 +19,7 @@ GitHub signs a commit an App creates **only when the request carries no `author`
 
 GitHub's secondary limit on content-creating requests (~80/minute, ~500/hour) is why text rides inline: a 610-file reformat once made 610 blob POSTs. The client waits out 403/429 refusals (`retry-after`, `x-ratelimit-reset`, or a "rate limit" body), doubling each time, and reports every wait on stderr.
 
-A 500/502/503/504 is different: it does not say whether GitHub performed the write. Only the content-addressed writes — `POST /git/blobs` and `POST /git/trees`, whose answer is a sha fixed by the body — are repeated on a 5xx (1s, doubling, four times, each wait reported). `POST /git/commits` and ref updates never are: a repeat could create a second commit.
+A 500/502/503/504 is different: it does not say whether GitHub performed the write. Only the content-addressed writes — `POST /git/blobs` and `POST /git/trees`, whose answer is a sha fixed by the body — are repeated on a 5xx (1s, doubling, four times, each wait reported). So is a dropped connection (`fetch failed` with `UND_ERR_SOCKET`, `UND_ERR_CLOSED`, `ECONNRESET` or `EPIPE` — typically a keep-alive socket that went stale while git hooks ran), which says just as little. `POST /git/commits` and ref updates never are: a repeat could create a second commit.
 
 ## Merges
 

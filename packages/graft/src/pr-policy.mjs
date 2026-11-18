@@ -83,11 +83,18 @@ export async function mergeVerdict({
 
   // --- base -----------------------------------------------------------------
   if (!allowedBases.includes(pr.base)) {
+    const bases = allowedBases.map((b) => `\`${b}\``).join(', ')
     found.push({
       liftable: true,
-      text: allowedBases.length
-        ? `${label} targets \`${pr.base}\`; agents merge only into ${allowedBases.map((b) => `\`${b}\``).join(', ')} (mergeableBases in .graft.json).`
-        : `${label}: this project lets no agent merge (mergeableBases is empty in .graft.json).`,
+      // No policy on the base at all (not even a broken one): the defaults
+      // applied, and `allowedBases` is GitHub's default branch — not a rule
+      // anyone wrote on this base. Say so, rather than cite a .graft.json.
+      text:
+        policy.configSource === null && !policyProblem && allowedBases.length
+          ? `${label} targets \`${pr.base}\`, which has no graft policy yet (no .graft.json there), so the defaults apply: agents merge only into ${bases}, the repo's default branch.`
+          : allowedBases.length
+            ? `${label} targets \`${pr.base}\`; agents merge only into ${bases} (mergeableBases in .graft.json).`
+            : `${label}: this project lets no agent merge (mergeableBases is empty in .graft.json).`,
     })
   }
 

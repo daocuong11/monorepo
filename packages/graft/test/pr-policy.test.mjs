@@ -32,9 +32,23 @@ test('clean merge into the base', async () => {
 })
 
 test('a base outside mergeableBases is refused', async () => {
-  const v = await mergeVerdict(base({ pr: { ...PR, base: 'main' } }))
+  const written = { ...policy, configSource: /** @type {const} */ ('.graft.json') }
+  const v = await mergeVerdict(base({ pr: { ...PR, base: 'main' }, policy: written }))
   assert.equal(v.ok, false)
-  assert.match(v.refusals[0].text, /targets `main`/)
+  assert.match(
+    v.refusals[0].text,
+    /targets `main`; agents merge only into `develop` \(mergeableBases in \.graft\.json\)/,
+  )
+})
+
+test('a base with no graft policy says the defaults applied, not that a .graft.json chose them', async () => {
+  // The base `develop` has no .graft.json: the allowed base is the default branch.
+  const v = await mergeVerdict(base({ allowedBases: ['main'] }))
+  assert.equal(v.ok, false)
+  assert.equal(
+    v.refusals[0].text,
+    "#7 targets `develop`, which has no graft policy yet (no .graft.json there), so the defaults apply: agents merge only into `main`, the repo's default branch.",
+  )
 })
 
 test('an empty mergeableBases means agents never merge', async () => {

@@ -56,7 +56,7 @@ The worktree is mid-merge with something the branch does not contain. Publish it
 
 ## `graft pr merge` refusals
 
-- **base not in mergeableBases** — this project does not let agents merge into that branch; hand the PR to a human.
+- **base not in mergeableBases** — this project does not let agents merge into that branch; hand the PR to a human. "has no graft policy yet" means the base carries no `.graft.json`, so the defaults applied (only the default branch); adding one with `mergeableBases` is a protected change.
 - **touches protected paths** — ask the code owner to approve the PR on GitHub, then run `graft pr merge <n>` again: an approval GitHub counts (an individual `@login` owner of every such path, on the current head — or on an earlier commit when the base's ruleset keeps stale approvals, as graft's does) lets it through, with a note naming the approver. The refusal's "No code-owner approval clears it: …" says what is missing. Paths owned only by a team, or protected only by `.graft.json`, are never cleared this way — the human merges those.
 - **base is red** — merging onto a known break buries it. If this PR is the fix: `graft pr update <n>`, let its required check finish green, then merge; a PR that contains the broken head and passes goes through.
 - **the policy on the base does not parse** — the base's `.graft.json` is broken, so the merge could only be judged by the defaults. Report it; fixing it is a protected change.

@@ -14,6 +14,7 @@ import { run as pr } from '../src/cli/pr.mjs'
 import { PublishError } from '../src/errors.mjs'
 import {
   createClient,
+  droppedConnection,
   isNotFound,
   retryServerErrors,
   SERVER_ERROR_RETRIES,
@@ -129,6 +130,55 @@ test('serverErrorWait: anything else is not a server error', () => {
   // A status only in the message is not trusted: the client sets `status`.
   assert.equal(serverErrorWait(new Error('/x: 502 boom'), 0), null)
   assert.equal(serverErrorWait(new TypeError('fetch failed'), 0), null)
+})
+
+/** A `fetch failed` whose connection dropped, as undici throws it. */
+const dropped = (code) =>
+  new TypeError('fetch failed', { cause: Object.assign(new Error('other side closed'), { code }) })
+
+test('serverErrorWait: a dropped connection (stale keep-alive socket) waits like a 5xx', () => {
+  for (const code of ['UND_ERR_SOCKET', 'UND_ERR_CLOSED', 'ECONNRESET', 'EPIPE']) {
+    assert.equal(droppedConnection(dropped(code)), code)
+    assert.equal(serverErrorWait(dropped(code), 0), 1_000)
+    assert.equal(serverErrorWait(dropped(code), 2), 4_000)
+  }
+  assert.equal(serverErrorWait(dropped('ENOTFOUND'), 0), null)
+  assert.equal(serverErrorWait(dropped(undefined), 0), null)
+})
+
+test('the client itself never retries a dropped connection either', async () => {
+  let calls = 0
+  const fetch = /** @type {typeof globalThis.fetch} */ (
+    async () => {
+      calls++
+      throw dropped('UND_ERR_SOCKET')
+    }
+  )
+  const client = createClient({ token: 'ghs_t', fetch, sleep: async () => assert.fail('slept') })
+  await assert.rejects(
+    client.json('/repos/o/r/git/commits', 'POST', {}),
+    (err) => droppedConnection(err) === 'UND_ERR_SOCKET',
+  )
+  assert.equal(calls, 1)
+})
+
+test('retryServerErrors repeats a dropped connection and says so', async () => {
+  let calls = 0
+  /** @type {string[]} */
+  const reports = []
+  const out = await retryServerErrors(
+    'POST /repos/o/r/git/trees',
+    async () => {
+      if (++calls === 1) throw dropped('EPIPE')
+      return { sha: 'abc' }
+    },
+    { sleep: async () => {}, report: (line) => reports.push(line) },
+  )
+  assert.deepEqual(out, { sha: 'abc' })
+  assert.equal(calls, 2)
+  assert.deepEqual(reports, [
+    `connection dropped (EPIPE) on POST /repos/o/r/git/trees: waiting 1s (retry 1/${SERVER_ERROR_RETRIES})`,
+  ])
 })
 
 test('the client itself never retries a 5xx — that is the caller’s call, per endpoint', async () => {
@@ -307,6 +357,43 @@ test('pr merge: a merge grant for this session lifts a liftable refusal, and say
     )
     await s.merge()
     assert.equal(s.merged(), true)
+  } finally {
+    s.cleanup()
+  }
+})
+
+test('pr merge --auto: arms auto-merge, and merges nothing yet', async () => {
+  const s = prScenario({ base: CODEOWNERS })
+  try {
+    await s.merge('--auto')
+    assert.equal(s.client.pulls.get(7)?.autoMerge, 'MERGE')
+    assert.equal(s.merged(), false)
+  } finally {
+    s.cleanup()
+  }
+})
+
+test('pr merge --auto: a PR already mergeable (clean status) is merged now, pinned to the head it judged', async () => {
+  const s = prScenario({ base: CODEOWNERS })
+  try {
+    const pull = s.client.pulls.get(7)
+    if (pull) pull.armRefusal = 'Pull request Pull request is in clean status'
+    await s.merge('--auto')
+    assert.equal(s.merged(), true)
+    const put = s.client.calls.find((c) => c.method === 'PUT')
+    assert.equal(put?.body.sha, run(s.bare, ['rev-parse', 'refs/heads/agent/x']).trim())
+  } finally {
+    s.cleanup()
+  }
+})
+
+test('pr merge --auto: any other refusal to arm surfaces, and nothing is merged', async () => {
+  const s = prScenario({ base: CODEOWNERS })
+  try {
+    const pull = s.client.pulls.get(7)
+    if (pull) pull.armRefusal = 'Pull request Auto merge is not allowed for this repository'
+    await assert.rejects(s.merge('--auto'), /Auto merge is not allowed/)
+    assert.equal(s.merged(), false)
   } finally {
     s.cleanup()
   }

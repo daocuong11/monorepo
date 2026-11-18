@@ -252,10 +252,23 @@ export function fakeGitHub(bare) {
       pr.merged = true
       return { sha: body.sha, merged: true }
     }
+    // Arming auto-merge. `armRefusal` is GitHub's answer when it will not —
+    // e.g. 'Pull request Pull request is in clean status' (mergeable now).
+    if (key === 'POST /graphql' && /enablePullRequestAutoMerge/.test(body.query)) {
+      const pr = pulls.get(Number(String(body.variables.id).replace(/^PR_/, '')))
+      if (!pr) throw err(404, path)
+      if (pr.armRefusal)
+        return {
+          data: { enablePullRequestAutoMerge: null },
+          errors: [{ type: 'UNPROCESSABLE', message: pr.armRefusal }],
+        }
+      pr.autoMerge = body.variables.m
+      return { data: { enablePullRequestAutoMerge: { clientMutationId: null } } }
+    }
     throw err(404, path)
   }
 
-  /** @type {Map<number, { number: number, head: string, base: string, headSha: string, merged?: boolean }>} */
+  /** @type {Map<number, { number: number, head: string, base: string, headSha: string, merged?: boolean, armRefusal?: string, autoMerge?: string }>} */
   const pulls = new Map()
   /** A PR's head: its branch while it exists, else the sha GitHub keeps as refs/pull/N/head. */
   const pullHead = (pr) => {

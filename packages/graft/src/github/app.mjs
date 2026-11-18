@@ -269,34 +269,54 @@ const noop = () => {}
 
 /**
  * How many times {@link retryServerErrors} repeats a request GitHub answered
- * with a 5xx. With the doubling in {@link serverErrorWait} that is 1+2+4+8s.
+ * with a 5xx, or that died on a dropped connection. With the doubling in
+ * {@link serverErrorWait} that is 1+2+4+8s.
  */
 export const SERVER_ERROR_RETRIES = 4
 
 const SERVER_ERRORS = new Set([500, 502, 503, 504])
 
 /**
+ * The `cause.code`s of a `fetch failed` whose connection dropped under it —
+ * typically a keep-alive socket that went stale while git hooks ran.
+ */
+const DROPPED_CONNECTION = new Set(['UND_ERR_SOCKET', 'UND_ERR_CLOSED', 'ECONNRESET', 'EPIPE'])
+
+/**
+ * The code of a request that died on a dropped connection, or `null`.
+ *
+ * @param {any} err
+ * @returns {string | null}
+ */
+export function droppedConnection(err) {
+  const code = err?.cause?.code ?? err?.code
+  return DROPPED_CONNECTION.has(code) ? code : null
+}
+
+/**
  * How long to wait before repeating a request GitHub answered 500, 502, 503
- * or 504 — one second, doubling per `attempt` — or `null` for anything else.
+ * or 504, or that died on a dropped connection ({@link droppedConnection}) —
+ * one second, doubling per `attempt` — or `null` for anything else.
  *
  * Deliberately NOT part of {@link rateLimitWait} or the client's own retry:
- * a 5xx does not say whether GitHub performed the write. Repeating is safe
- * only for a content-addressed write — `POST /git/blobs`, `POST /git/trees`,
- * whose answer is a sha fixed by the body — and never for `POST /git/commits`
- * (a second commit object) or a ref update. So the caller opts in, per call
- * site, with {@link retryServerErrors}.
+ * a 5xx, or a connection that dropped mid-request, does not say whether
+ * GitHub performed the write. Repeating is safe only for a content-addressed
+ * write — `POST /git/blobs`, `POST /git/trees`, whose answer is a sha fixed by
+ * the body — and never for `POST /git/commits` (a second commit object) or a
+ * ref update. So the caller opts in, per call site, with {@link retryServerErrors}.
  *
  * @param {any} err        what `request()` threw
  * @param {number} attempt 0 for the first retry
  */
 export function serverErrorWait(err, attempt) {
-  return SERVER_ERRORS.has(err?.status) ? 1_000 * 2 ** attempt : null
+  return SERVER_ERRORS.has(err?.status) || droppedConnection(err) ? 1_000 * 2 ** attempt : null
 }
 
 /**
- * Run `call`, repeating it on a 5xx (see {@link serverErrorWait}) up to
- * `retries` times and `report`ing each wait. For idempotent, content-
- * addressed writes only; `label` names the request in the report.
+ * Run `call`, repeating it on a 5xx or a dropped connection (see
+ * {@link serverErrorWait}) up to `retries` times and `report`ing each wait.
+ * For idempotent, content-addressed writes only; `label` names the request in
+ * the report.
  *
  * @template T
  * @param {string} label
@@ -315,8 +335,9 @@ export async function retryServerErrors(
     } catch (err) {
       const wait = attempt < retries ? serverErrorWait(err, attempt) : null
       if (wait === null) throw err
+      const dropped = droppedConnection(err)
       report(
-        `server error (${/** @type {any} */ (err).status}) on ${label}: waiting ${Math.ceil(wait / 1000)}s (retry ${attempt + 1}/${retries})`,
+        `${dropped ? `connection dropped (${dropped})` : `server error (${/** @type {any} */ (err).status})`} on ${label}: waiting ${Math.ceil(wait / 1000)}s (retry ${attempt + 1}/${retries})`,
       )
       await sleep(wait)
     }

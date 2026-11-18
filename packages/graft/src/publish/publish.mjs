@@ -342,8 +342,9 @@ export async function publishTree({
   }
 
   // Blob and tree writes are content-addressed — the answer is a sha fixed by
-  // the body — so a 5xx is safe to repeat. Commit and ref writes are not (a
-  // 5xx does not say whether GitHub made the commit or moved the ref, and a
+  // the body — so a 5xx or a dropped connection (a keep-alive socket gone
+  // stale while hooks ran) is safe to repeat. Commit and ref writes are not
+  // (neither says whether GitHub made the commit or moved the ref, and a
   // repeat could make a second commit), so they are never wrapped.
   const blobsPath = `/repos/${owner}/${repo}/git/blobs`
   const postBlobs = async (blobs) => {

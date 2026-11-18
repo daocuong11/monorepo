@@ -106,7 +106,8 @@ them to the ruleset's bypass list.
 `graft setup project` asks whether to turn on **Allow auto-merge**, which
 `graft pr merge --auto` needs (`--auto-merge` / `--no-auto-merge` answer
 without asking). It defaults to yes when agents may merge into some base. The
-merge still waits for the ruleset's required checks and reviews.
+merge still waits for the ruleset's required checks and reviews. A PR that is
+already mergeable — GitHub will not arm auto-merge on one — is merged at once.
 
 Without `gh` logged in as a repository admin, both steps print where to do them
 by hand instead.
