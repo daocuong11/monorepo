@@ -12,9 +12,9 @@ export const expandHome = (/** @type {string} */ p, home = homedir()) =>
  * Where the heartbeat lives and which repos to read, from flags first, then
  * cambium's own config file. Only `paths` and `repos[].slug` are read from it.
  *
- * @param {{ state?: string, config?: string, repos?: string[] }} flags
+ * @param {{ state?: string, config?: string, repos?: string[], traces?: string }} flags
  * @param {{ env?: Record<string, string | undefined>, home?: string, read?: (p: string) => string }} [deps]
- * @returns {{ statePath: string, repos: string[], configPath: string, configError: string | null }}
+ * @returns {{ statePath: string, tracesPath: string, repos: string[], configPath: string, configError: string | null }}
  */
 export function resolveSettings(
   flags,
@@ -34,12 +34,14 @@ export function resolveSettings(
   const homeDir = typeof cfg?.paths?.home === 'string' ? cfg.paths.home : '~/.cambium'
   const fromConfig = typeof cfg?.paths?.heartbeat === 'string' ? cfg.paths.heartbeat : join(homeDir, 'state.json')
   const statePath = resolve(expandHome(flags.state ?? fromConfig, home))
+  // Where cambium's local collector (otel/otelcol.yaml) writes spans.
+  const tracesPath = resolve(expandHome(flags.traces ?? join(homeDir, 'otel', 'traces.jsonl'), home))
 
   const listed = flags.repos?.length
     ? flags.repos
     : (Array.isArray(cfg?.repos) ? cfg.repos : []).map((/** @type {any} */ r) => r?.slug).filter(Boolean)
   for (const r of listed) if (!SLUG.test(r)) throw new Error(`repo must be owner/name, got ${r}`)
-  return { statePath, repos: [...new Set(/** @type {string[]} */ (listed))], configPath, configError }
+  return { statePath, tracesPath, repos: [...new Set(/** @type {string[]} */ (listed))], configPath, configError }
 }
 
 export const isSlug = (/** @type {unknown} */ s) => typeof s === 'string' && SLUG.test(s)

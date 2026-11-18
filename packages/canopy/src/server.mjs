@@ -4,6 +4,7 @@ import { isSlug } from './config.mjs'
 import { readHeartbeat as defaultReadHeartbeat } from './heartbeat.mjs'
 import { PAGE } from './page.mjs'
 import { emptyColumns } from './queues.mjs'
+import { traceDetail, traceIndex, traceList } from './traces.mjs'
 
 export const DEFAULT_HOST = '127.0.0.1'
 export const DEFAULT_PORT = 4317
@@ -18,6 +19,7 @@ export const POLL_MS = 5000
  *   now?: () => number,
  *   host?: string,
  *   notes?: string[],
+ *   traces?: import('./traces.mjs').TraceStore,
  * }} AppOptions
  */
 
@@ -37,8 +39,9 @@ export async function buildState({
   readHeartbeat = defaultReadHeartbeat,
   now = Date.now,
   notes = [],
+  traces,
 }) {
-  const heartbeat = await readHeartbeat(statePath)
+  const [heartbeat, traceFile] = await Promise.all([readHeartbeat(statePath), traces?.read()])
   const slugs = reposFor(repos, heartbeat)
   const github = slugs.length
     ? await queues.get(slugs)
@@ -52,6 +55,7 @@ export async function buildState({
       : [...notes, 'no repositories to read: pass --repo owner/name or set repos in cambium config'],
     heartbeat,
     github,
+    traces: traceFile ? traceIndex(traceFile) : null,
   }
 }
 
@@ -91,9 +95,12 @@ export function createHandler(opts) {
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(405, 'text/plain; charset=utf-8', 'read-only\n')
     const path = new URL(req.url ?? '/', 'http://x').pathname
     if (path === '/' || path === '/index.html') return send(200, 'text/html; charset=utf-8', PAGE)
-    if (path === '/api/state') {
+    const json = async (/** @type {() => Promise<unknown>} */ fn) => {
       try {
-        return send(200, 'application/json; charset=utf-8', JSON.stringify(await buildState(opts)))
+        const body = await fn()
+        if (body === null)
+          return send(404, 'application/json; charset=utf-8', JSON.stringify({ error: 'no such trace' }))
+        return send(200, 'application/json; charset=utf-8', JSON.stringify(body))
       } catch (err) {
         return send(
           500,
@@ -102,6 +109,11 @@ export function createHandler(opts) {
         )
       }
     }
+    if (path === '/api/state') return json(() => buildState(opts))
+    const { traces } = opts
+    if (traces && path === '/api/traces') return json(async () => traceList(await traces.read()))
+    const one = /^\/api\/traces\/([0-9a-f]{32})$/.exec(path)
+    if (traces && one) return json(async () => traceDetail(await traces.read(), one[1]))
     return send(404, 'text/plain; charset=utf-8', 'not found\n')
   }
 }
