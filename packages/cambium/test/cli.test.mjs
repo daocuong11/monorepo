@@ -205,6 +205,81 @@ test('daemon loop: ticks until aborted, never waits on a worker, survives a thro
   assert.ok(h.events.some((e) => /db gone/.test(e.msg)))
 })
 
+/**
+ * `cambium start` against a real config file, ticking with no wait; `between(tick)` runs after each tick's
+ * heartbeat (edit the file there), and the daemon stops after `ticks`.
+ * @param {any} seed @param {any} extra @param {number} ticks @param {(tick: number, s: ReturnType<typeof setup>) => void} between
+ */
+async function startWithEdits(seed, extra, ticks, between) {
+  const s = setup({ tickSeconds: 0, ...extra })
+  const h = harness(seed)
+  const ac = new AbortController()
+  const beat = h.deps.heartbeat
+  let n = 0
+  h.deps.heartbeat = (state) => {
+    beat(state)
+    between(++n, s)
+    if (n === ticks) ac.abort()
+  }
+  const deps = (/** @type {any} */ config) => Object.assign(h.deps, { config })
+  assert.equal(await main(['start'], { ...s.io, signal: ac.signal, deps }), 0)
+  return { h, s }
+}
+
+/** @param {ReturnType<typeof setup>} s @param {any} extra */
+const rewrite = (s, extra) =>
+  writeFileSync(
+    s.cfg,
+    JSON.stringify({
+      host: 'mac',
+      repos: [{ slug: SLUG, path: '/repo' }],
+      paths: { home: s.home },
+      tickSeconds: 0,
+      ...extra,
+    }),
+  )
+
+test('config reload: a cap raised in the file applies from the next tick, without a restart', async () => {
+  const { h } = await startWithEdits(
+    { issues: [{ number: 1, labels: ['q:task'] }] },
+    { phases: { task: { cap: 0 } } },
+    2,
+    (tick, s) => tick === 1 && rewrite(s, { phases: { task: { cap: 1 } } }),
+  )
+  assert.deepEqual(
+    h.spawner.started.map((w) => w.issue),
+    [1],
+  )
+  assert.equal(h.deps.config.phases.task.cap, 1)
+  assert.ok(h.events.some((e) => e.level === 'info' && /config reloaded: phases/.test(e.msg)))
+})
+
+test('config reload: a broken file keeps the running config and warns once; fixing it applies', async () => {
+  const { h } = await startWithEdits({}, { phases: { task: { cap: 1 } } }, 5, (tick, s) => {
+    if (tick === 1) writeFileSync(s.cfg, '{ "repos": [')
+    if (tick === 3) writeFileSync(s.cfg, '{}')
+    if (tick === 4) rewrite(s, { phases: { task: { cap: 2 } } })
+  })
+  const warns = h.events.filter((e) => e.level === 'warn').map((e) => e.msg)
+  assert.equal(warns.length, 2, `one warning per distinct problem, not per tick: ${warns.join(' | ')}`)
+  assert.match(warns[0], /config not reloaded, keeping the running one: .*config\.json/)
+  assert.match(warns[1], /config not reloaded, keeping the running one: no repos/)
+  assert.equal(h.deps.config.phases.task.cap, 2)
+})
+
+test('config reload: a restart-only key is not applied, and says so once', async () => {
+  const { h } = await startWithEdits(
+    {},
+    {},
+    3,
+    (tick, s) => tick === 1 && rewrite(s, { host: 'other', engine: 'graph' }),
+  )
+  assert.equal(h.deps.config.host, 'mac')
+  assert.equal(h.deps.config.engine, 'legacy')
+  const warns = h.events.filter((e) => e.level === 'warn').map((e) => e.msg)
+  assert.deepEqual(warns, ['config: host, engine changed; restart cambium to apply'])
+})
+
 test('one daemon per database; a dead holder does not block', () => {
   const store = openStore(':memory:')
   const procs = { alive: (/** @type {number} */ pid) => pid === 1, kill() {} }

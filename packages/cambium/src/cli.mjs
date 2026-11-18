@@ -73,7 +73,7 @@ export async function main(argv, io) {
       if (!config.repos.length) return fail(io, `no repos in ${cfgPath}; see the README for the config file`)
       const deps = depsFor(config)
       acquireLock(deps.store, deps.procs, deps.pid ?? process.pid)
-      await runDaemon(deps, { signal: io.signal, once: has(rest, '--once') })
+      await runDaemon(deps, { signal: io.signal, once: has(rest, '--once'), reload: () => loadConfig(cfgPath) })
       return 0
     }
     case 'status':

@@ -2,6 +2,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { applyReload } from './config.mjs'
 import { graftGitHub } from './github.mjs'
 import { openStore } from './store.mjs'
 import { tick } from './tick.mjs'
@@ -93,16 +94,40 @@ export function acquireLock(store, procs, pid) {
 }
 
 /**
+ * Before each tick, `reload` re-reads the config and {@link applyReload} applies what changed. A file that does
+ * not load keeps the running config; that warning, and "restart to apply" for a restart-only key, is logged once
+ * per distinct message rather than every tick.
+ *
  * @param {import('./tick.mjs').Deps} deps
- * @param {{ signal?: AbortSignal, wait?: (ms: number, signal?: AbortSignal) => Promise<unknown>, once?: boolean }} [opts]
+ * @param {{
+ *   signal?: AbortSignal, wait?: (ms: number, signal?: AbortSignal) => Promise<unknown>, once?: boolean,
+ *   reload?: () => import('./config.mjs').Config,
+ * }} [opts]
  */
 export async function runDaemon(
   deps,
-  { signal, wait = (ms, s) => sleep(ms, undefined, { signal: s }), once = false } = {},
+  { signal, wait = (ms, s) => sleep(ms, undefined, { signal: s }), once = false, reload } = {},
 ) {
   let n = 0
+  /** @type {string | null} */
+  let warned = null
+  const reloadConfig = () => {
+    if (!reload) return
+    /** @type {string | null} */
+    let warning = null
+    try {
+      const { applied, restart } = applyReload(deps.config, reload())
+      if (applied.length) deps.log('info', `config reloaded: ${applied.join(', ')}`)
+      if (restart.length) warning = `config: ${restart.join(', ')} changed; restart cambium to apply`
+    } catch (err) {
+      warning = `config not reloaded, keeping the running one: ${/** @type {Error} */ (err)?.message ?? err}`
+    }
+    if (warning && warning !== warned) deps.log('warn', warning)
+    warned = warning
+  }
   deps.log('info', `cambium up on ${deps.config.host}: ${deps.config.repos.map((r) => r.slug).join(', ')}`)
   while (!signal?.aborted) {
+    if (n > 0) reloadConfig()
     deps.tickNumber = ++n
     try {
       await tick(deps)

@@ -109,6 +109,40 @@ export function resolveConfig(raw = {}) {
 }
 
 /** @param {string} path */
+/**
+ * What the daemon bakes in at start: the host its leases name, the engine (switching it under live workers is
+ * unsafe, see #42), the db/log/heartbeat paths it opened, and graft's App identity in its children's env.
+ */
+export const RESTART_KEYS = Object.freeze(['host', 'engine', 'paths', 'logs', 'graft'])
+
+/**
+ * A re-read config applied to the running one in place, since every collaborator holds that object. Keys in
+ * {@link RESTART_KEYS} are never applied; they are reported so the daemon can say a restart is needed.
+ *
+ * @param {Config} live @param {Config} next
+ * @returns {{ applied: string[], restart: string[] }}
+ */
+export function applyReload(live, next) {
+  if (!next.repos.length) throw new Error('no repos')
+  /** @type {Record<string, unknown>} */
+  const target = live
+  /** @type {Record<string, unknown>} */
+  const source = next
+  /** @type {string[]} */
+  const applied = []
+  /** @type {string[]} */
+  const restart = []
+  for (const k of new Set([...Object.keys(target), ...Object.keys(source)])) {
+    if (JSON.stringify(target[k]) === JSON.stringify(source[k])) continue
+    if (RESTART_KEYS.includes(k)) restart.push(k)
+    else {
+      target[k] = source[k]
+      applied.push(k)
+    }
+  }
+  return { applied, restart }
+}
+
 export function loadConfig(path) {
   if (!existsSync(path)) return resolveConfig({})
   try {
