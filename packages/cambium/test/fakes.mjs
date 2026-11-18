@@ -5,6 +5,7 @@
  * spawner and a process table. Not a test file.
  */
 import { resolveConfig } from '../src/config.mjs'
+import { resolveConvention } from '../src/convention.mjs'
 import { parseMarker } from '../src/marker.mjs'
 import { openStore } from '../src/store.mjs'
 
@@ -162,8 +163,16 @@ export function fakeSpawner(procs) {
   const cleaned = []
   const s = {
     fail: /** @type {Error | null} */ (null),
+    /** The target repo's raw `"cambium"` key; resolved (and validated) on every start. */
+    pkgCambium: /** @type {unknown} */ (undefined),
+    /** Set → cleanup keeps the worktree with this reason. */
+    keep: /** @type {string | null} */ (null),
     started,
     cleaned,
+    /** @param {import('../src/config.mjs').Repo} repo */
+    convention(repo) {
+      return resolveConvention(s.pkgCambium, repo.path)
+    },
     /** @param {import('../src/workers.mjs').StartSpec} spec */
     async start(spec) {
       if (s.fail) throw s.fail
@@ -174,18 +183,22 @@ export function fakeSpawner(procs) {
       const base = `/logs/o__r/issue-${spec.issue}/a${spec.attempt}`
       return {
         pid: p,
-        worktree: `/wt/o__r/issue-${spec.issue}-a${spec.attempt}`,
+        worktree: `${spec.convention.root}/${spec.branch.replace(/^[^/]+\//, '')}`,
         stdout: `${base}.out.log`,
         stderr: `${base}.err.log`,
         prompt: `${base}.prompt.md`,
         exited: Promise.resolve(0),
+        reused: null,
       }
     },
     /** @param {{ worktree: string }} w */
     async cleanup(w) {
+      if (s.keep) return { removed: false, reason: s.keep }
       cleaned.push(w.worktree)
+      return { removed: true, reason: null }
     },
-    tail: () => 'Error: the last stderr line',
+    stderrTail: 'Error: the last stderr line',
+    tail: () => s.stderrTail,
   }
   return s
 }

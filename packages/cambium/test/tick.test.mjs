@@ -29,15 +29,15 @@ test('schedule: claims q:task issues up to the cap, priority then age, with the 
     [3, 2],
   )
   const first = h.spawner.started[0]
-  assert.equal(first.branch, 'agent/issue-3')
+  assert.equal(first.branch, 'agent/3-issue-3')
   assert.equal(first.attempt, 1)
   assert.equal(first.maxTurns, 200)
   for (const needle of [
     'GitHub issue #3',
     'pnpm verify',
-    'graft publish agent/issue-3',
+    'graft publish agent/3-issue-3',
     '--closes 3',
-    'graft ci wait agent/issue-3',
+    'graft ci wait agent/3-issue-3',
     '# AGENTS.md from the worktree',
     'Body of 3',
   ])
@@ -482,4 +482,69 @@ test('heartbeat: the documented shape', async () => {
   ])
   assert.deepEqual(s.repos[0].counts, { intake: 0, task: 1, human: 1, promote: 0, running: 1, review: 0 })
   assert.equal(Date.parse(s.tick.nextAt) - Date.parse(s.tick.finishedAt), 30_000)
+})
+
+test("worktree convention: the repo's branch template names the branch; a retry keeps it", async () => {
+  const h = harness({ issues: [{ number: 30, title: 'Teach the tick: hydrate!', labels: ['q:task'] }] })
+  h.spawner.pkgCambium = { worktree: { branch: 'bot/{issue}/{slug}' } }
+  await tick(h.deps)
+  assert.equal(h.spawner.started[0].branch, 'bot/30/teach-the-tick-hydrate')
+  assert.equal(h.gh.marker(30)?.branch, 'bot/30/teach-the-tick-hydrate')
+  h.procs.live.clear()
+  h.spawner.pkgCambium = undefined
+  await tick(h.deps)
+  const retry = /** @type {any} */ (h.spawner.started.at(-1))
+  assert.equal(retry.attempt, 2)
+  assert.equal(retry.branch, 'bot/30/teach-the-tick-hydrate', 'sticky across attempts')
+})
+
+test('an invalid "cambium" key in the repo fails the start cleanly: requeued, no lease held', async () => {
+  const h = harness({ issues: [task(31)] })
+  h.spawner.pkgCambium = { worktree: { brnch: 'x' } }
+  await tick(h.deps)
+  assert.equal(h.spawner.started.length, 0)
+  assert.deepEqual(h.gh.issue(31).labels, ['q:task'])
+  assert.equal(h.gh.marker(31)?.attempt, 2)
+  assert.match(String(h.gh.marker(31)?.lastFailure), /could not start the worker: .*unknown key worktree\.brnch/)
+  assert.equal(h.gh.marker(31)?.history.at(-1)?.outcome, 'spawn-failed')
+})
+
+test('a prepare failure requeues as spawn-failed with its stderr tail, even with an open PR', async () => {
+  const h = harness({ issues: [task(32)], config: { phases: { task: { cap: 0 } } } })
+  h.gh.addPr({ number: 320, closes: [32] })
+  h.deps.store.addWorker({
+    repo: SLUG,
+    issue: 32,
+    phase: 'task',
+    pid: 998,
+    worktree: '/wt/32',
+    branch: 'agent/32-x',
+    attempt: 1,
+    startedAt: h.clock.now(),
+    host: 'mac',
+    stdout: '/l/32.out.log',
+    stderr: '/l/32.err.log',
+  })
+  h.spawner.stderrTail =
+    'ERR_PNPM_OUTDATED_LOCKFILE\ncambium: prepare failed: install `pnpm install --frozen-lockfile` exited 1'
+  await tick(h.deps)
+  const m = h.gh.marker(32)
+  assert.equal(m?.attempt, 2)
+  assert.equal(m?.history.at(-1)?.outcome, 'spawn-failed')
+  assert.match(String(m?.lastFailure), /^could not start the worker: prepare failed/)
+  assert.match(String(m?.lastFailure), /ERR_PNPM_OUTDATED_LOCKFILE/)
+})
+
+test('teardown: a worktree graft status says holds local-only work is kept, and the log says why', async () => {
+  const h = harness({ issues: [task(33)] })
+  await tick(h.deps)
+  h.procs.live.clear()
+  h.gh.addPr({ number: 330, closes: [33] })
+  h.spawner.keep = 'local only (not on GitHub): 1 commit'
+  await tick(h.deps)
+  assert.equal(h.gh.marker(33)?.stage, 'submitted')
+  assert.deepEqual(h.spawner.cleaned, [])
+  assert.ok(
+    h.events.some((e) => e.level === 'warn' && /kept worktree .*: local only \(not on GitHub\): 1 commit/.test(e.msg)),
+  )
 })

@@ -8,7 +8,9 @@
  */
 import { apply, byPriorityThenAge, move, Q, queueOf, RUNNING, WHY } from './labels.mjs'
 import { newMarker, renderMarker, withHistory } from './marker.mjs'
-import { prFor, taskBranch, taskExit, taskPrompt } from './phases/task.mjs'
+import { prFor, taskExit, taskPrompt } from './phases/task.mjs'
+import { branchName } from './convention.mjs'
+import { PREPARE_FAILED_LINE } from './prepare.mjs'
 import { releaseDue, releaseNotBuilt } from './phases/release.mjs'
 import { DISPATCH_NOT_BUILT, dispatchNotBuilt } from './phases/dispatch.mjs'
 
@@ -261,14 +263,21 @@ export async function finish(deps, ctx, w, snap) {
   const pr = prFor(snap, w)
   const done = async () => {
     deps.store.removeWorker(w.repo, w.issue)
-    if (repo) await deps.spawner.cleanup({ repo, worktree: w.worktree })
+    if (!repo) return
+    const t = await deps.spawner.cleanup({ repo, worktree: w.worktree, branch: w.branch })
+    if (!t.removed) deps.log('warn', `kept worktree ${w.worktree}: ${t.reason}`, { repo: w.repo, issue: w.issue })
   }
   if (issue?.state !== 'OPEN') {
     deps.log('info', 'worker gone; issue is closed or no longer queued', { repo: w.repo, issue: w.issue })
     return done()
   }
   const m = markerOf(issue)
-  const verdict = w.killedReason ? { ok: false, reason: w.killedReason } : taskExit(pr, m)
+  const prepFailed = !w.killedReason && deps.spawner.tail(w.stderr, 15).includes(PREPARE_FAILED_LINE)
+  const verdict = w.killedReason
+    ? { ok: false, reason: w.killedReason }
+    : prepFailed
+      ? { ok: false, reason: 'could not start the worker: prepare failed' }
+      : taskExit(pr, m)
   if (verdict.ok && pr) {
     const marker = {
       ...withHistory(m, { at: iso(ctx.now), attempt: m.attempt, outcome: 'submitted', pr: pr.number, log: w.stdout }),
@@ -288,7 +297,7 @@ export async function finish(deps, ctx, w, snap) {
     const reason = `${'reason' in verdict ? verdict.reason : 'worker failed'}${tail ? `\n--- stderr (last lines, ${w.stderr})\n${tail}` : ''}`
     await requeue(deps, ctx, w.repo, issue, {
       reason,
-      outcome: w.killedReason ? 'killed' : 'failed',
+      outcome: w.killedReason ? 'killed' : prepFailed ? 'spawn-failed' : 'failed',
       pr: pr?.number,
       log: w.stdout,
     })
@@ -456,9 +465,21 @@ export async function startTask(deps, ctx, slug, issue, snap, { foreground = fal
     await toHuman(deps, ctx, slug, issue, { reason: `${caps.maxAttempts} attempts spent`, outcome: 'budget' })
     return null
   }
+  /** @type {import('./convention.mjs').Convention} */
+  let convention
+  try {
+    convention = deps.spawner.convention(repo)
+  } catch (err) {
+    await requeue(deps, ctx, slug, issue, {
+      reason: `could not start the worker: ${/** @type {Error} */ (err)?.message ?? err}`,
+      outcome: 'spawn-failed',
+    })
+    return null
+  }
   const known = prFor(snap, { issue: issue.number, branch: m0.branch })
   const pr = known?.state === 'OPEN' ? known : null
-  const branch = pr?.branch ?? m0.branch ?? taskBranch(issue.number)
+  // Sticky: a retry keeps the branch (and so the worktree topic) its first attempt chose.
+  const branch = pr?.branch ?? m0.branch ?? branchName(convention.branch, issue.number, issue.title)
   const marker = {
     ...m0,
     phase: /** @type {const} */ ('task'),
@@ -476,6 +497,7 @@ export async function startTask(deps, ctx, slug, issue, snap, { foreground = fal
   try {
     started = await deps.spawner.start({
       repo,
+      convention,
       issue: issue.number,
       attempt: marker.attempt,
       branch,
@@ -505,6 +527,11 @@ export async function startTask(deps, ctx, slug, issue, snap, { foreground = fal
     stdout: started.stdout,
     stderr: started.stderr,
   })
+  if (started.reused)
+    deps.log('warn', `continuing in the previous worktree ${started.worktree}: ${started.reused}`, {
+      repo: slug,
+      issue: issue.number,
+    })
   deps.log('info', `started task worker pid ${started.pid} (attempt ${marker.attempt}, ${branch})`, {
     repo: slug,
     issue: issue.number,
