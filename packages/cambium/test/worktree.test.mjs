@@ -160,6 +160,7 @@ test('lesson #4382: a worker is a plain detached child — own worktree, own pro
   assert.equal(started.reused, null)
   assert.deepEqual(calls, [
     ['git', '-C', repoPath, 'fetch', 'origin', 'trunk'],
+    ['git', '-C', repoPath, 'symbolic-ref', '--short', '-q', 'HEAD'],
     ['git', '-C', repoPath, 'worktree', 'add', '--no-track', '-B', 'agent/5-fix-it', wt, 'origin/trunk'],
   ])
   const [{ cmd, args, opts }] = spawned
@@ -187,12 +188,59 @@ test('lesson #4382: a worker is a plain detached child — own worktree, own pro
   // Teardown: removed, with its local branch, only once graft status says GitHub has it all.
   const t = await spawner.cleanup({ repo: config.repos[0], worktree: wt, branch: 'agent/5-fix-it' })
   assert.deepEqual(t, { removed: true, reason: null })
-  assert.deepEqual(calls.slice(2), [
+  assert.deepEqual(calls.slice(3), [
     ['graft', 'status', 'agent/5-fix-it', '-C', wt, '--repo', 'o/r'],
     ['git', '-C', wt, 'symbolic-ref', '--short', '-q', 'HEAD'],
     ['git', '-C', repoPath, 'worktree', 'remove', '--force', wt],
     ['git', '-C', repoPath, 'branch', '-D', 'agent/5-fix-it'],
   ])
+})
+
+test('the central checkout is fast-forwarded to the fetched base before a worktree is cut, and its convention re-read', async () => {
+  const sh = (/** @type {string} */ cwd, /** @type {string[]} */ args) => {
+    const r = spawnSync('git', args, { cwd, encoding: 'utf8' })
+    assert.equal(r.status, 0, r.stderr)
+    return r.stdout.trim()
+  }
+  const commit = (/** @type {string} */ cwd, /** @type {any} */ pkg) => {
+    writeFileSync(join(cwd, 'package.json'), JSON.stringify(pkg))
+    sh(cwd, ['add', '-A'])
+    sh(cwd, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'x'])
+  }
+  const origin = tmp()
+  sh(origin, ['init', '-q', '-b', 'trunk'])
+  commit(origin, { cambium: { prepare: ['old'] } })
+  const central = join(tmp(), 'central')
+  sh(origin, ['clone', '-q', origin, central])
+  commit(origin, { cambium: { prepare: ['new'] } })
+
+  const config = resolveConfig({ repos: [{ slug: 'o/r', path: central, baseBranch: 'trunk' }], paths: { home: tmp() } })
+  /** @type {any[]} */
+  const spawned = []
+  const spawner = processSpawner({
+    config,
+    exec: async (cmd, args) => {
+      if (args.includes('worktree')) return ''
+      const r = spawnSync(cmd, args, { encoding: 'utf8' })
+      if (r.status !== 0) throw new Error(r.stderr)
+      return r.stdout
+    },
+    spawnFn: /** @type {any} */ (
+      (/** @type {string} */ c, /** @type {string[]} */ a, /** @type {any} */ opts) => {
+        spawned.push(opts)
+        return Object.assign(new EventEmitter(), { pid: 1, unref() {} })
+      }
+    ),
+  })
+  await spawner.start(startSpec(config, { convention: readConvention(central) }))
+  assert.equal(sh(central, ['rev-parse', 'HEAD']), sh(origin, ['rev-parse', 'HEAD']))
+  assert.deepEqual(JSON.parse(spawned[0].env.CAMBIUM_PREPARE).prepare, ['new'])
+
+  // Off the base branch, or with tracked changes, it is left exactly where it is.
+  commit(origin, { cambium: { prepare: ['newer'] } })
+  writeFileSync(join(central, 'package.json'), '{"dirty":true}')
+  await spawner.start(startSpec(config, { convention: readConvention(central), issue: 6, branch: 'agent/6-x' }))
+  assert.notEqual(sh(central, ['rev-parse', 'HEAD']), sh(origin, ['rev-parse', 'HEAD']))
 })
 
 test('a read-only (triage) worker: a detached checkout, no install, no Edit/Write; removed outright', async () => {

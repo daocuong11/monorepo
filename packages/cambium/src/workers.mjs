@@ -150,6 +150,22 @@ export function processSpawner({
   const graftEnv = { ...process.env, ...(config.graft.app ? { GRAFT_APP: config.graft.app } : {}) }
 
   /**
+   * Fast-forward the central checkout to the just-fetched base, so the convention
+   * and hydrate sources a worker gets are current. Only when that checkout sits on
+   * the base branch with no tracked changes; `--ff-only` refuses rather than discards.
+   *
+   * @param {import('./config.mjs').Repo} repo @returns {Promise<boolean>} whether it moved
+   */
+  async function syncCentral(repo) {
+    const head = (await git(repo.path, ['symbolic-ref', '--short', '-q', 'HEAD']).catch(() => '')).trim()
+    if (head !== repo.baseBranch) return false
+    if ((await git(repo.path, ['status', '--porcelain', '--untracked-files=no'])).trim()) return false
+    const before = (await git(repo.path, ['rev-parse', 'HEAD'])).trim()
+    await git(repo.path, ['merge', '--ff-only', '--quiet', `origin/${repo.baseBranch}`]).catch(() => {})
+    return (await git(repo.path, ['rev-parse', 'HEAD'])).trim() !== before
+  }
+
+  /**
    * Remove a worktree only once `graft status` says GitHub holds everything in
    * it; otherwise keep it and say why. Its local branch goes with it.
    *
@@ -207,7 +223,16 @@ export function processSpawner({
       readOnly = false,
     }) {
       const worktree = join(convention.root, topicOf(branch))
-      if (config.worker.fetch) await git(repo.path, ['fetch', 'origin', repo.baseBranch])
+      if (config.worker.fetch) {
+        await git(repo.path, ['fetch', 'origin', repo.baseBranch])
+        if (await syncCentral(repo)) {
+          try {
+            convention = readConvention(repo.path)
+          } catch {
+            // The updated package.json does not parse: keep the convention this tick read.
+          }
+        }
+      }
       /** @type {string | null} */
       let reused = null
       if (readOnly) await dispose(repo, worktree)

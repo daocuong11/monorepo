@@ -213,6 +213,33 @@ test('sync: a dirty worktree, a diverged one, and an EXISTING one are left alone
   assert.equal(sync({ ...created(existing.clone), tool_input: { path: existing.clone } }), null)
 })
 
+test('sync: the main checkout is fast-forwarded too: in place when on the base, by ref when elsewhere, never when dirty', (t) => {
+  const linked = (/** @type {ReturnType<typeof repo>} */ r) => {
+    const wt = join(r.root, 'wt')
+    git(r.clone, 'worktree', 'add', '-q', '--detach', wt, 'origin/main')
+    return wt
+  }
+
+  const onBase = repo(t)
+  const target = advanceOrigin(onBase)
+  assert.match(String(sync(created(linked(onBase)))), /Main checkout main fast-forwarded .* → /)
+  assert.equal(git(onBase.clone, 'rev-parse', 'HEAD').trim(), target)
+
+  const elsewhere = repo(t)
+  git(elsewhere.clone, 'switch', '-q', '-c', 'feature')
+  const target2 = advanceOrigin(elsewhere)
+  sync(created(linked(elsewhere)))
+  assert.equal(git(elsewhere.clone, 'rev-parse', 'refs/heads/main').trim(), target2)
+  assert.equal(git(elsewhere.clone, 'symbolic-ref', '--short', 'HEAD').trim(), 'feature')
+
+  const dirty = repo(t)
+  advanceOrigin(dirty)
+  const before = git(dirty.clone, 'rev-parse', 'HEAD').trim()
+  writeFileSync(join(dirty.clone, 'a.txt'), 'edited\n')
+  assert.match(String(sync(created(linked(dirty)))), /Main checkout .* uncommitted changes/)
+  assert.equal(git(dirty.clone, 'rev-parse', 'HEAD').trim(), before)
+})
+
 test('sync: an up-to-date worktree says nothing', (t) => {
   const r = repo(t)
   assert.equal(sync(created(r.clone)), null)
