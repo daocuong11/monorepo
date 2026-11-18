@@ -13,6 +13,7 @@ import { acquireLock, readHeartbeat, realDeps, runDaemon } from './daemon.mjs'
 import { plist, plistPath } from './launchd.mjs'
 import { openStore } from './store.mjs'
 import { finish, newCtx, startTask } from './tick.mjs'
+import { runIssue } from './graph-engine.mjs'
 
 export const VERSION = '0.0.0'
 
@@ -25,6 +26,9 @@ export const HELP = `cambium ${VERSION} — the scheduler daemon
   cambium drain                         reconcile and watch, start no new workers
   cambium run task --issue <n> [--repo <owner/name>]
                                         claim one q:task issue, run its worker in the foreground, transition
+  cambium run <graph> --issue <n> [--repo <owner/name>] [--follow]
+                                        engine "graph": advance the issue in the foreground to the first wait
+                                        that is not ready; --follow keeps polling until the graph ends
   cambium install [--dry-run]           write the launchd agent (KeepAlive); --dry-run prints it
 
 Common: --config <file> (default $CAMBIUM_CONFIG, then ~/.cambium/config.json)`
@@ -45,6 +49,7 @@ const has = (argv, name) => argv.includes(name)
  *   deps?: (config: import('./config.mjs').Config) => import('./tick.mjs').Deps,
  *   signal?: AbortSignal,
  *   now?: () => number,
+ *   sleep?: (ms: number) => Promise<void>,
  * }} IO
  */
 
@@ -141,15 +146,21 @@ function status(config, io, json) {
 
 /**
  * `run task --issue N`: one Task phase in the foreground, with the daemon's
- * claim and transitions, so the daemon sees the same state afterwards.
+ * claim and transitions, so the daemon sees the same state afterwards. On
+ * `engine: "graph"`, `run <graph> --issue N [--follow]` runs the graph runtime
+ * in the foreground instead (graph-engine.mjs `runIssue`).
  *
  * @param {import('./config.mjs').Config} config @param {string[]} argv @param {IO} io
  * @param {(config: import('./config.mjs').Config) => import('./tick.mjs').Deps} depsFor
  */
 async function runOne(config, argv, io, depsFor) {
   const n = Number(flag(argv, '--issue'))
-  if (argv[0] !== 'task' || !Number.isInteger(n) || n <= 0)
-    return fail(io, 'usage: cambium run task --issue <n> [--repo <owner/name>]')
+  const graph = argv[0]
+  if (!graph || graph.startsWith('-') || !Number.isInteger(n) || n <= 0)
+    return fail(io, 'usage: cambium run <graph> --issue <n> [--repo <owner/name>] [--follow]')
+  const follow = has(argv, '--follow')
+  if (config.engine === 'legacy' && (graph !== 'task' || follow))
+    return fail(io, `engine "legacy" runs only \`run task --issue <n>\`; set "engine": "graph" for graphs and --follow`)
   const slug = flag(argv, '--repo') ?? (config.repos.length === 1 ? config.repos[0].slug : undefined)
   if (!slug || !config.repos.some((r) => r.slug === slug))
     return fail(
@@ -157,6 +168,10 @@ async function runOne(config, argv, io, depsFor) {
       `--repo must name one of the configured repos: ${config.repos.map((r) => r.slug).join(', ') || '(none)'}`,
     )
   const deps = depsFor(config)
+  if (config.engine === 'graph') {
+    const r = await runIssue(deps, { graph, slug, number: n, follow, out: io.out, sleep: io.sleep, signal: io.signal })
+    return r.ok ? 0 : fail(io, /** @type {string} */ (r.error))
+  }
   if (deps.store.worker(slug, n)) return fail(io, `${slug}#${n} already has a tracked worker`)
   const snap = await deps.github.read(slug)
   const issue = snap.issues.get(n)

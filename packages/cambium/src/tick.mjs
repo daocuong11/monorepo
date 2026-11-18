@@ -6,8 +6,10 @@
  * step that throws or times out is recorded and the tick moves on. Nothing
  * here waits on a worker.
  */
-import { apply, byPriorityThenAge, move, Q, queueOf, RUNNING, WHY } from './labels.mjs'
-import { newMarker, renderMarker, withHistory } from './marker.mjs'
+import { byPriorityThenAge, move, Q, queueOf, RUNNING, WHY } from './labels.mjs'
+import { withHistory } from './marker.mjs'
+import { failureSummary, iso, key, markerOf, MIN, setLabels, setMarker } from './issue-state.mjs'
+import { GRAPH_ENGINE } from './graph-engine.mjs'
 import { prFor, taskExit, taskPrompt } from './phases/task.mjs'
 import { branchName } from './convention.mjs'
 import { PREPARE_FAILED_LINE } from './prepare.mjs'
@@ -42,9 +44,12 @@ import { DISPATCH_NOT_BUILT, dispatchNotBuilt } from './phases/dispatch.mjs'
  * }} Ctx
  */
 
-const iso = (/** @type {number} */ ms) => new Date(ms).toISOString()
-const key = (/** @type {string} */ slug, /** @type {number} */ n) => `${slug}#${n}`
-const MIN = 60_000
+/**
+ * @typedef {(deps: Deps, ctx: Ctx) => Promise<void>} StepFn
+ * @typedef {{ reconcile: StepFn, watch: StepFn, sweep: StepFn, scheduleTasks: StepFn }} Engine
+ *   The Task-phase steps. `config.engine` picks the legacy stage tick (this file) or the `task` graph
+ *   (graph-engine.mjs); Read, dispatch, Release and Heartbeat are shared.
+ */
 
 /** @param {Deps} deps @returns {Ctx} */
 export function newCtx(deps) {
@@ -65,17 +70,23 @@ export function newCtx(deps) {
 export async function tick(deps) {
   const ctx = newCtx(deps)
   const paused = ctx.mode === 'paused'
-  /** @type {[string, (deps: Deps, ctx: Ctx) => Promise<void>][]} */
+  const engine = engineOf(deps)
+  /** @type {StepFn} */
+  const schedule = async (d, c) => {
+    await engine.scheduleTasks(d, c)
+    await scheduleDispatch(d, c)
+  }
+  /** @type {[string, StepFn][]} */
   const steps = [
     ['read', read],
     ...(paused
       ? []
-      : /** @type {[string, (deps: Deps, ctx: Ctx) => Promise<void>][]} */ ([
-          ['reconcile', reconcile],
-          ['watch', watch],
-          ['sweep', sweep],
+      : /** @type {[string, StepFn][]} */ ([
+          ['reconcile', engine.reconcile],
+          ['watch', engine.watch],
+          ['sweep', engine.sweep],
         ])),
-    ...(ctx.mode === 'running' ? /** @type {[string, any][]} */ ([['schedule', schedule]]) : []),
+    ...(ctx.mode === 'running' ? /** @type {[string, StepFn][]} */ ([['schedule', schedule]]) : []),
     ...(paused ? [] : /** @type {[string, any][]} */ ([['release', release]])),
   ]
   for (const [name, fn] of steps) await runStep(deps, ctx, name, () => fn(deps, ctx))
@@ -83,6 +94,12 @@ export async function tick(deps) {
   if (deps.heartbeat) await runStep(deps, ctx, 'heartbeat', async () => deps.heartbeat?.(state))
   return state
 }
+
+/** @type {Engine} */
+const LEGACY = { reconcile, watch, sweep, scheduleTasks }
+
+/** @param {Deps} deps @returns {Engine} */
+export const engineOf = (deps) => (deps.config.engine === 'graph' ? GRAPH_ENGINE : LEGACY)
 
 /**
  * @param {Deps} deps @param {Ctx} ctx @param {string} name @param {() => Promise<void>} fn
@@ -116,7 +133,7 @@ async function runStep(deps, ctx, name, fn) {
  * @param {Deps} deps @param {T[]} items @param {(item: T) => Promise<void>} fn
  * @param {(item: T) => { repo?: string, issue?: number }} where
  */
-async function each(deps, items, fn, where) {
+export async function each(deps, items, fn, where) {
   for (const item of items) {
     try {
       await fn(item)
@@ -142,30 +159,6 @@ async function read(deps, ctx) {
   if (ctx.readErrors.size === deps.config.repos.length && ctx.readErrors.size)
     throw new Error(`no repository could be read`)
 }
-
-// ---- GitHub writes. Each updates the in-memory issue so later steps in the same tick see it.
-
-/** @param {Deps} deps @param {string} slug @param {Issue} issue @param {{ add: string[], remove: string[] }} change */
-async function setLabels(deps, slug, issue, change) {
-  if (!change.add.length && !change.remove.length) return
-  await deps.github.label(slug, issue.number, change)
-  issue.labels = apply(issue.labels, change)
-}
-
-/** @param {Deps} deps @param {string} slug @param {Issue} issue @param {import('./marker.mjs').Marker} marker */
-async function setMarker(deps, slug, issue, marker) {
-  const maxAttempts = deps.config.phases[marker.phase]?.maxAttempts
-  const id = await deps.github.writeState(
-    slug,
-    issue.number,
-    issue.stateComment?.id ?? null,
-    renderMarker(marker, { maxAttempts }),
-  )
-  issue.stateComment = { id, marker }
-}
-
-/** @param {Issue} issue */
-const markerOf = (issue) => issue.stateComment?.marker ?? newMarker()
 
 /**
  * Into the Human Queue with a reason label. The marker is written before the
@@ -307,28 +300,13 @@ export async function finish(deps, ctx, w, snap) {
 
 // ---- Watch (no agent)
 
-/** @param {import('./github.mjs').PullRequest} pr */
-function failureSummary(pr) {
-  const lines = pr.failing.map(
-    (f) => `${f.name}${f.url ? ` (${f.url})` : ''}${f.summary ? `\n  ${f.summary.replace(/\n/g, '\n  ')}` : ''}`,
-  )
-  return `CI red on PR #${pr.number} at ${(pr.headSha ?? '').slice(0, 7)}:\n${lines.join('\n') || '(no failing check reported)'}`
-}
-
 /** @param {Deps} deps @param {Ctx} ctx */
 async function watch(deps, ctx) {
   for (const [slug, snap] of ctx.snaps) {
     const deleted = new Set()
-    /** @type {[import('./github.mjs').PullRequest, Issue][]} */
-    const pairs = []
-    for (const pr of snap.prs)
-      for (const n of pr.closes) {
-        const issue = snap.issues.get(n)
-        if (issue?.stateComment) pairs.push([pr, issue])
-      }
     await each(
       deps,
-      pairs,
+      watchPairs(snap),
       async ([pr, issue]) => {
         if (ctx.touched.has(key(slug, issue.number))) return
         const m = markerOf(issue)
@@ -352,7 +330,7 @@ async function watch(deps, ctx) {
           return
         }
         if (pr.state !== 'OPEN' || issue.state !== 'OPEN') return
-        if (queueOf(issue.labels) || issue.labels.includes(RUNNING) || deps.store.worker(slug, issue.number)) return
+        if (!watched(deps, slug, issue)) return
         if ((pr.checks === 'FAILURE' || pr.checks === 'ERROR') && pr.headSha !== m.failedSha)
           return requeue(deps, ctx, slug, issue, {
             reason: failureSummary(pr),
@@ -381,34 +359,80 @@ async function watch(deps, ctx) {
   }
 }
 
+/**
+ * Watch's work list: every (PR, issue it closes) pair where cambium already owns the issue's state comment.
+ * @param {Snapshot} snap
+ */
+export function watchPairs(snap) {
+  /** @type {[import('./github.mjs').PullRequest, Issue][]} */
+  const pairs = []
+  for (const pr of snap.prs)
+    for (const n of pr.closes) {
+      const issue = snap.issues.get(n)
+      if (issue?.stateComment) pairs.push([pr, issue])
+    }
+  return pairs
+}
+
+/**
+ * Watch acts on an open PR only while its issue is in no queue, holds no lease and has no tracked worker.
+ * @param {Deps} deps @param {string} slug @param {Issue} issue
+ */
+export const watched = (deps, slug, issue) =>
+  !(queueOf(issue.labels) || issue.labels.includes(RUNNING) || deps.store.worker(slug, issue.number))
+
 // ---- Sweep: stale leases (a `running` label on this host with no tracked worker)
 
 /** @param {Deps} deps @param {Ctx} ctx */
 async function sweep(deps, ctx) {
-  for (const [slug, snap] of ctx.snaps) {
-    const stale = [...snap.issues.values()].filter((issue) => {
-      if (issue.state !== 'OPEN' || !issue.labels.includes(RUNNING)) return false
-      if (ctx.touched.has(key(slug, issue.number)) || deps.store.worker(slug, issue.number)) return false
-      const host = issue.stateComment?.marker.host
-      return !host || host === deps.config.host
-    })
+  for (const [slug, snap] of ctx.snaps)
     await each(
       deps,
-      stale,
-      (issue) =>
-        requeue(deps, ctx, slug, issue, {
-          reason: `worker lost: \`running\` on ${deps.config.host} with no live process`,
-          outcome: 'lost',
-        }),
+      staleLeases(deps, ctx, slug, snap),
+      (issue) => requeue(deps, ctx, slug, issue, lostLease(deps)),
       (issue) => ({ repo: slug, issue: issue.number }),
     )
-  }
 }
+
+/**
+ * Open issues labelled `running` on this host (or no host) with no tracked worker, untouched this tick.
+ * @param {Deps} deps @param {Ctx} ctx @param {string} slug @param {Snapshot} snap
+ */
+export function staleLeases(deps, ctx, slug, snap) {
+  return [...snap.issues.values()].filter((issue) => {
+    if (issue.state !== 'OPEN' || !issue.labels.includes(RUNNING)) return false
+    if (ctx.touched.has(key(slug, issue.number)) || deps.store.worker(slug, issue.number)) return false
+    const host = issue.stateComment?.marker.host
+    return !host || host === deps.config.host
+  })
+}
+
+/** @param {Deps} deps */
+export const lostLease = (deps) => ({
+  reason: `worker lost: \`running\` on ${deps.config.host} with no live process`,
+  outcome: 'lost',
+})
 
 // ---- Schedule
 
 /** @param {Deps} deps @param {Ctx} ctx */
-async function schedule(deps, ctx) {
+async function scheduleTasks(deps, ctx) {
+  await each(
+    deps,
+    taskCandidates(deps, ctx),
+    async (c) => {
+      await startTask(deps, ctx, c.slug, c.issue, c.snap)
+    },
+    (c) => ({ repo: c.slug, issue: c.issue.number }),
+  )
+}
+
+/**
+ * The `q:task` issues to start this tick: no `running`, no tracked worker, by priority then age, up to the free
+ * slots counted from live task workers.
+ * @param {Deps} deps @param {Ctx} ctx
+ */
+export function taskCandidates(deps, ctx) {
   const { config, store } = deps
   const free = config.phases.task.cap - store.workers().filter((w) => w.phase === 'task').length
   /** @type {{ slug: string, issue: Issue, snap: Snapshot }[]} */
@@ -424,15 +448,12 @@ async function schedule(deps, ctx) {
         candidates.push({ slug, issue, snap })
   const order = byPriorityThenAge(config.priorityLabels)
   candidates.sort((a, b) => order(a.issue, b.issue))
-  await each(
-    deps,
-    candidates.slice(0, Math.max(0, free)),
-    async (c) => {
-      await startTask(deps, ctx, c.slug, c.issue, c.snap)
-    },
-    (c) => ({ repo: c.slug, issue: c.issue.number }),
-  )
+  return candidates.slice(0, Math.max(0, free))
+}
 
+/** @param {Deps} deps @param {Ctx} ctx */
+async function scheduleDispatch(deps, ctx) {
+  const { config } = deps
   const dispatchCap = config.phases.dispatch.cap
   if (dispatchCap > 0) {
     const dispatch = deps.dispatch ?? dispatchNotBuilt

@@ -238,3 +238,74 @@ export function harness({ issues, prs, config: raw = {}, store } = {}) {
   }
   return { deps, gh, clock, procs, spawner, events, beats, config }
 }
+
+/** Both engines' nodes as the stage the legacy tick names. @type {Record<string, string>} */
+const STAGE_OF = {
+  'start-worker': 'queued',
+  'worker-running': 'running',
+  'ci-running': 'submitted',
+  'merge-queue': 'submitted',
+  'to-human': 'human',
+  'close-out': 'done',
+}
+
+/** The stage a marker is at, whichever engine wrote it. @param {import('../src/marker.mjs').Marker | null | undefined} m */
+export const stageOf = (m) => (m ? STAGE_OF[m.node] : undefined)
+
+/**
+ * `merge-queue` is the legacy tick's `submitted` with `queued: true`, so both compare as `ci-running`.
+ * @param {string | null | undefined} node
+ */
+const sameNode = (node) => (node === 'merge-queue' ? 'ci-running' : node)
+
+/**
+ * A marker's meaning, without what only one engine writes: `stage` (legacy), `graphVersion`, `enteredAt` and
+ * `input` (graph), and the rendered text around it.
+ * @param {string} body
+ */
+export function semanticMarker(body) {
+  const m = /** @type {Record<string, any>} */ (parseMarker(body))
+  const { stage: _stage, graphVersion: _version, enteredAt: _entered, input: _input, ...rest } = m
+  return {
+    ...rest,
+    node: sameNode(rest.node),
+    history: rest.history.map((/** @type {any} */ h) => ({ ...h, node: sameNode(h.node) })),
+  }
+}
+
+/**
+ * What a harness saw, for the differential test: every GitHub call in order (label moves, markers compared
+ * semantically, closes, branch deletions), worker starts with their prompts, kills, worktree teardowns, the
+ * worker rows left, the log, and the heartbeats (without step timings).
+ * @param {ReturnType<typeof harness>} h
+ */
+export function trace(h) {
+  /** @type {unknown[]} */
+  let workers
+  try {
+    workers = h.deps.store.workers()
+  } catch {
+    workers = ['(store closed)']
+  }
+  return {
+    calls: h.gh.calls.map((c) =>
+      c.op === 'writeState'
+        ? { op: c.op, issue: c.args[1], comment: c.args[2], marker: semanticMarker(c.args[3]) }
+        : { op: c.op, args: c.args },
+    ),
+    starts: h.spawner.started.map(({ issue, attempt, branch, phase, maxTurns, foreground, prompt }) => ({
+      issue,
+      attempt,
+      branch,
+      phase,
+      maxTurns,
+      foreground,
+      prompt,
+    })),
+    killed: [...h.procs.killed],
+    cleaned: [...h.spawner.cleaned],
+    workers,
+    events: h.events.map((e) => ({ ...e })),
+    beats: h.beats.map((b) => ({ ...b, steps: b.steps.map(({ ms: _ms, ...s }) => s) })),
+  }
+}
