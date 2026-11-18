@@ -46,8 +46,9 @@ import { DISPATCH_NOT_BUILT, dispatchNotBuilt } from './phases/dispatch.mjs'
 
 /**
  * @typedef {(deps: Deps, ctx: Ctx) => Promise<void>} StepFn
- * @typedef {{ reconcile: StepFn, watch: StepFn, sweep: StepFn, scheduleTasks: StepFn }} Engine
- *   The Task-phase steps. `config.engine` picks the legacy stage tick (this file) or the `task` graph
+ * @typedef {{ reconcile: StepFn, watch: StepFn, sweep: StepFn, scheduleTasks: StepFn, scheduleDispatch?: StepFn }} Engine
+ *   The Task-phase steps (the graph engine also folds the Dispatch phase into reconcile and sweep, and brings its
+ *   own `scheduleDispatch`; without one, the dispatch stub runs). `config.engine` picks the legacy stage tick (this file) or the `task` graph
  *   (graph-engine.mjs); Read, dispatch, Release and Heartbeat are shared.
  */
 
@@ -74,7 +75,7 @@ export async function tick(deps) {
   /** @type {StepFn} */
   const schedule = async (d, c) => {
     await engine.scheduleTasks(d, c)
-    await scheduleDispatch(d, c)
+    await (engine.scheduleDispatch ?? scheduleDispatch)(d, c)
   }
   /** @type {[string, StepFn][]} */
   const steps = [

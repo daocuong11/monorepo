@@ -32,7 +32,14 @@ ${
 }${marker.lastFailure ? `\nWhy the last attempt failed:\n\`\`\`\n${marker.lastFailure}\n\`\`\`\n` : ''}${history ? `\nHistory of this issue:\n${history}\n` : ''}
 --- Issue #${issue.number}: ${issue.title} (${issue.url})
 ${issue.body}
-${agentsMd ? `\n--- AGENTS.md\n${agentsMd}` : ''}`
+${triageSection(marker.triage)}${agentsMd ? `\n--- AGENTS.md\n${agentsMd}` : ''}`
+}
+
+/** What triage added (dispatch graph), when it added anything. @param {import('../marker.mjs').Marker['triage']} t */
+function triageSection(t) {
+  if (!t || (!t.title && !t.acceptance?.length)) return ''
+  const checks = (t.acceptance ?? []).map((a) => `- [ ] ${a}`).join('\n')
+  return `\n--- From triage (cambium's dispatch, also posted on the issue)\n${t.title ? `Task: ${t.title}\n` : ''}${checks ? `Acceptance checks:\n${checks}\n` : ''}`
 }
 
 /**

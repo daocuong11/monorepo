@@ -41,7 +41,9 @@
  *   queued?: boolean,
  *   failedSha?: string | null,
  *   lastFailure?: string | null,
+ *   triage?: { title?: string, acceptance?: string[] } | null,
  * }} Marker
+ *   `triage`: what the dispatch graph's triage added when it handed the issue to `q:task`; the task prompt shows it.
  * @typedef {{ graph: string, entryNode: string, nodes?: Iterable<string> }} QueueOwner
  */
 

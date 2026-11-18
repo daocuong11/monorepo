@@ -11,6 +11,7 @@ export const WHY = /** @type {const} */ ({
   budget: 'why:budget',
   reject: 'why:reject',
   approve: 'why:approve',
+  triage: 'why:triage',
 })
 
 /** @param {string[]} labels */

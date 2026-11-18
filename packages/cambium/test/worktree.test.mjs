@@ -195,6 +195,50 @@ test('lesson #4382: a worker is a plain detached child — own worktree, own pro
   ])
 })
 
+test('a read-only (triage) worker: a detached checkout, no install, no Edit/Write; removed outright', async () => {
+  const repoPath = tmp()
+  const config = resolveConfig({
+    repos: [{ slug: 'o/r', path: repoPath }],
+    paths: { home: tmp() },
+    worker: { fetch: false },
+  })
+  const { spawner, calls, spawned } = spawnerWith({ config, status: 'local only: would be kept' })
+  const started = await spawner.start(
+    startSpec(config, { branch: 'cambium/triage-5', phase: 'dispatch', readOnly: true }),
+  )
+  const wt = join(repoPath, '.claude', 'worktrees', 'triage-5')
+  assert.equal(started.worktree, wt)
+  assert.deepEqual(calls, [
+    ['git', '-C', repoPath, 'worktree', 'prune'],
+    ['git', '-C', repoPath, 'worktree', 'add', '--detach', wt, 'origin/main'],
+  ])
+  const [{ args, opts }] = spawned
+  assert.deepEqual(args.slice(1), ['--', 'claude', ...workerArgs(config, 99, { readOnly: true })])
+  const tools = args[args.indexOf('--allowedTools') + 1]
+  const denied = args[args.indexOf('--disallowedTools') + 1]
+  assert.equal(tools, 'Read,Glob,Grep,Bash')
+  for (const d of ['Edit', 'Write', 'Bash(graft publish:*)', 'Bash(git push:*)', 'Bash(graft issue label:*)'])
+    assert.ok(denied.split(',').includes(d), `denies ${d}`)
+  assert.equal(opts.env.CAMBIUM_BRANCH, undefined, 'there is no branch')
+  assert.deepEqual(JSON.parse(opts.env.CAMBIUM_PREPARE), {
+    worktree: wt,
+    source: repoPath,
+    install: null,
+    hydrate: { dirs: [], files: [] },
+    prepare: [],
+  })
+  // Teardown ignores graft status: nothing in a read-only checkout is kept.
+  const t = await spawner.cleanup({ repo: config.repos[0], worktree: wt, branch: 'cambium/triage-5', readOnly: true })
+  assert.deepEqual(t, { removed: true, reason: null })
+  assert.deepEqual(calls.slice(2), [['git', '-C', repoPath, 'worktree', 'remove', '--force', wt]])
+  // A leftover from an earlier attempt is removed before the new checkout.
+  await spawner.start(startSpec(config, { branch: 'cambium/triage-5', phase: 'dispatch', readOnly: true, attempt: 2 }))
+  assert.deepEqual(calls.slice(3), [
+    ['git', '-C', repoPath, 'worktree', 'remove', '--force', wt],
+    ['git', '-C', repoPath, 'worktree', 'add', '--detach', wt, 'origin/main'],
+  ])
+})
+
 test('teardown keeps a worktree with local-only work; the retry continues in it', async () => {
   const repoPath = tmp()
   const config = resolveConfig({

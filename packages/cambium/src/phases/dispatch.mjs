@@ -1,5 +1,12 @@
 // @ts-check
 /**
+ * The Dispatch phase's parts: the triage worker's prompt, its typed result and how cambium reads it from the
+ * worker's stream-json log. The `dispatch` graph (graphs/dispatch.mjs) runs them; the legacy engine keeps the
+ * stub below and leaves `q:intake` alone.
+ */
+import { z } from 'zod'
+
+/**
  * @typedef {{ repo: string, intake: import('../github.mjs').Issue[], capacity: number, now: number }} DispatchInput
  * @typedef {(input: DispatchInput) => Promise<{ started: number[] }>} Dispatch
  */
@@ -10,3 +17,141 @@ export async function dispatchNotBuilt() {
 }
 
 export const DISPATCH_NOT_BUILT = 'dispatch phase is not built yet; q:intake issues wait'
+
+/** The verdict a triage worker ends with, as the last JSON block of its final message. */
+export const TriageResult = z
+  .object({
+    verdict: z.enum(['actionable', 'needs-human', 'duplicate']),
+    duplicateOf: z.number().int().positive().optional(),
+    reason: z.string().trim().min(1),
+    title: z.string().trim().min(1).optional(),
+    acceptance: z.array(z.string().trim().min(1)).optional(),
+  })
+  .refine((r) => r.verdict !== 'duplicate' || r.duplicateOf !== undefined, {
+    message: 'a duplicate verdict needs duplicateOf',
+    path: ['duplicateOf'],
+  })
+
+/** @typedef {z.infer<typeof TriageResult>} Triage */
+
+/** @param {z.core.$ZodIssue} i */
+const formatIssue = (i) => (i.path.length ? `${i.path.join('.')}: ${i.message}` : i.message)
+
+/**
+ * The JSON in a final message: its last fenced block, else the whole text, else its outermost `{…}`.
+ * @param {string} text @returns {unknown} throws a SyntaxError-like Error when there is none
+ */
+function jsonIn(text) {
+  const fenced = [...text.matchAll(/```[a-zA-Z]*[ \t]*\n([\s\S]*?)```/g)].map((m) => m[1])
+  const candidates = fenced.length
+    ? [fenced[fenced.length - 1]]
+    : [text, text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)]
+  /** @type {unknown} */
+  let last
+  for (const c of candidates) {
+    try {
+      return JSON.parse(c.trim())
+    } catch (err) {
+      last = err
+    }
+  }
+  throw new Error(
+    `no JSON result in the final message (${/** @type {Error} */ (last)?.message ?? 'empty'}): ${clip(text)}`,
+  )
+}
+
+/** @param {string} s */
+const clip = (s, n = 300) => {
+  const one = s.replace(/\s+/g, ' ').trim()
+  return one.length > n ? `${one.slice(0, n)}…` : one || '(empty)'
+}
+
+/**
+ * The triage verdict from a worker's stdout (`claude -p --output-format stream-json`): the last `result` event's
+ * `result` text, its JSON, validated by {@link TriageResult}. Anything else is an error saying what was wrong.
+ *
+ * @param {string} log the stdout log text
+ * @param {number} issue the triaged issue, which cannot be its own duplicate
+ * @returns {{ ok: true, result: Triage } | { ok: false, error: string }}
+ */
+export function readTriage(log, issue) {
+  /** @type {any} */
+  let result = null
+  for (const line of log.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const e = JSON.parse(line)
+      if (e?.type === 'result') result = e
+    } catch {}
+  }
+  if (!result) return { ok: false, error: 'no result event in the worker log (killed, crashed or truncated)' }
+  if (typeof result.result !== 'string')
+    return { ok: false, error: `the worker ended without a final message (${result.subtype ?? 'no subtype'})` }
+  /** @type {unknown} */
+  let json
+  try {
+    json = jsonIn(result.result)
+  } catch (err) {
+    return { ok: false, error: /** @type {Error} */ (err).message }
+  }
+  const parsed = TriageResult.safeParse(json)
+  if (!parsed.success)
+    return { ok: false, error: `invalid triage result: ${parsed.error.issues.map(formatIssue).join('; ')}` }
+  if (parsed.data.verdict === 'duplicate' && parsed.data.duplicateOf === issue)
+    return { ok: false, error: `invalid triage result: duplicateOf: #${issue} cannot duplicate itself` }
+  return { ok: true, result: parsed.data }
+}
+
+/**
+ * The triage worker's prompt: one issue, one verdict. Adapted from the OpenRig seed's `inbox` and `intent-lead`
+ * roles and its culture (unattended, never ask and wait, CI is the acceptance gate, never `gh`).
+ *
+ * @param {{
+ *   repo: string, baseBranch: string, issue: import('../github.mjs').Issue,
+ *   queued: { number: number, title: string, labels: string[] }[], agentsMd: string | null,
+ * }} input
+ */
+export function triagePrompt({ repo, baseBranch, issue, queued, agentsMd }) {
+  const others = queued
+    .filter((q) => q.number !== issue.number)
+    .map((q) => `- #${q.number} ${q.title} (${q.labels.filter((l) => l.startsWith('q:')).join(', ') || 'no queue'})`)
+    .join('\n')
+  return `You are a triage worker started by cambium, the scheduler, in a read-only checkout of ${repo} at origin/${baseBranch}.
+Nobody is watching this session and nobody will answer a question: never ask one and wait. Where you would ask a human, that is your verdict (needs-human).
+
+Your one job: decide what happens to GitHub issue #${issue.number} (below), which is waiting in the intake queue. You do not do the work. You do not edit files, commit, publish, comment, label or close anything; cambium makes every move on your verdict.
+
+Verdicts:
+- actionable: a worker could do it unattended from what is written (plus what you add), and would know when it is done. It goes to the task queue. When the issue lacks a clear task or checkable acceptance criteria, give \`title\` (an imperative task title) and \`acceptance\` (checks a reviewer can verify; CI green is always required, so do not list only that). cambium posts them on the issue and hands them to the task worker.
+- needs-human: too foggy to ticket; a decision only a human can make (direction, priority, money, access, policy); information you cannot find; or work that is not a code change in this repository. \`reason\` says exactly what the human must decide or supply.
+- duplicate: the same work as another issue, open or closed. \`duplicateOf\` is that issue's number (never #${issue.number}); \`reason\` says why they are the same.
+
+How to look:
+- Read the code here (Read, Glob, Grep) to judge what the change touches and whether it already exists.
+- Read an issue with \`graft issue read <n>\`; search with \`graft api GET '/search/issues?q=repo:${repo}+is:issue+<words>'\`. Never \`gh\`.
+- Be quick: a verdict, not an investigation. When in doubt between actionable and needs-human, choose needs-human.
+
+End your final message with exactly one fenced JSON block, and nothing after it:
+\`\`\`json
+{ "verdict": "actionable" | "needs-human" | "duplicate", "duplicateOf": 123, "reason": "…", "title": "…", "acceptance": ["…"] }
+\`\`\`
+\`duplicateOf\` only for duplicate; \`title\` and \`acceptance\` only for actionable, and optional. A missing or malformed block sends the issue to a human with the error.
+${others ? `\nOther issues in cambium's queues right now:\n${others}\n` : ''}
+--- Issue #${issue.number}: ${issue.title} (${issue.url})
+${issue.body}
+${agentsMd ? `\n--- AGENTS.md (the contract a task worker will follow)\n${agentsMd}` : ''}`
+}
+
+/**
+ * The comment triage leaves on an actionable issue.
+ * @param {{ reason: string, title?: string, acceptance?: string[] }} t
+ */
+export function triageComment({ reason, title, acceptance }) {
+  return [
+    `**Triage: actionable.** ${reason}`,
+    ...(title ? ['', `**Task:** ${title}`] : []),
+    ...(acceptance?.length ? ['', '**Acceptance checks**', ...acceptance.map((a) => `- [ ] ${a}`)] : []),
+    '',
+    '_Triaged by cambium; the task worker gets these with the issue body._',
+  ].join('\n')
+}

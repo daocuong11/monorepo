@@ -25,7 +25,8 @@ import { QUEUE_LABELS } from './labels.mjs'
  *   read(slug: string): Promise<Snapshot>,
  *   label(slug: string, number: number, change: { add: string[], remove: string[] }): Promise<void>,
  *   writeState(slug: string, number: number, commentId: number | null, body: string): Promise<number>,
- *   close(slug: string, number: number, body: string): Promise<void>,
+ *   close(slug: string, number: number, body: string, opts?: { reason?: 'completed' | 'not_planned' | 'duplicate' }): Promise<void>,
+ *   comment(slug: string, number: number, body: string): Promise<void>,
  *   deleteBranch(slug: string, branch: string): Promise<void>,
  * }} GitHub
  */
@@ -182,8 +183,15 @@ export function graftGitHub({ config, exec: run = exec }) {
       const made = await json(graft(slug, ['issue', 'comment', String(number), '--body-file', '-'], body))
       return made.id
     },
-    async close(slug, number, body) {
-      await graft(slug, ['issue', 'close', String(number), '--body-file', '-'], body)
+    async close(slug, number, body, { reason } = {}) {
+      await graft(
+        slug,
+        ['issue', 'close', String(number), '--body-file', '-', ...(reason ? ['--reason', reason] : [])],
+        body,
+      )
+    },
+    async comment(slug, number, body) {
+      await graft(slug, ['issue', 'comment', String(number), '--body-file', '-'], body)
     },
     async deleteBranch(slug, branch) {
       await graft(slug, ['api', 'DELETE', `/repos/${slug}/git/refs/heads/${branch}`])

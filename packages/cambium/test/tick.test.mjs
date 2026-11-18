@@ -468,10 +468,10 @@ scenario('read failure: a dead worker waits for a readable snapshot instead of g
   assert.equal(stageOf(h.gh.marker(28)), 'submitted')
 })
 
-scenario('release: the daily seam runs once at its time; dispatch: the stub is reached only with a cap', async () => {
+scenario('release: the daily seam runs once at its time', async () => {
   const h = harness({
     issues: [{ number: 30, labels: ['q:intake'] }],
-    config: { release: { enabled: true, time: '00:00' }, phases: { dispatch: { cap: 1 } } },
+    config: { release: { enabled: true, time: '00:00' } },
   })
   /** @type {number[]} */
   const releases = []
@@ -485,8 +485,19 @@ scenario('release: the daily seam runs once at its time; dispatch: the stub is r
   h.clock.advance(24 * 60 * MIN)
   await tick(h.deps)
   assert.equal(releases.length, 2)
+  assert.deepEqual(h.gh.issue(30).labels, ['q:intake'], 'intake is untouched without a dispatch cap')
+})
+
+// Legacy only: the graph engine runs the dispatch graph instead (test/dispatch-graph.test.mjs).
+test('legacy dispatch: the stub is reached only with a cap and leaves q:intake alone', async () => {
+  const h = baseHarness({
+    issues: [{ number: 30, labels: ['q:intake'] }],
+    config: { phases: { dispatch: { cap: 1 } } },
+  })
+  await tick(h.deps)
   assert.ok(h.events.some((e) => /dispatch phase is not built/.test(e.msg)))
   assert.deepEqual(h.gh.issue(30).labels, ['q:intake'], 'intake is untouched')
+  assert.equal(h.spawner.started.length, 0)
 })
 
 scenario('heartbeat: the documented shape', async () => {
