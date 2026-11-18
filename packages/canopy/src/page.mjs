@@ -2,31 +2,36 @@
 
 const CSS = `
 :root{color-scheme:light dark;--bg:#f7f7f5;--panel:#fff;--line:#e4e4e0;--text:#1d1d1b;--muted:#6b6b66;--faint:#9a9a94;
---ok:#2f7d4f;--warn:#a5670a;--err:#b42f2f;--accent:#2f5f9e;--chip:#efefeb;--bar:#dcdcd6}
+--ok:#2f7d4f;--warn:#a5670a;--err:#b42f2f;--accent:#2f5f9e;--chip:#efefeb;--bar:#dcdcd6;
+--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px}
 @media (prefers-color-scheme:dark){:root{--bg:#141413;--panel:#1c1c1a;--line:#2e2e2b;--text:#e6e6e1;--muted:#a0a09a;--faint:#6f6f69;
 --ok:#6cc08b;--warn:#e0a44a;--err:#ec7b7b;--accent:#86aee6;--chip:#262624;--bar:#353532}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
 code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-header{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+header{position:sticky;top:0;z-index:1;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px var(--s4);padding:10px var(--s4);border-bottom:1px solid var(--line);background:var(--panel)}
 header h1{font-size:14px;margin:0;font-weight:600}
-main{padding:12px 16px;display:grid;gap:12px;max-width:1600px}
-section{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px 12px;min-width:0}
-h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 6px;font-weight:600}
+main{padding:var(--s4) var(--s4) var(--s5);display:grid;gap:var(--s4);max-width:1600px}
+section{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:var(--s3) var(--s4);min-width:0}
+section.attn{border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}section.attn>h2 .n{color:var(--warn)}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 var(--s2);font-weight:600}
 h2 .n{color:var(--faint);margin-left:4px}
 .muted{color:var(--muted)}.faint{color:var(--faint)}.ok{color:var(--ok)}.warn{color:var(--warn)}.err{color:var(--err)}
 .pill{display:inline-block;padding:0 7px;border-radius:9px;background:var(--chip);font-size:12px}
 .pill.ok{background:color-mix(in srgb,var(--ok) 16%,transparent)}.pill.warn{background:color-mix(in srgb,var(--warn) 18%,transparent)}
 .pill.err{background:color-mix(in srgb,var(--err) 16%,transparent)}
-.banner{padding:8px 12px;border-radius:6px;border:1px solid var(--line);background:var(--panel)}
+.banner{padding:var(--s2) var(--s3);border-radius:6px;border:1px solid var(--line);background:var(--panel)}
 .banner.err{border-color:color-mix(in srgb,var(--err) 45%,var(--line))}.banner.warn{border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}
-.row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
-.stats{display:flex;flex-wrap:wrap;gap:4px 18px}.stat b{font-size:16px;font-weight:600;margin-right:4px}
-.steps{display:flex;flex-wrap:wrap;gap:4px}
-.cols{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
+.top{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:var(--s4)}
+.detail{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:var(--s4);align-items:start}
+.stats{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s4);margin-top:var(--s3);padding-top:var(--s3);border-top:1px solid var(--line)}.stat b{font-size:16px;font-weight:600;margin-right:var(--s1)}
+.steps{display:flex;flex-wrap:wrap;gap:var(--s1)}.steps+.err{margin-top:var(--s1)}
+.cols{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) minmax(0,1.35fr);gap:var(--s4)}
+.col.prs{border-left:1px solid var(--line);padding-left:var(--s4)}
 .col{min-width:0}.col ul{list-style:none;margin:0;padding:0}
-.col li{padding:5px 0;border-top:1px solid var(--line)}.col li:first-child{border-top:0}
+.col li{padding:6px 0;border-top:1px solid var(--line)}.col li:first-child{border-top:0}
 .t{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .meta{font-size:12px;color:var(--muted);display:flex;flex-wrap:wrap;gap:2px 8px}
 .empty{color:var(--faint);font-size:12px}
@@ -37,8 +42,10 @@ td,th{padding:4px 10px 4px 0;border-top:1px solid var(--line);vertical-align:top
 .events{max-height:320px;overflow:auto}.events div{display:grid;grid-template-columns:62px 40px minmax(0,1fr);gap:8px;padding:2px 0}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--faint);margin-right:5px}
 .dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.err{background:var(--err)}
-@media (max-width:1100px){.cols{grid-template-columns:repeat(3,minmax(0,1fr))}.row{grid-template-columns:1fr}}
-@media (max-width:640px){.cols{grid-template-columns:1fr}}
+@media (max-width:1100px){.cols{grid-template-columns:repeat(4,minmax(0,1fr))}.detail{grid-template-columns:1fr}
+.col.prs{grid-column:1/-1;border-left:0;padding-left:0;border-top:1px solid var(--line);padding-top:var(--s3)}}
+@media (max-width:760px){.cols{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:480px){main{padding:var(--s3) var(--s3) var(--s5);gap:var(--s3)}section{padding:var(--s3)}.cols{grid-template-columns:1fr}}
 `
 
 const JS = `
@@ -103,7 +110,7 @@ function summary(d) {
   const steps = h('div', { class: 'steps' }, d.steps.length ? d.steps.map((st) =>
     h('span', { class: 'pill ' + (st.ok ? 'ok' : 'err'), title: st.error || '' }, st.name, ' ', h('span', { class: 'faint' }, st.ms != null ? st.ms + 'ms' : ''))) : h('span', { class: 'empty' }, 'no steps recorded'))
   const errs = d.steps.filter((st) => !st.ok && st.error).map((st) => h('div', { class: 'err mono' }, st.name + ': ' + st.error))
-  return h('div', { class: 'row' }, section('Counts', null, stats), section('Last tick steps', null, steps, errs))
+  return section('Last tick', null, steps, errs, stats)
 }
 
 function item(i, multi, now) {
@@ -129,13 +136,20 @@ function pr(p, multi, now) {
       h('span', { class: 'faint mono' }, p.branch)))
 }
 
+const isMulti = (gh) => new Set(gh.repos.map((r) => r.slug)).size > 1
+const list = (xs, render, multi, now) => xs.length ? h('ul', {}, xs.map((x) => render(x, multi, now))) : h('div', { class: 'empty' }, 'empty')
+
+function human(s, now) {
+  const xs = s.github.columns.human
+  return h('section', { class: 'col' + (xs.length ? ' attn' : '') }, h('h2', {}, 'Human', h('span', { class: 'n' }, xs.length)), list(xs, item, isMulti(s.github), now))
+}
+
 function queues(s, now) {
-  const gh = s.github, multi = new Set(gh.repos.map((r) => r.slug)).size > 1
-  const col = (title, list, render) => h('div', { class: 'col' }, h('h2', {}, title, h('span', { class: 'n' }, list.length)),
-    list.length ? h('ul', {}, list.map((x) => render(x, multi, now))) : h('div', { class: 'empty' }, 'empty'))
+  const gh = s.github, multi = isMulti(gh)
+  const col = (title, xs, render, cls) => h('div', { class: 'col' + (cls ? ' ' + cls : '') }, h('h2', {}, title, h('span', { class: 'n' }, xs.length)), list(xs, render, multi, now))
   return h('section', {}, h('div', { class: 'cols' },
     col('Intake', gh.columns.intake, item), col('Task', gh.columns.task, item), col('Running', gh.columns.running, item),
-    col('Human', gh.columns.human, item), col('Promote', gh.columns.promote, item), col('Agent PRs', gh.prs, pr)))
+    col('Promote', gh.columns.promote, item), col('Agent PRs', gh.prs, pr, 'prs')))
 }
 
 function workers(d, ageMs) {
@@ -173,9 +187,9 @@ function render(s) {
   const now = Date.parse(s.now) || Date.now()
   const d = s.heartbeat.data
   const body = [...banners(s)]
-  if (d) body.push(summary(d))
+  body.push(h('div', { class: 'top' }, human(s, now), d ? summary(d) : null))
   body.push(queues(s, now))
-  if (d) body.push(h('div', { class: 'row' }, workers(d, s.heartbeat.ageMs), events(d)))
+  if (d) body.push(h('div', { class: 'detail' }, workers(d, s.heartbeat.ageMs), events(d)))
   $('top').replaceChildren(header(s, now))
   $('main').replaceChildren(...body)
   document.title = 'canopy' + (d ? ' · ' + d.mode : '') + (s.heartbeat.stale ? ' · stale' : '')
