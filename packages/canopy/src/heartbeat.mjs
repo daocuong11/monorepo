@@ -54,8 +54,8 @@ export function judge(raw, { path = '', now = Date.now() } = {}) {
 }
 
 function staleMessage(/** @type {number | null} */ ageMs, /** @type {number} */ tickSeconds) {
-  if (ageMs === null) return 'no finished tick recorded'
-  return `last tick finished ${Math.round(ageMs / 1000)}s ago, more than ${STALE_TICKS} ticks of ${tickSeconds}s: is cambium running?`
+  if (ageMs === null) return 'cambium has not finished a tick yet'
+  return `last tick finished ${Math.round(ageMs / 1000)}s ago, past the ${STALE_TICKS} ticks of ${tickSeconds}s allowed. Check that cambium is running.`
 }
 
 const arr = (/** @type {any} */ v) => (Array.isArray(v) ? v : [])

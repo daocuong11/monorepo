@@ -2,7 +2,7 @@
 
 A local, read-only page over [cambium](../cambium)'s heartbeat and the GitHub queues: mode, last tick and its staleness, step results, counts and caps, workers (attempt, elapsed against the wall-clock cap, log paths), recent events, the `q:human` items with their `why:*`, and one swim lane per queue (`q:intake`, `q:task`, `running`, `q:promote`) next to the open `agent/*` PRs and their checks.
 
-The page has three tabs under a header that always shows mode and tick: **Inbox** (`q:human`, what needs you), **Queue** (the swim lanes and agent PRs) and **Loop** (last tick, workers, events). Tab badges carry the inbox count, the in-flight count and a health dot, and the browser tab title is prefixed with the inbox count. The tab is kept in the URL hash (`#inbox`, `#queue`, `#loop`).
+The page has three tabs under a header that always shows mode and tick: **Inbox** (`q:human`, what needs you), **Queue** (the swim lanes and agent PRs) and **Health** (last tick, workers, events). Tab badges carry the inbox count, the queued-issue count and a health dot whose tooltip names the problem, and the browser tab title is prefixed with the inbox count. The tab is kept in the URL hash (`#inbox`, `#queue`, `#health`).
 
 Zero runtime dependencies, Node ≥ 22. GitHub is read through [`graft`](../graft) (`graft graphql`), which must be on `PATH`; canopy holds no credentials and writes nothing.
 
