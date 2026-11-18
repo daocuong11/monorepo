@@ -7,7 +7,7 @@
  */
 import { spawn } from 'node:child_process'
 import { parseMarker } from './marker.mjs'
-import { QUEUE_LABELS } from './labels.mjs'
+import { Q, QUEUE_LABELS } from './labels.mjs'
 
 /**
  * @typedef {{
@@ -20,13 +20,32 @@ import { QUEUE_LABELS } from './labels.mjs'
  *   branchExists: boolean, inMergeQueue: boolean, autoMerge: boolean,
  *   checks: 'SUCCESS' | 'FAILURE' | 'ERROR' | 'PENDING' | 'EXPECTED' | null, failing: FailingCheck[], closes: number[],
  * }} PullRequest
- * @typedef {{ issues: Map<number, Issue>, prs: PullRequest[] }} Snapshot
+ * @typedef {{
+ *   number: number, url: string, title: string, state: 'OPEN' | 'MERGED' | 'CLOSED', createdAt: string,
+ *   head: string, base: string, headSha: string | null, labels: string[], approved: boolean, autoMerge: boolean,
+ *   stateComment: { id: number, marker: import('./marker.mjs').Marker } | null,
+ * }} PromotionPr
+ *   A promotion PR (`from` → `to`, or labelled `q:promote`). Its state comment is a PR (issue) comment, so it
+ *   goes through the same marker read/write path as an issue's. `approved`: `reviewDecision` is APPROVED, or
+ *   (no decision against it) a latest review approves and none requests changes.
+ * @typedef {{
+ *   from: string, to: string, aheadBy: number | null, merged: { number: number, title: string }[],
+ *   prs: PromotionPr[],
+ * }} Release
+ *   The repo's promotion state (when its `release` is on): how far `from` is ahead of `to` (null: `to` does not
+ *   exist), the PRs merged into `from` since `to` (oldest first, from the last 100 commits ahead), and the
+ *   promotion PRs: open ones from `from` to `to` plus any (open, merged or closed) still labelled `q:promote`.
+ * @typedef {{ issues: Map<number, Issue>, prs: PullRequest[], release?: Release | null }} Snapshot
  * @typedef {{
  *   read(slug: string): Promise<Snapshot>,
  *   label(slug: string, number: number, change: { add: string[], remove: string[] }): Promise<void>,
  *   writeState(slug: string, number: number, commentId: number | null, body: string): Promise<number>,
  *   close(slug: string, number: number, body: string): Promise<void>,
  *   deleteBranch(slug: string, branch: string): Promise<void>,
+ *   openPull(slug: string, pr: { head: string, base: string, title: string, body: string }): Promise<{ number: number, url: string }>,
+ *   editPull(slug: string, number: number, change: { title: string, body: string }): Promise<void>,
+ *   closePull(slug: string, number: number, comment: string): Promise<void>,
+ *   mergePull(slug: string, number: number): Promise<void>,
  * }} GitHub
  */
 
@@ -40,16 +59,34 @@ const PR_FIELDS = `number url headRefName state headRefOid isInMergeQueue
     ... on StatusContext { context state targetUrl description }
   } } } } } }`
 
-/** One query per repo per tick: the queued issues and the agent PRs with their checks. */
-export const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $labels: [String!]) {
+/**
+ * One query per repo per tick: the queued issues and the agent PRs with their checks; with `$release`, also the
+ * promotion PRs and how far `$from` is ahead of `$to` (see {@link Release}).
+ */
+export const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $labels: [String!], $release: Boolean!, $from: String!, $to: String!) {
   repository(owner: $owner, name: $name) {
     issues(labels: $labels, states: OPEN, first: 100, orderBy: { field: CREATED_AT, direction: ASC }) { nodes { ...I } }
     open: pullRequests(states: OPEN, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { ${PR_FIELDS} } }
     merged: pullRequests(states: MERGED, first: 30, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { ${PR_FIELDS} } }
+    promoteRef: pullRequests(headRefName: $from, baseRefName: $to, states: OPEN, first: 10) @include(if: $release) { nodes { ...P } }
+    promoteLabelled: pullRequests(labels: ["${Q.promote}"], first: 10, orderBy: { field: UPDATED_AT, direction: DESC }) @include(if: $release) { nodes { ...P } }
+    toRef: ref(qualifiedName: $to) @include(if: $release) {
+      compare(headRef: $from) {
+        aheadBy
+        commits(last: 100) { nodes { associatedPullRequests(first: 3) { nodes { number title baseRefName state } } } }
+      }
+    }
   }
 }
 fragment I on Issue {
   number title url state createdAt body
+  labels(first: 30) { nodes { name } }
+  comments(first: 100) { nodes { databaseId body author { login } } }
+}
+fragment P on PullRequest {
+  number url title state createdAt headRefName baseRefName headRefOid reviewDecision
+  autoMergeRequest { enabledAt }
+  latestReviews(first: 20) { nodes { state } }
   labels(first: 30) { nodes { name } }
   comments(first: 100) { nodes { databaseId body author { login } } }
 }`
@@ -57,22 +94,81 @@ fragment I on Issue {
 const FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'])
 
 /**
+ * The first comment holding a marker (from `botLogin` only, when set). Issues and PRs alike.
+ * @param {any} n an issue or PR node with `comments` @param {string | null} botLogin
+ * @returns {{ id: number, marker: import('./marker.mjs').Marker } | null}
+ */
+function stateCommentOf(n, botLogin) {
+  const comment = (n.comments?.nodes ?? []).find(
+    (/** @type {any} */ c) => parseMarker(c.body) && (!botLogin || c.author?.login === botLogin),
+  )
+  return comment ? { id: comment.databaseId, marker: /** @type {any} */ (parseMarker(comment.body)) } : null
+}
+
+/** @param {any} n @returns {string[]} */
+const labelsOf = (n) => (n.labels?.nodes ?? []).map((/** @type {any} */ l) => l.name)
+
+/**
+ * The `$release` part of the answer → {@link Release}.
+ * @param {any} repo @param {{ from: string, to: string }} branches @param {string | null} botLogin
+ * @returns {Release}
+ */
+function normalizeRelease(repo, { from, to }, botLogin) {
+  /** @type {Map<number, PromotionPr>} */
+  const prs = new Map()
+  for (const p of [...(repo.promoteRef?.nodes ?? []), ...(repo.promoteLabelled?.nodes ?? [])]) {
+    if (!p || prs.has(p.number)) continue
+    const reviews = (p.latestReviews?.nodes ?? []).map((/** @type {any} */ r) => r.state)
+    prs.set(p.number, {
+      number: p.number,
+      url: p.url ?? '',
+      title: p.title ?? '',
+      state: p.state,
+      createdAt: p.createdAt,
+      head: p.headRefName,
+      base: p.baseRefName,
+      headSha: p.headRefOid ?? null,
+      labels: labelsOf(p),
+      approved:
+        p.reviewDecision === 'APPROVED' ||
+        (p.reviewDecision !== 'CHANGES_REQUESTED' &&
+          reviews.includes('APPROVED') &&
+          !reviews.includes('CHANGES_REQUESTED')),
+      autoMerge: Boolean(p.autoMergeRequest),
+      stateComment: stateCommentOf(p, botLogin),
+    })
+  }
+  const compare = repo.toRef?.compare ?? null
+  /** @type {Map<number, { number: number, title: string }>} */
+  const merged = new Map()
+  for (const c of compare?.commits?.nodes ?? [])
+    for (const p of c?.associatedPullRequests?.nodes ?? [])
+      if (p.baseRefName === from && p.state === 'MERGED' && !merged.has(p.number))
+        merged.set(p.number, { number: p.number, title: p.title ?? '' })
+  return {
+    from,
+    to,
+    aheadBy: compare ? (compare.aheadBy ?? 0) : null,
+    merged: [...merged.values()],
+    prs: [...prs.values()],
+  }
+}
+
+/**
  * GraphQL `data` → {@link Snapshot}. Only `agent/*` PRs are kept.
  *
  * @param {any} data
- * @param {{ botLogin?: string | null }} [opts] when set, only that login's markers count
+ * @param {{ botLogin?: string | null, release?: { from: string, to: string } | null }} [opts]
+ *   `botLogin`: when set, only that login's markers count. `release`: the branches the query asked about.
  * @returns {Snapshot}
  */
-export function normalize(data, { botLogin = null } = {}) {
+export function normalize(data, { botLogin = null, release = null } = {}) {
   const repo = (data?.data ?? data)?.repository
   if (!repo) throw new Error('snapshot: no repository in the answer')
   /** @type {Map<number, Issue>} */
   const issues = new Map()
   const addIssue = (/** @type {any} */ n) => {
     if (!issues.has(n.number)) {
-      const comment = (n.comments?.nodes ?? []).find(
-        (/** @type {any} */ c) => parseMarker(c.body) && (!botLogin || c.author?.login === botLogin),
-      )
       issues.set(n.number, {
         number: n.number,
         title: n.title ?? '',
@@ -80,10 +176,8 @@ export function normalize(data, { botLogin = null } = {}) {
         state: n.state,
         createdAt: n.createdAt,
         body: n.body ?? '',
-        labels: (n.labels?.nodes ?? []).map((/** @type {any} */ l) => l.name),
-        stateComment: comment
-          ? { id: comment.databaseId, marker: /** @type {any} */ (parseMarker(comment.body)) }
-          : null,
+        labels: labelsOf(n),
+        stateComment: stateCommentOf(n, botLogin),
       })
     }
     return n.number
@@ -115,7 +209,7 @@ export function normalize(data, { botLogin = null } = {}) {
       closes: (p.closingIssuesReferences?.nodes ?? []).map(addIssue),
     })
   }
-  return { issues, prs }
+  return { issues, prs, ...(release ? { release: normalizeRelease(repo, release, botLogin) } : {}) }
 }
 
 /**
@@ -159,9 +253,12 @@ export function graftGitHub({ config, exec: run = exec }) {
   return {
     async read(slug) {
       const [owner, name] = slug.split('/')
-      const vars = JSON.stringify({ owner, name, labels: QUEUE_LABELS })
+      const r = config.repos.find((x) => x.slug === slug)?.release
+      const release = r?.enabled && r.from !== r.to ? { from: r.from, to: r.to } : null
+      const branches = release ?? { from: '', to: '' }
+      const vars = JSON.stringify({ owner, name, labels: QUEUE_LABELS, release: Boolean(release), ...branches })
       const data = await json(graft(slug, ['graphql', SNAPSHOT_QUERY, '--vars', vars]))
-      return normalize(data, { botLogin: config.graft.botLogin })
+      return normalize(data, { botLogin: config.graft.botLogin, release })
     },
     async label(slug, number, { add, remove }) {
       if (!add.length && !remove.length) return
@@ -187,6 +284,22 @@ export function graftGitHub({ config, exec: run = exec }) {
     },
     async deleteBranch(slug, branch) {
       await graft(slug, ['api', 'DELETE', `/repos/${slug}/git/refs/heads/${branch}`])
+    },
+    async openPull(slug, { head, base, title, body }) {
+      const path = `/repos/${slug}/pulls`
+      const made = await json(graft(slug, ['api', 'POST', path, '--body', JSON.stringify({ head, base, title, body })]))
+      return { number: made.number, url: made.html_url }
+    },
+    async editPull(slug, number, { title, body }) {
+      await graft(slug, ['api', 'PATCH', `/repos/${slug}/pulls/${number}`, '--body', JSON.stringify({ title, body })])
+    },
+    async closePull(slug, number, comment) {
+      await graft(slug, ['issue', 'comment', String(number), '--body-file', '-'], comment)
+      await graft(slug, ['api', 'PATCH', `/repos/${slug}/pulls/${number}`, '--body', '{"state":"closed"}'])
+    },
+    // Through graft's merge policy, as an agent's merge would: auto-merge, or a merge now when the PR is clean.
+    async mergePull(slug, number) {
+      await graft(slug, ['pr', 'merge', String(number), '--auto'])
     },
   }
 }

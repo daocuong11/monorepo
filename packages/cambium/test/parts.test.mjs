@@ -311,6 +311,9 @@ test('graft client: every call is one graft invocation, as the Clock App, in the
     owner: 'o',
     name: 'r',
     labels: ['q:intake', 'q:task', 'q:human', 'q:promote'],
+    release: false,
+    from: '',
+    to: '',
   })
   assert.deepEqual(argv.slice(1), [
     ['issue', 'label', '5', '--add', 'running', '--remove', 'q:human,why:budget', '--repo', 'o/r'],

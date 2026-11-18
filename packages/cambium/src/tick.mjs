@@ -14,6 +14,7 @@ import { prFor, taskExit, taskPrompt } from './phases/task.mjs'
 import { branchName } from './convention.mjs'
 import { PREPARE_FAILED_LINE } from './prepare.mjs'
 import { releaseDue, releaseNotBuilt } from './phases/release.mjs'
+import { releaseGraphs } from './graphs/release.mjs'
 import { DISPATCH_NOT_BUILT, dispatchNotBuilt } from './phases/dispatch.mjs'
 
 /**
@@ -560,10 +561,12 @@ export async function startTask(deps, ctx, slug, issue, snap, { foreground = fal
   return { ...started, attempt: marker.attempt }
 }
 
-// ---- Release (once a day, no agent): schedule is real, the run is a seam.
+// ---- Release (no agent). Legacy: once a day, the run is a seam. Graph: the release-prepare / release-promote
+// graphs (graphs/release.mjs), per repo.
 
 /** @param {Deps} deps @param {Ctx} ctx */
 async function release(deps, ctx) {
+  if (deps.config.engine === 'graph') return releaseGraphs(deps, ctx)
   const { config, store } = deps
   if (!config.release.enabled) return
   const last = store.get('release.lastRun')

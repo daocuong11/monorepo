@@ -468,8 +468,9 @@ scenario('read failure: a dead worker waits for a readable snapshot instead of g
   assert.equal(stageOf(h.gh.marker(28)), 'submitted')
 })
 
-scenario('release: the daily seam runs once at its time; dispatch: the stub is reached only with a cap', async () => {
-  const h = harness({
+// Legacy only: on the graph engine Release is the release-prepare / release-promote graphs (release-graph.test.mjs).
+test('release (legacy): the daily seam runs once at its time; dispatch: the stub is reached only with a cap', async () => {
+  const h = baseHarness({
     issues: [{ number: 30, labels: ['q:intake'] }],
     config: { release: { enabled: true, time: '00:00' }, phases: { dispatch: { cap: 1 } } },
   })

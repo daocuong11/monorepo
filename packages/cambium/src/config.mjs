@@ -8,7 +8,11 @@ import { homedir, hostname } from 'node:os'
 import { join, resolve } from 'node:path'
 
 /**
- * @typedef {{ slug: string, path: string, baseBranch: string }} Repo
+ * @typedef {{ enabled: boolean, time: string, from: string, to: string }} RepoRelease
+ *   The promotion PR (`engine: "graph"`): `from` (default: the repo's `baseBranch`) is promoted into `to`
+ *   (default `main`) once a day at `time`. `enabled`/`time` default to the top-level `release`. Off when
+ *   `from === to`.
+ * @typedef {{ slug: string, path: string, baseBranch: string, release: RepoRelease }} Repo
  * @typedef {{ cap: number, wallClockMinutes: number, maxTurns: number, maxAttempts: number }} PhaseCaps
  * @typedef {{
  *   host: string,
@@ -82,15 +86,25 @@ export function resolveConfig(raw = {}) {
   /** @type {Config} */
   const config = merge(defaults(home), raw)
   for (const k of /** @type {const} */ (['home', 'db', 'heartbeat', 'logs'])) config.paths[k] = untilde(config.paths[k])
+  if (!/^\d{2}:\d{2}$/.test(config.release.time)) throw new Error(`config: release.time must be HH:MM`)
   config.repos = (config.repos ?? []).map((r) => {
     if (!r?.slug || !/^[^/\s]+\/[^/\s]+$/.test(r.slug))
       throw new Error(`config: repo slug must be owner/name, got ${r?.slug}`)
     if (!r.path) throw new Error(`config: repo ${r.slug} needs "path" (a local clone)`)
-    return { slug: r.slug, path: untilde(r.path), baseBranch: r.baseBranch ?? 'main' }
+    const baseBranch = r.baseBranch ?? 'main'
+    /** @type {RepoRelease} */
+    const release = {
+      enabled: config.release.enabled,
+      time: config.release.time,
+      from: baseBranch,
+      to: 'main',
+      ...r.release,
+    }
+    if (!/^\d{2}:\d{2}$/.test(release.time)) throw new Error(`config: repo ${r.slug} release.time must be HH:MM`)
+    return { slug: r.slug, path: untilde(r.path), baseBranch, release }
   })
   if (config.engine !== 'legacy' && config.engine !== 'graph')
     throw new Error(`config: engine must be "legacy" or "graph", got ${JSON.stringify(config.engine)}`)
-  if (!/^\d{2}:\d{2}$/.test(config.release.time)) throw new Error(`config: release.time must be HH:MM`)
   return config
 }
 
