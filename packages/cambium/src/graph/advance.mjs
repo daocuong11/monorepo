@@ -16,7 +16,7 @@ import { check, END, GraphNodeError } from './define.mjs'
  */
 
 /** @param {unknown} err @param {string} node @param {'run' | 'poll' | 'edge'} phase */
-const asNodeError = (err, node, phase) =>
+export const asNodeError = (err, node, phase) =>
   err instanceof GraphNodeError
     ? err
     : new GraphNodeError(node, phase, String(/** @type {any} */ (err)?.message ?? err), { cause: err })
@@ -94,7 +94,7 @@ export async function advance(graph, at, ctx = {}, opts = {}) {
  * The first edge out of `from` whose `when` matches `output`; a node with no outgoing edges goes to END.
  * @param {import('./define.mjs').Graph} graph @param {string} from @param {unknown} output @param {unknown} subject
  */
-function pick(graph, from, output, subject) {
+export function pick(graph, from, output, subject) {
   let any = false
   for (const [i, [f, to, when, map]] of graph.edges.entries()) {
     if (f !== from) continue

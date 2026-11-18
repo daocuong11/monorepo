@@ -316,6 +316,26 @@ const { transitions, reason, node, input } = await advance(g, { node: 'open-pr',
 - **`toMermaid(graph)`** renders a flowchart: boxes for steps, hexagons for waits, conditional edges labelled with `when`'s function name.
 - **`opts.instrument(visit, step)`** (optional) wraps each node visit: `visit` is `{ node, kind: 'node' | 'wait', input }`; `step(extraCtx?)` runs the node (or poll) and picks the edge, returning the transition, or `null` for a wait that is not ready, and throws on a node error. `extraCtx` is merged into that node's `ctx`. Return what `step` returned. Without it, `advance` behaves exactly as before. [`advanceHooks`](#tracing) is the tracing implementation.
 
+### LangGraph interop
+
+`@oakgreencc/cambium/graph/langgraph` converts graphs to and from [LangGraph](https://docs.langchain.com/oss/javascript/langgraph/overview). LangGraph is not a cambium dependency: install `@langchain/langgraph` and `@langchain/core` yourself (an optional peer dependency). The module does not import LangGraph at load time; `toLangGraph` imports it when called, or takes the module as `{ langgraph }`.
+
+```js
+import { Command, MemorySaver } from '@langchain/langgraph'
+import { fromLangGraph, pollWait, toLangGraph } from '@oakgreencc/cambium/graph/langgraph'
+
+const app = (await toLangGraph(g)).compile({ checkpointer: new MemorySaver() })
+const config = { configurable: { thread_id: 'owner/repo#42' }, context: ctx }
+let out = await app.invoke({ subject, last: { issue: 7 } }, config)
+const waiting = out.__interrupt__?.[0]?.value // { waiting: 'ci', input: { pr: 1 } }
+const polled = await pollWait(g, waiting, ctx)
+if (polled.ready) out = await app.invoke(new Command({ resume: polled.output }), config)
+```
+
+- **`toLangGraph(graph, { langgraph }?)`** resolves to an uncompiled `StateGraph` over `{ subject, last, outputs }`: `last` is the next node's input, `outputs` each node's latest output by name, and `subject` what edges see (it is checkpointed, so keep it serializable). Nodes get the run's `context` (plus `signal`) as `ctx`. Each node is `addNode(name, fn, { input })`, its input schema being the node's own on `last`; `fn` validates, runs, picks the edge and applies its `map`, so `last` is already the next input. A wait calls `interrupt({ waiting, input })`; resume it with the ready poll's `output` (`pollWait` runs the poll; a not-ready poll never reaches LangGraph). Edges are `addConditionalEdges`, trying `when` in order; `END` is LangGraph's `END`. Errors are `GraphNodeError`s.
+- **`fromLangGraph(compiled, { name, input, output })`** is a `defineNode` whose `run` invokes the compiled graph with the validated input as its input state and validates the final state against `output`. An imported graph cannot wait: `interrupt()` inside it fails the node with an error saying so.
+- Not carried over: `entry.queue`, `version` and the task graph's per-node declarations (`queue`, `running`, `enter`, `pollOnEntry`, `recover`), which belong to cambium's runtime; a driver applies them around the interrupts, as the differential test in `test/langgraph.test.mjs` does.
+
 ## Tracing
 
 `src/tracing.mjs` is OpenTelemetry for cambium, configured only by the standard `OTEL_*` variables with `service.name=cambium`. It reuses mycelium's `createTracing` (same packages, same on/off rule): **on only when `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set**, unless `OTEL_SDK_DISABLED=true` or `OTEL_TRACES_EXPORTER=none`; otherwise nothing is imported and every call is a no-op. Metrics follow the same rule for their signal (`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, `OTEL_METRICS_EXPORTER`). With an endpoint but no collector, shutdown can take ~8 s; set `OTEL_EXPORTER_OTLP_TIMEOUT=2000` for the daemon.
