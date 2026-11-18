@@ -15,6 +15,7 @@ import { advance } from './graph/index.mjs'
 import { dispatch, lostLeaseOf, nodeOf } from './graphs/dispatch.mjs'
 import { byPriorityThenAge, Q, RUNNING } from './labels.mjs'
 import { each, staleLeases } from './tick.mjs'
+import { markerTrace, turnTracer } from './tracing.mjs'
 
 /**
  * @typedef {import('./tick.mjs').Deps} Deps
@@ -33,15 +34,23 @@ export const PHASE = 'dispatch'
  */
 export async function driveDispatch(deps, ctx, subject, at) {
   const c = { ...deps, tick: ctx, subject }
+  // A new issue's cambium.issue root continues mycelium's intake span from the body, so these node and wait spans
+  // join the intake trace (tracing.mjs `issueTrace`); the marker carries it on into the task graph.
+  const traced = turnTracer(deps.telemetry, subject, {
+    graph: dispatch.name,
+    graphVersion: dispatch.version,
+    repo: subject.slug,
+    issue: subject.number,
+    issueBody: subject.issue?.body ?? null,
+    ...markerTrace(subject.issue?.stateComment?.marker),
+  })
   /** @type {Transition[]} */
   const transitions = []
   let pos = at
   for (;;) {
-    // TRACING (follow-up): pass `instrument: advanceHooks(telemetry, { graph: 'dispatch', …, issueBody }).instrument`
-    // here; the issue's cambium.issue root continues mycelium's intake span from the body, so these node and wait
-    // spans join the intake trace (tracing.mjs `issueTrace`).
-    const r = await advance(dispatch, pos, c, { maxTransitions: 1 })
+    const r = await advance(dispatch, pos, c, { maxTransitions: 1, instrument: traced.instrument })
     if (r.error) throw r.error.cause instanceof Error ? r.error.cause : r.error
+    traced.sync()
     transitions.push(...r.transitions)
     pos = { node: r.node, input: r.input }
     if (r.reason !== 'limit' || r.node === dispatch.entry.node) break

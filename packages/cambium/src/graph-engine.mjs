@@ -22,6 +22,7 @@ import { iso, key, markerOf, setLabels, setMarker } from './issue-state.mjs'
 import { effectivePosition, graphVersionDecision, withHistory } from './marker.mjs'
 import { each, newCtx, staleLeases, taskCandidates, watched, watchPairs } from './tick.mjs'
 import { move, Q } from './labels.mjs'
+import { markerTrace, turnTracer } from './tracing.mjs'
 import { DISPATCH_STEPS } from './dispatch-engine.mjs'
 
 /**
@@ -45,16 +46,25 @@ const taskCtx = (deps, ctx, subject) => ({ ...deps, tick: ctx, subject })
  */
 export async function drive(deps, ctx, subject, at) {
   const c = taskCtx(deps, ctx, subject)
+  const traced = turnTracer(deps.telemetry, subject, {
+    graph: task.name,
+    graphVersion: task.version,
+    repo: subject.slug,
+    issue: subject.number,
+    issueBody: subject.issue?.body ?? null,
+    ...markerTrace(subject.issue?.stateComment?.marker),
+  })
   /** @type {Transition[]} */
   const transitions = []
   let pos = at
   /** @type {Turn['reason']} */
   let reason
   for (;;) {
-    const r = await advance(task, pos, c, { maxTransitions: 1 })
+    const r = await advance(task, pos, c, { maxTransitions: 1, instrument: traced.instrument })
     if (r.error) throw r.error.cause instanceof Error ? r.error.cause : r.error
     transitions.push(...r.transitions)
     const t = r.transitions[0]
+    traced.sync()
     if (t && t.to !== END) await nodeOf(t.to).enter?.(t.next, c)
     pos = { node: r.node, input: r.input }
     if (r.reason !== 'limit') {

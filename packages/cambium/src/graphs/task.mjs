@@ -15,6 +15,7 @@ import { move, Q, WHY } from '../labels.mjs'
 import { withHistory } from '../marker.mjs'
 import { prFor, taskExit, taskPrompt } from '../phases/task.mjs'
 import { PREPARE_FAILED_LINE } from '../prepare.mjs'
+import { traceWorker } from '../tracing.mjs'
 
 /**
  * @typedef {import('../github.mjs').Issue} Issue
@@ -24,10 +25,11 @@ import { PREPARE_FAILED_LINE } from '../prepare.mjs'
  * @typedef {{
  *   slug: string, number: number, issue?: Issue, snap?: Snapshot,
  *   pr?: PullRequest | null, deleted?: Set<string>, foreground?: boolean, reaped?: Set<number>,
- *   started?: import('../workers.mjs').Started & { attempt: number },
+ *   started?: import('../workers.mjs').Started & { attempt: number }, traceparent?: string | null,
  * }} Subject
  *   One issue's turn. `pr` is the PR Watch is looking at; `deleted` the branches already deleted this tick;
- *   `foreground`/`reaped`/`started` are for `cambium run`.
+ *   `foreground`/`reaped`/`started` are for `cambium run`; `traceparent` is the issue trace while the turn is
+ *   traced (tracing.mjs `turnTracer`), which markers written in the turn take.
  * @typedef {import('../tick.mjs').Deps & {
  *   tick: import('../tick.mjs').Ctx, subject: Subject, traceparent?: string | null,
  * }} TaskCtx
@@ -240,8 +242,8 @@ const startWorker = declare(
           phase: 'task',
           maxTurns: caps.maxTurns,
           foreground,
-          // TRACING (follow-up): the worker's env gets `TRACEPARENT: ctx.traceparent` here (set by tracing.mjs
-          // `advanceHooks` when advance runs with `instrument`), once the Spawner takes an env.
+          // This node's cambium.node span, so Claude Code's own spans (when worker.env turns them on) join the trace.
+          env: ctx.traceparent ? { TRACEPARENT: ctx.traceparent } : undefined,
           buildPrompt: (agentsMd) =>
             taskPrompt({ repo: slug, issue, marker, branch, pr, agentsMd, maxAttempts: caps.maxAttempts }),
         })
@@ -266,6 +268,7 @@ const startWorker = declare(
         host: config.host,
         stdout: s.stdout,
         stderr: s.stderr,
+        traceparent: ctx.traceparent ?? null,
       })
       const where = { repo: slug, issue: issue.number }
       if (s.reused) ctx.log('warn', `continuing in the previous worktree ${s.worktree}: ${s.reused}`, where)
@@ -314,8 +317,7 @@ const workerRunning = declare(
         ctx.log('info', 'worker gone; issue is closed or no longer queued', { repo: w.repo, issue: w.issue })
         return { ready: true, output: { exit: 'gone' } }
       }
-      // TRACING (follow-up): the worker has ended; emit its spans here with tracing.mjs
-      // `workerSpans(<w.stdout log>, { tracer, parent: <start-worker's traceparent> })`.
+      traceWorker(ctx, w)
       const pr = prFor(snap, w)
       const m = markerOf(issue)
       const prepFailed = !w.killedReason && spawner.tail(w.stderr, 15).includes(PREPARE_FAILED_LINE)

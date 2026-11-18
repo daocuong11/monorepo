@@ -28,10 +28,11 @@ import { exec as defaultExec } from './github.mjs'
  * @typedef {{
  *   repo: import('./config.mjs').Repo, convention: Convention, issue: number, attempt: number, branch: string,
  *   phase: string, maxTurns: number, buildPrompt: (agentsMd: string | null) => string, foreground?: boolean,
- *   readOnly?: boolean,
+ *   readOnly?: boolean, env?: Record<string, string>,
  * }} StartSpec
  *   `readOnly`: a disposable checkout for a worker that only reads (triage): detached at the base branch, no
  *   install, hydrate or prepare, no Edit/Write; `branch` only names its directory (see {@link topicOf}).
+ *   `env`: added to the worker's environment after `config.worker.env` (the step's `TRACEPARENT`).
  * @typedef {{
  *   pid: number, worktree: string, stdout: string, stderr: string, prompt: string, exited: Promise<number | null>,
  *   reused: string | null,
@@ -221,6 +222,7 @@ export function processSpawner({
       buildPrompt,
       foreground = false,
       readOnly = false,
+      env: extraEnv = {},
     }) {
       const worktree = join(convention.root, topicOf(branch))
       if (config.worker.fetch) {
@@ -280,6 +282,9 @@ export function processSpawner({
               },
         ),
         ...(config.worker.graftApp ? { GRAFT_APP: config.worker.graftApp } : {}),
+        // config.worker.env (e.g. Claude Code's own telemetry), then this start's (TRACEPARENT).
+        ...config.worker.env,
+        ...extraEnv,
       }
       /** @type {import('node:child_process').ChildProcess} */
       let child

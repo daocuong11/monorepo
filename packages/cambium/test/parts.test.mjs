@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { resolveConfig } from '../src/config.mjs'
 import { graftGitHub, normalize, SNAPSHOT_QUERY } from '../src/github.mjs'
 import { byPriorityThenAge, move } from '../src/labels.mjs'
@@ -387,9 +388,29 @@ test('store: workers and mode survive a reopen', () => {
     stdout: 'o',
     stderr: 'e',
     killedReason: 'cap',
+    traceparent: null,
   })
   again.removeWorker('o/r', 1)
   assert.deepEqual(again.workers(), [])
+})
+
+test('store: a database from before traceparent gains the column; a worker keeps its traceparent', () => {
+  const db = join(tmp(), 'old.db')
+  const old = new DatabaseSync(db)
+  old.exec(`CREATE TABLE workers (
+    repo TEXT NOT NULL, issue INTEGER NOT NULL, phase TEXT NOT NULL, pid INTEGER NOT NULL,
+    worktree TEXT NOT NULL, branch TEXT NOT NULL, attempt INTEGER NOT NULL, started_at INTEGER NOT NULL,
+    host TEXT NOT NULL, stdout TEXT NOT NULL, stderr TEXT NOT NULL, killed_reason TEXT,
+    PRIMARY KEY (repo, issue));
+    INSERT INTO workers VALUES ('o/r', 1, 'task', 10, '/w', 'b', 1, 1, 'mac', 'o', 'e', NULL);`)
+  old.close()
+  const s = openStore(db)
+  assert.equal(s.worker('o/r', 1)?.traceparent, null)
+  const tp = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01'
+  s.addWorker({ .../** @type {any} */ (s.worker('o/r', 1)), issue: 2, traceparent: tp })
+  assert.equal(s.worker('o/r', 2)?.traceparent, tp)
+  s.close()
+  assert.equal(openStore(db).worker('o/r', 2)?.traceparent, tp, 'reopening runs the migration check again')
 })
 
 test('logs: rotation keeps the newest runs per issue; tail reads the end', () => {

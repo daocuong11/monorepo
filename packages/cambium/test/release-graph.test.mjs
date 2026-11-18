@@ -9,6 +9,8 @@ import { toMermaid, validateGraph } from '../src/graph/index.mjs'
 import { lastRunKey, releasePrepare, releasePromote } from '../src/graphs/release.mjs'
 import { newMarker, parseMarker, renderMarker } from '../src/marker.mjs'
 import { tick } from '../src/tick.mjs'
+import { createTelemetry } from '../src/tracing.mjs'
+import { InMemorySpanExporter } from '@opentelemetry/sdk-trace'
 import { harness, SLUG, T0 } from './fakes.mjs'
 
 const HOUR = 60 * 60 * 1000
@@ -223,6 +225,35 @@ test('prepare opens the promotion PR listing the merged PRs, labels it q:promote
   const before = h.ops().length
   await tick(h.deps)
   assert.equal(h.ops().length, before)
+})
+
+test('traced: prepare is a root its PR takes into the marker; the promote turns continue that trace', async () => {
+  const h = promoHarness({ aheadBy: 1, merged: [{ number: 11, title: 'feat: a' }] })
+  const exporter = new InMemorySpanExporter()
+  h.deps.telemetry = await createTelemetry({ env: {}, exporter, now: () => h.clock.now() })
+  await tick(h.deps)
+  const tp = h.marker(500)?.traceparent
+  assert.ok(tp, 'the promotion PR carries the prepare trace')
+  h.pr(500).approved = true
+  h.clock.advance(HOUR)
+  await tick(h.deps)
+  assert.equal(h.marker(500)?.node, 'merging')
+  assert.equal(h.marker(500)?.traceparent, tp)
+  await h.deps.telemetry.flush()
+  const spans = exporter.getFinishedSpans()
+  const trace = tp.split('-')[1]
+  assert.ok(spans.every((s) => s.spanContext().traceId === trace))
+  assert.deepEqual(
+    spans
+      .filter((s) => s.name === 'cambium.node')
+      .map((s) => [s.attributes['cambium.graph'], s.attributes['cambium.node']]),
+    [
+      ['release-prepare', 'cleanup'],
+      ['release-prepare', 'prepare'],
+      ['release-promote', 'merge'],
+    ],
+  )
+  assert.equal(spans.find((s) => s.attributes['cambium.node'] === 'merge')?.attributes['cambium.issue.number'], 500)
 })
 
 test('prepare refreshes a fresh open promotion PR instead of opening another', async () => {
