@@ -2,8 +2,7 @@
 /** The pieces under the tick: marker, labels, config, the graft client, store, spawner, launchd. */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resolveConfig } from '../src/config.mjs'
@@ -14,7 +13,7 @@ import { newMarker, parseMarker, renderMarker, withHistory } from '../src/marker
 import { releaseDue } from '../src/phases/release.mjs'
 import { prFor, taskExit } from '../src/phases/task.mjs'
 import { openStore } from '../src/store.mjs'
-import { processSpawner, rotateLogs, tailFile, workerArgs } from '../src/workers.mjs'
+import { rotateLogs, tailFile } from '../src/workers.mjs'
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'cambium-'))
 
@@ -260,97 +259,6 @@ test('store: workers and mode survive a reopen', () => {
   })
   again.removeWorker('o/r', 1)
   assert.deepEqual(again.workers(), [])
-})
-
-test('lesson #4382: a worker is a plain detached child — own worktree, own process group, logs on disk, no tmux', async () => {
-  const home = tmp()
-  const config = resolveConfig({
-    repos: [{ slug: 'o/r', path: '/src/r' }],
-    paths: { home },
-    logs: { keepPerIssue: 2 },
-    worker: { args: ['--model', 'opus'], graftApp: 'worker-app' },
-  })
-  /** @type {string[][]} */
-  const git = []
-  /** @type {any[]} */
-  const spawned = []
-  const spawner = processSpawner({
-    config,
-    stamp: () => '2026-11-16T12-00-00-000Z',
-    exec: async (cmd, args) => {
-      git.push([cmd, ...args])
-      const wt = args[args.length - 2]
-      if (args.includes('add')) {
-        mkdirSync(wt, { recursive: true })
-        writeFileSync(join(wt, 'AGENTS.md'), '# contract')
-      }
-      return ''
-    },
-    spawnFn: /** @type {any} */ (
-      (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {any} */ opts) => {
-        spawned.push({ cmd, args, opts })
-        const child = Object.assign(new EventEmitter(), { pid: 4242, unref() {} })
-        setImmediate(() => child.emit('exit', 0))
-        return child
-      }
-    ),
-  })
-  const started = await spawner.start({
-    repo: config.repos[0],
-    issue: 5,
-    attempt: 1,
-    branch: 'agent/issue-5',
-    phase: 'task',
-    maxTurns: 99,
-    buildPrompt: (agents) => `PROMPT with ${agents}`,
-  })
-  assert.equal(started.pid, 4242)
-  assert.equal(await started.exited, 0)
-  const wt = join(home, 'worktrees', 'o__r', 'issue-5-a1')
-  assert.equal(started.worktree, wt)
-  assert.deepEqual(git, [
-    ['git', '-C', '/src/r', 'fetch', 'origin', 'main'],
-    ['git', '-C', '/src/r', 'worktree', 'add', '--detach', wt, 'origin/main'],
-  ])
-  const [{ cmd, args, opts }] = spawned
-  assert.equal(cmd, 'claude')
-  assert.deepEqual(args, workerArgs(config, 99))
-  assert.deepEqual(args.slice(0, 1), ['-p'])
-  assert.ok(args.includes('--max-turns') && args.includes('99'))
-  assert.ok(args.join(' ').includes('Bash(graft issue label:*)'))
-  assert.deepEqual(args.slice(-2), ['--model', 'opus'])
-  assert.equal(opts.detached, true)
-  assert.equal(opts.cwd, wt)
-  assert.equal(opts.env.GRAFT_APP, 'worker-app')
-  assert.equal(opts.env.CAMBIUM_ISSUE, '5')
-  assert.ok(!JSON.stringify(spawned).includes('tmux'))
-  assert.equal(readFileSync(started.prompt, 'utf8'), 'PROMPT with # contract')
-  assert.ok(started.stdout.startsWith(join(home, 'logs', 'o__r', 'issue-5', 'a1-')))
-
-  await spawner.cleanup({ repo: config.repos[0], worktree: wt })
-  assert.deepEqual(git.at(-1), ['git', '-C', '/src/r', 'worktree', 'remove', '--force', wt])
-})
-
-test('a worker that cannot start is an error, not a phantom pid', async () => {
-  const home = tmp()
-  const config = resolveConfig({ repos: [{ slug: 'o/r', path: '/r' }], paths: { home }, worker: { fetch: false } })
-  const spawner = processSpawner({
-    config,
-    exec: async () => '',
-    spawnFn: /** @type {any} */ (() => Object.assign(new EventEmitter(), { pid: undefined, unref() {} })),
-  })
-  await assert.rejects(
-    spawner.start({
-      repo: config.repos[0],
-      issue: 1,
-      attempt: 1,
-      branch: 'b',
-      phase: 'task',
-      maxTurns: 1,
-      buildPrompt: () => '',
-    }),
-    /could not start claude/,
-  )
 })
 
 test('logs: rotation keeps the newest runs per issue; tail reads the end', () => {

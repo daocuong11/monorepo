@@ -36,7 +36,7 @@ Every command takes `--config <file>`; the default is `$CAMBIUM_CONFIG`, then `~
 Each step is bounded by `stepTimeoutSeconds`. A step that throws or times out is logged and recorded in the heartbeat, and the tick moves on. Nothing waits on a worker.
 
 1. **Read.** One GraphQL query per repo (`graft graphql`): open issues with any `q:` label, open and recently merged PRs on `agent/*` with their check rollup, merge-queue state and the issues they close.
-2. **Reconcile.** For each tracked worker: alive and under its wall-clock cap → nothing. Over the cap → kill its process group. Gone → exit check (a PR on its branch, or closing its issue, that is open or merged and not still on the commit CI already failed) → `submitted`; otherwise requeue with the stderr tail.
+2. **Reconcile.** For each tracked worker: alive and under its wall-clock cap → nothing. Over the cap → kill its process group. Gone → exit check (a PR on its branch, or closing its issue, that is open or merged and not still on the commit CI already failed) → `submitted`; otherwise requeue with the stderr tail (a failed prepare step requeues as `spawn-failed`). Then the worktree is torn down if `graft status` says GitHub holds everything in it, else kept with a `warn` saying why.
 3. **Watch** (no agent), for agent PRs whose issue is in no queue: merged → close the issue, delete the branch; red → requeue with the failing checks' summaries; left the merge queue without merging → requeue; not merged `mergeQueueMinutes` after submission → `q:human`.
 4. **Sweep.** An issue labelled `running` with this host (or no host) in its marker and no tracked worker → requeue. This is what makes losing the SQLite file cost one requeue.
 5. **Schedule.** Start Task workers for `q:task` issues without `running`, by priority label then age, up to `phases.task.cap` counted from live workers. A task requeued earlier in the same tick can start in that tick.
@@ -60,7 +60,7 @@ Only cambium moves these labels; workers have `graft issue label` and `graft iss
 Each issue cambium touches gets one comment it owns and edits in place. Its first line is a hidden marker, the rest is a human rendering of it:
 
 ```html
-<!-- cambium:state {"v":1,"phase":"task","stage":"queued","attempt":2,"pr":120,"branch":"agent/issue-12","host":null,"start":null,"submittedAt":"…","queued":false,"failedSha":"deadbeef…","lastFailure":"CI red on PR #120 …","history":[{"at":"…","attempt":1,"outcome":"ci-red","reason":"…","pr":120}]} -->
+<!-- cambium:state {"v":1,"phase":"task","stage":"queued","attempt":2,"pr":120,"branch":"agent/12-fix-the-tick","host":null,"start":null,"submittedAt":"…","queued":false,"failedSha":"deadbeef…","lastFailure":"CI red on PR #120 …","history":[{"at":"…","attempt":1,"outcome":"ci-red","reason":"…","pr":120}]} -->
 ```
 
 - `stage`: `queued` | `running` | `submitted` | `human` | `done`.
@@ -76,12 +76,13 @@ Set `graft.botLogin` to the Clock App's login and only markers written by it are
 
 A worker is `claude -p --output-format stream-json --verbose --max-turns <maxTurns> --allowedTools Read,Edit,Write,Glob,Grep,Bash --disallowedTools "Bash(graft issue label:*),Bash(graft issue edit:*),Bash(gh:*)" <worker.args>`:
 
-- in a fresh worktree `<paths.worktrees>/<owner>__<name>/issue-<n>-a<attempt>` (`git fetch origin <base>`, then `git worktree add --detach … origin/<base>`), removed when the worker is reconciled;
+- in its own worktree, by the target repo's [worktree convention](#target-repo-convention);
+- behind the prepare step: `node src/prepare.mjs -- claude …` runs install-fresh, hydrate and the repo's `prepare` commands in the worktree, writing to the worker's stderr log, then becomes the worker. It runs in the detached process so a long install never blocks a tick;
 - detached, leading its own process group (a kill takes its children), stdin from the prompt file;
 - with `CAMBIUM_REPO`, `CAMBIUM_ISSUE`, `CAMBIUM_PHASE`, `CAMBIUM_BRANCH` set, and `GRAFT_APP=<worker.graftApp>` when configured;
 - with its prompt, stdout and stderr at `<paths.logs>/<owner>__<name>/issue-<n>/a<attempt>-<stamp>.{prompt.md,out.log,err.log}`, keeping the newest `logs.keepPerIssue` runs per issue.
 
-The prompt states the four-point contract (task issue, `pnpm verify`, `graft publish agent/issue-<n> … --closes <n>`, `graft ci wait`), the attempt, the existing PR if any (`graft advance` onto it), the last failure, the issue's history, the issue body, and the worktree's `AGENTS.md`.
+The prompt states the four-point contract (task issue, `pnpm verify`, `graft publish <branch> … --closes <n>`, `graft ci wait`), the attempt, the existing PR if any (`graft advance` onto it), the last failure, the issue's history, the issue body, and the worktree's `AGENTS.md`.
 
 ## Configuration
 
@@ -104,8 +105,7 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
     "home": "~/.cambium",
     "db": "~/.cambium/cambium.db",
     "heartbeat": "~/.cambium/state.json",
-    "logs": "~/.cambium/logs",
-    "worktrees": "~/.cambium/worktrees"
+    "logs": "~/.cambium/logs"
   },
   "logs": { "keepPerIssue": 20, "daemonMaxBytes": 10485760 },
   "graft": { "command": "graft", "app": null, "botLogin": null },
@@ -117,6 +117,33 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
 - `graft.app` is the App cambium acts as (`GRAFT_APP` for its own `graft` calls); `worker.graftApp` the one workers act as. Neither leaks into the other.
 - Setting `paths.home` moves every default path under it.
 - `release.time` is host-local `HH:MM`.
+
+### Target repo convention
+
+How a repo's worktrees are made is the repo's call: a `"cambium"` key in its root `package.json`, read from the central checkout (`repos[].path`) at each start. Every field is optional; these are the defaults:
+
+```json
+"cambium": {
+  "worktree": { "root": ".claude/worktrees", "branch": "agent/{issue}-{slug}" },
+  "install": "pnpm install --frozen-lockfile",
+  "hydrate": { "dirs": [], "files": [] },
+  "prepare": []
+}
+```
+
+- **Branch**: `{issue}` (required) and `{slug}`, the issue title in kebab case, at most 40 characters cut at a word. A retry keeps the branch its first attempt chose (it is in the marker), and an existing PR's branch wins over both.
+- **Worktree**: `<repos[].path>/<root>/<topic>`, the topic being the branch less its first segment (`agent/12-fix-the-tick` → `12-fix-the-tick`), so every attempt of an issue uses the same directory. Created with `git fetch origin <baseBranch>`, then `git worktree add --no-track -B <branch> <dir> origin/<baseBranch>`: always from the fetched remote branch, never a local one. Add `<root>` to the repo's `.gitignore`.
+- **Teardown**: once the worker is reconciled, `graft status <branch> -C <dir>` (as `graft.app`) must end with `nothing local that GitHub does not have`; then the worktree and its local branch are removed. Anything else (local commits, uncommitted paths, graft failing) keeps it and logs why.
+- **Retry**: a leftover worktree in the topic directory is removed under the same rule and re-created fresh; one that still holds local-only work is continued in instead (logged as `continuing in the previous worktree`), so nothing is lost.
+- **Prepare**, after the worktree is created and before the worker starts, in order:
+  1. **install-fresh**: when the worktree has a `package.json` and `node_modules/.pnpm/lock.yaml` is not a byte copy of `pnpm-lock.yaml`, run `install` (`sh -c`). `"install": false` skips it.
+  2. **hydrate**: copy the git-ignored `dirs` and `files` from the central checkout into the worktree with a copy-on-write clone (`cp -c` on APFS), falling back to a byte copy; never a link. What the worktree already has is left alone; what the checkout lacks is reported and skipped; a copy that fails is removed and fails the step. `"hydrate": false` disables it.
+  3. **prepare**: each command, `sh -c` in the worktree.
+
+  A failure ends the process with `cambium: prepare failed: …` on stderr; the reconcile requeues it as `spawn-failed` with the stderr tail.
+- Unknown keys, wrong types, paths outside the repo and an unparseable `package.json` fail the start (requeued as `spawn-failed`) with the error.
+
+The key decides which commands run on this host, so list `package.json` as protected (CODEOWNERS) in the target repo, next to its `"graft"` policy.
 
 ## Heartbeat (`state.json`)
 
@@ -167,8 +194,8 @@ Written at the end of every tick to `paths.heartbeat` (default `~/.cambium/state
       "pid": 90210,
       "alive": true,
       "attempt": 2,
-      "branch": "agent/issue-12",
-      "worktree": "/Users/me/.cambium/worktrees/oakgreencc__monorepo/issue-12-a2",
+      "branch": "agent/12-fix-the-tick",
+      "worktree": "/Users/me/OGCC/monorepo/.claude/worktrees/12-fix-the-tick",
       "startedAt": "…",
       "elapsedMs": 1260000,
       "wallClockMs": 3600000,
@@ -181,7 +208,7 @@ Written at the end of every tick to `paths.heartbeat` (default `~/.cambium/state
     {
       "at": "…",
       "level": "info",
-      "msg": "started task worker pid 90210 (attempt 2, agent/issue-12)",
+      "msg": "started task worker pid 90210 (attempt 2, agent/12-fix-the-tick)",
       "repo": "oakgreencc/monorepo",
       "issue": 12
     } // level: "info" | "warn" | "error"; repo/issue optional

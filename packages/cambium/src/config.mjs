@@ -19,7 +19,7 @@ import { join, resolve } from 'node:path'
  *   mergeQueueMinutes: number,
  *   priorityLabels: string[],
  *   release: { enabled: boolean, time: string },
- *   paths: { home: string, db: string, heartbeat: string, logs: string, worktrees: string },
+ *   paths: { home: string, db: string, heartbeat: string, logs: string },
  *   logs: { keepPerIssue: number, daemonMaxBytes: number },
  *   graft: { command: string, app: string | null, botLogin: string | null },
  *   worker: { command: string, args: string[], graftApp: string | null, fetch: boolean },
@@ -47,7 +47,6 @@ export function defaults(home = DEFAULT_HOME) {
       db: join(home, 'cambium.db'),
       heartbeat: join(home, 'state.json'),
       logs: join(home, 'logs'),
-      worktrees: join(home, 'worktrees'),
     },
     logs: { keepPerIssue: 20, daemonMaxBytes: 10 * 1024 * 1024 },
     graft: { command: 'graft', app: null, botLogin: null },
@@ -80,8 +79,7 @@ export function resolveConfig(raw = {}) {
   const home = untilde(raw?.paths?.home ?? DEFAULT_HOME)
   /** @type {Config} */
   const config = merge(defaults(home), raw)
-  for (const k of /** @type {const} */ (['home', 'db', 'heartbeat', 'logs', 'worktrees']))
-    config.paths[k] = untilde(config.paths[k])
+  for (const k of /** @type {const} */ (['home', 'db', 'heartbeat', 'logs'])) config.paths[k] = untilde(config.paths[k])
   config.repos = (config.repos ?? []).map((r) => {
     if (!r?.slug || !/^[^/\s]+\/[^/\s]+$/.test(r.slug))
       throw new Error(`config: repo slug must be owner/name, got ${r?.slug}`)

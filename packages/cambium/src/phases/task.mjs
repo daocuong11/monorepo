@@ -35,9 +35,6 @@ ${issue.body}
 ${agentsMd ? `\n--- AGENTS.md\n${agentsMd}` : ''}`
 }
 
-/** @param {number} issue */
-export const taskBranch = (issue) => `agent/issue-${issue}`
-
 /**
  * @param {import('../github.mjs').Snapshot} snap
  * @param {{ issue: number, branch?: string | null }} w
