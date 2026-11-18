@@ -1,0 +1,21 @@
+{
+  "name": "@oakgreencc/runner-watchdog",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A launchd watchdog that frees a self-hosted GitHub Actions runner from a Runner.Worker wedged spawning a step.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "bin": {
+    "runner-watchdog": "./src/runner-watchdog.mjs"
+  },
+  "scripts": {
+    "lint": "biome check .",
+    "test": "node --test 'test/*.test.mjs'"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "nx": {
+    "name": "runner-watchdog"
+  }
+}

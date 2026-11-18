@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LaunchAgent for `packages/runner-watchdog/src/runner-watchdog.mjs` — once a
+  minute, kills a `Runner.Worker` wedged spawning a step's bash
+  (sektorapp/monorepo#1739), so the one self-hosted runner is freed in ~5-6
+  minutes instead of waiting out `timeout-minutes` + 5. It takes rung 2 of the
+  runbook in `docs/guidelines/running-ci.md` (in sektorapp/monorepo) and never
+  touches the Listener.
+
+  User-domain launchd: no sudo. The script must already exist in the OGCC
+  monorepo checkout at the path in ProgramArguments, or every tick fails with
+  MODULE_NOT_FOUND in the launchd log below.
+
+  Install (once, on the runner Mac, after the checkout carries this file):
+
+    cp ~/OGCC/monorepo/packages/runner-watchdog/launchd/com.oakgreencc.runner-watchdog.plist ~/Library/LaunchAgents/com.oakgreencc.runner-watchdog.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.oakgreencc.runner-watchdog.plist
+
+  Check on it:
+
+    tail -5 ~/SeKtor/actions-runner/runner-watchdog.log           # one line per verdict or signal
+    tail -5 ~/SeKtor/actions-runner/runner-watchdog.launchd.log   # anything that stopped it first
+    launchctl print gui/$(id -u)/com.oakgreencc.runner-watchdog | grep -E 'state|last exit'
+
+  A quiet log is normal: a tick that finds no worker, or a healthy one, writes
+  nothing. `last exit code = 0` in `launchctl print` is the liveness check.
+
+  Remove:
+
+    launchctl bootout gui/$(id -u)/com.oakgreencc.runner-watchdog
+    rm ~/Library/LaunchAgents/com.oakgreencc.runner-watchdog.plist
+
+  Machine-specific paths, the only things to change elsewhere: WorkingDirectory
+  (the OGCC monorepo checkout), FACTORY_RUNNER_DIR (the runner install, which
+  still serves sektorapp/monorepo) and the node binary — `/opt/homebrew/bin/node`,
+  because Homebrew keeps that symlink stable across upgrades where an nvm path
+  breaks on the next `nvm install`.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.oakgreencc.runner-watchdog</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Users/jamesloosli/OGCC/monorepo/packages/runner-watchdog/src/runner-watchdog.mjs</string>
+    <string>--quiet</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/jamesloosli/OGCC/monorepo</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>FACTORY_RUNNER_DIR</key>
+    <string>/Users/jamesloosli/SeKtor/actions-runner</string>
+  </dict>
+
+  <key>StartInterval</key>
+  <integer>60</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- The script keeps its own log at <runner>/runner-watchdog.log; this
+       catches anything that stops it reaching that point, such as a missing node. -->
+  <key>StandardOutPath</key>
+  <string>/Users/jamesloosli/SeKtor/actions-runner/runner-watchdog.launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/jamesloosli/SeKtor/actions-runner/runner-watchdog.launchd.log</string>
+</dict>
+</plist>
