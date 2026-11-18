@@ -1,17 +1,19 @@
 // @ts-check
 
 const CSS = `
-:root{color-scheme:light dark;--bg:#f7f7f5;--panel:#fff;--line:#e4e4e0;--text:#1d1d1b;--muted:#6b6b66;--faint:#9a9a94;
+:root{color-scheme:light dark;--bg:#f7f7f5;--panel:#fff;--line:#e4e4e0;--text:#1d1d1b;--muted:#5f5f5a;--faint:#72726c;
 --ok:#2f7d4f;--warn:#a5670a;--err:#b42f2f;--accent:#2f5f9e;--chip:#efefeb;--bar:#dcdcd6;
 --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px}
-@media (prefers-color-scheme:dark){:root{--bg:#141413;--panel:#1c1c1a;--line:#2e2e2b;--text:#e6e6e1;--muted:#a0a09a;--faint:#6f6f69;
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--panel:#1c1c1a;--line:#2e2e2b;--text:#e6e6e1;--muted:#b0b0aa;--faint:#8a8a84;
 --ok:#6cc08b;--warn:#e0a44a;--err:#ec7b7b;--accent:#86aee6;--chip:#262624;--bar:#353532}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums}
-a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+::selection{background:color-mix(in srgb,var(--accent) 28%,transparent)}
+a{color:var(--accent);text-decoration:none;text-underline-offset:2px}a:hover{text-decoration:underline}
 a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
 code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-header{position:sticky;top:0;z-index:1;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px var(--s4);padding:10px var(--s4);border-bottom:1px solid var(--line);background:var(--panel)}
+#top{position:sticky;top:0;z-index:1}
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px var(--s4);padding:10px var(--s4);border-bottom:1px solid var(--line);background:var(--panel)}
 header h1{font-size:14px;margin:0;font-weight:600}
 main{padding:var(--s4) var(--s4) var(--s5);display:grid;gap:var(--s4);max-width:1600px}
 section{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:var(--s3) var(--s4);min-width:0}
@@ -21,7 +23,7 @@ h2 .n{color:var(--faint);margin-left:4px}
 .muted{color:var(--muted)}.faint{color:var(--faint)}.ok{color:var(--ok)}.warn{color:var(--warn)}.err{color:var(--err)}
 .pill{display:inline-block;padding:0 7px;border-radius:9px;background:var(--chip);font-size:12px}
 .pill.ok{background:color-mix(in srgb,var(--ok) 16%,transparent)}.pill.warn{background:color-mix(in srgb,var(--warn) 18%,transparent)}
-.pill.err{background:color-mix(in srgb,var(--err) 16%,transparent)}
+.pill.err{background:color-mix(in srgb,var(--err) 16%,transparent)}.pill .faint{color:var(--muted)}
 .banner{padding:var(--s2) var(--s3);border-radius:6px;border:1px solid var(--line);background:var(--panel)}
 .banner.err{border-color:color-mix(in srgb,var(--err) 45%,var(--line))}.banner.warn{border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}
 .top{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:var(--s4)}
@@ -39,6 +41,9 @@ table{border-collapse:collapse;width:100%}th{text-align:left;font-weight:500;col
 td,th{padding:4px 10px 4px 0;border-top:1px solid var(--line);vertical-align:top;white-space:nowrap}tr.logs td{border-top:0;padding-top:0;white-space:normal;overflow-wrap:anywhere}.scroll{overflow-x:auto}thead th{border-top:0}
 .bar{display:inline-block;width:80px;height:6px;background:var(--bar);border-radius:3px;vertical-align:middle;overflow:hidden;margin-right:6px}
 .bar i{display:block;height:100%;background:var(--ok)}.bar i.warn{background:var(--warn)}.bar i.err{background:var(--err)}
+.events,.scroll{scrollbar-width:thin;scrollbar-color:var(--bar) transparent}
+.events:focus-visible,.scroll:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+body.down #top,body.down main>:not(#down){opacity:.5;transition:opacity .3s ease-out}
 .events{max-height:320px;overflow:auto}.events div{display:grid;grid-template-columns:62px 40px minmax(0,1fr);gap:8px;padding:2px 0}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--faint);margin-right:5px}
 .dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.err{background:var(--err)}
@@ -80,9 +85,9 @@ function header(s, now) {
     kids.push(h('span', { class: 'muted' }, d.host || '?', d.pid ? ' · pid ' + d.pid : ''))
     kids.push(h('span', { class: hb.stale ? 'warn' : 'muted' }, 'tick ', d.tick.n ?? '–', ' · ', ago(d.tick.finishedAt, now), d.tick.durationMs != null ? ' · took ' + dur(d.tick.durationMs) : ''))
     if (d.tick.nextAt && !hb.stale) {
-    const left = Date.parse(d.tick.nextAt) - now
-    kids.push(h('span', { class: 'faint' }, left > 0 ? 'next in ' + dur(left) : 'next tick due'))
-  }
+      const left = Date.parse(d.tick.nextAt) - now
+      kids.push(h('span', { class: 'faint' }, left > 0 ? 'next in ' + dur(left) : 'next tick due'))
+    }
   }
   const gh = s.github
   kids.push(h('span', { class: 'faint', style: 'margin-left:auto' }, 'GitHub ', gh.fetchedAt ? ago(gh.fetchedAt, now) : '–', s.cacheMs ? ' (cached ' + dur(s.cacheMs) + ')' : ''))
@@ -168,14 +173,14 @@ function workers(d, ageMs) {
       h('td', { class: 'mono' }, w.branch || '–')),
       logs.length ? h('tr', { class: 'logs' }, h('td', { colspan: 6, class: 'mono faint' }, logs.map((l) => h('div', {}, l)))) : null]
   })
-  return section('Workers', d.workers.length, h('div', { class: 'scroll' }, h('table', {},
+  return section('Workers', d.workers.length, h('div', { class: 'scroll', tabindex: 0, 'aria-label': 'Workers table' }, h('table', {},
     h('thead', {}, h('tr', {}, ['issue', 'phase', 'attempt', 'pid', 'elapsed / cap', 'branch'].map((t) => h('th', {}, t)))),
     h('tbody', {}, rows))))
 }
 
 function events(d) {
   const list = d.events.slice(-60).reverse()
-  return section('Recent events', d.events.length, list.length ? h('div', { class: 'events mono' }, list.map((e) => {
+  return section('Recent events', d.events.length, list.length ? h('div', { class: 'events mono', tabindex: 0, 'aria-label': 'Recent events' }, list.map((e) => {
     const t = e.at ? new Date(e.at) : null
     return h('div', {}, h('span', { class: 'faint', title: e.at || '' }, t ? t.toLocaleTimeString([], { hour12: false }) : '–'),
       h('span', { class: e.level === 'error' ? 'err' : e.level === 'warn' ? 'warn' : 'faint' }, e.level || ''),
@@ -190,8 +195,17 @@ function render(s) {
   body.push(h('div', { class: 'top' }, human(s, now), d ? summary(d) : null))
   body.push(queues(s, now))
   if (d) body.push(h('div', { class: 'detail' }, workers(d, s.heartbeat.ageMs), events(d)))
+  const focused = document.activeElement, href = focused && focused.getAttribute && focused.getAttribute('href')
+  const scrolled = [...document.querySelectorAll('.events,.scroll')].map((el) => [el.className, el.scrollTop, el.scrollLeft])
   $('top').replaceChildren(header(s, now))
   $('main').replaceChildren(...body)
+  document.body.classList.remove('down')
+  for (const [cls, top, left] of scrolled) {
+    const el = document.getElementsByClassName(cls)[0]
+    if (el) Object.assign(el, { scrollTop: top, scrollLeft: left })
+  }
+  if (href) [...document.querySelectorAll('a')].find((a) => a.getAttribute('href') === href)?.focus({ preventScroll: true })
+  else if (focused && focused.classList && (focused.classList.contains('events') || focused.classList.contains('scroll'))) document.getElementsByClassName(focused.className)[0]?.focus({ preventScroll: true })
   document.title = 'canopy' + (d ? ' · ' + d.mode : '') + (s.heartbeat.stale ? ' · stale' : '')
 }
 
@@ -205,6 +219,8 @@ async function poll() {
     render(s)
   } catch (err) {
     $('down')?.remove()
+    document.body.classList.add('down')
+    document.title = 'canopy · unreachable'
     $('main').prepend(h('div', { id: 'down', class: 'banner err' },'canopy server unreachable: ' + (err && err.message)))
   }
   setTimeout(poll, pollMs)
