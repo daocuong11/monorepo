@@ -609,7 +609,11 @@ async function release(deps, ctx) {
 function countsOf(snap) {
   const c = { intake: 0, task: 0, human: 0, promote: 0, running: 0, review: 0 }
   for (const issue of snap.issues.values()) {
-    if (issue.state !== 'OPEN') continue
+    if (issue.state !== 'OPEN') {
+      // Closed and merged, waiting for promotion (promotion.mjs).
+      if (issue.labels.includes(Q.promote)) c.promote++
+      continue
+    }
     const q = queueOf(issue.labels)
     if (q === Q.intake) c.intake++
     else if (q === Q.task) c.task++

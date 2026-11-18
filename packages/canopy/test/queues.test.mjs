@@ -21,7 +21,7 @@ test('group: issues into columns, why and priority read, agent PRs only', () => 
   assert.deepEqual(nums(columns.task), [2])
   assert.deepEqual(nums(columns.running), [3])
   assert.deepEqual(nums(columns.human), [4])
-  assert.deepEqual(nums(columns.promote), [5])
+  assert.deepEqual(nums(columns.promote), [5, 11], 'open first, then the closed ones awaiting promotion, once each')
   assert.equal(columns.human[0].why, 'budget')
   assert.equal(columns.task[0].priority, 'high')
   assert.equal(columns.task[0].url, 'https://github.com/oakgreencc/monorepo/issues/2')
@@ -31,6 +31,10 @@ test('group: issues into columns, why and priority read, agent PRs only', () => 
     { checks: 'SUCCESS', q: true, auto: true, closes: [3] },
   )
   assert.deepEqual({ checks: prs[1].checks, draft: prs[1].draft }, { checks: null, draft: true })
+})
+
+test('the query asks for closed q:promote issues', () => {
+  assert.match(QUEUES_QUERY, /awaiting: issues\(labels: \["q:promote"\], states: CLOSED/)
 })
 
 test('group: an open, unqueued issue whose agent PR closed unmerged is stranded, once, newest PR', () => {
