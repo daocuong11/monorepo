@@ -63,9 +63,24 @@ body.down #top,body.down main>:not(#down){opacity:.5;transition:opacity .3s ease
 .events{max-height:320px;overflow:auto}.events div{display:grid;grid-template-columns:62px 40px minmax(0,1fr);gap:8px;padding:2px 0}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--faint);margin-right:5px}
 .dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.err{background:var(--err)}
+a.row-link{color:inherit}a.row-link:hover{text-decoration:none}tr.run:hover td{background:var(--chip)}
+.trace-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s1) var(--s3)}.trace-head .title{font-size:14px;font-weight:600}.trace-head .mono{overflow-wrap:anywhere}
+.wf{margin-top:var(--s3)}
+.wf-axis{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr) 64px;gap:var(--s3);font-size:12px;color:var(--faint);padding-bottom:2px}
+.wf-axis .ticks{display:flex;justify-content:space-between}
+.sp{appearance:none;background:none;border:0;border-top:1px solid var(--line);width:100%;display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr) 64px;gap:var(--s3);align-items:center;padding:3px 0;font:inherit;color:inherit;text-align:left;cursor:pointer}
+.sp:hover{background:var(--chip)}.sp:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:3px}
+.sp .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sp .nm .faint{margin-left:6px}
+.sp .track{position:relative;height:12px;background:color-mix(in srgb,var(--bar) 35%,transparent);border-radius:2px}
+.sp .track i{position:absolute;top:2px;height:8px;border-radius:2px;background:var(--accent);min-width:2px}
+.sp .track i.wait{background:var(--faint)}.sp .track i.err{background:var(--err)}
+.sp .d{text-align:right;color:var(--muted)}
+.attrs{margin:0;padding:var(--s2) 0 var(--s3) var(--s4);display:grid;grid-template-columns:max-content minmax(0,1fr);gap:2px var(--s3);font-size:12px}
+.attrs dt{color:var(--muted)}.attrs dd{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
 @media (max-width:1100px){.cols{grid-template-columns:repeat(4,minmax(0,1fr))}.detail{grid-template-columns:1fr}
 .col.prs{grid-column:1/-1;border-left:0;padding-left:0;border-top:1px solid var(--line);padding-top:var(--s3)}}
-@media (max-width:760px){.cols{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:760px){.cols{grid-template-columns:repeat(2,minmax(0,1fr))}
+.sp,.wf-axis{grid-template-columns:minmax(0,1fr) 56px}.sp .track,.wf-axis .ticks{grid-column:1/-1;order:3}.wf-axis>span:not(.ticks){display:none}}
 @media (max-width:480px){main{padding:var(--s3) var(--s3) var(--s5);gap:var(--s3)}section{padding:var(--s3)}.cols{grid-template-columns:1fr}
 .tabs{padding:0 var(--s3);gap:var(--s4)}}
 `
@@ -94,6 +109,11 @@ const section = (title, n, ...kids) => h('section', {}, h('h2', {}, title, n == 
 const MODE = { running: 'ok', draining: 'warn', paused: 'warn' }
 const CHECK = { SUCCESS: ['ok', 'checks pass'], FAILURE: ['err', 'checks fail'], ERROR: ['err', 'checks errored'], PENDING: ['warn', 'checks running'], EXPECTED: ['warn', 'checks expected'] }
 const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many)
+let traceIdx = {}
+const traceLink = (repo, issue) => {
+  const id = repo && issue ? traceIdx[repo + '#' + issue] : null
+  return id ? h('a', { href: '#traces/' + id, title: 'Open the newest trace for this issue' }, 'trace') : null
+}
 
 function header(s, now) {
   const hb = s.heartbeat, d = hb.data
@@ -147,7 +167,8 @@ function item(i, multi, now) {
       multi ? h('span', {}, i.repo) : null,
       i.why ? h('span', { class: 'warn' }, 'why:' + i.why) : null,
       i.priority ? h('span', {}, 'priority:' + i.priority) : null,
-      h('span', { class: 'faint' }, ago(i.updatedAt || i.createdAt, now))))
+      h('span', { class: 'faint' }, ago(i.updatedAt || i.createdAt, now)),
+      traceLink(i.repo, i.number)))
 }
 
 function pr(p, multi, now) {
@@ -185,7 +206,8 @@ function inbox(s, now) {
         i.why ? h('span', { class: 'why' }, 'why:' + i.why) : h('span', { class: 'faint' }, 'no why: label'),
         i.priority ? h('span', {}, 'priority:' + i.priority) : null,
         multi ? h('span', {}, i.repo) : null,
-        h('span', { class: 'faint', title: i.updatedAt || i.createdAt || '' }, ago(i.updatedAt || i.createdAt, now)))))))
+        h('span', { class: 'faint', title: i.updatedAt || i.createdAt || '' }, ago(i.updatedAt || i.createdAt, now)),
+        traceLink(i.repo, i.number))))))
 }
 
 function queues(s, now) {
@@ -216,7 +238,7 @@ function workers(d, ageMs) {
     const issueUrl = w.repo && w.issue ? 'https://github.com/' + w.repo + '/issues/' + w.issue : null
     const logs = [w.logs.stdout, w.logs.stderr].filter(Boolean)
     return [h('tr', {},
-      h('td', {}, link(issueUrl, (w.repo || '') + '#' + (w.issue ?? '?'))),
+      h('td', {}, link(issueUrl, (w.repo || '') + '#' + (w.issue ?? '?')), traceLink(w.repo, w.issue) ? [' · ', traceLink(w.repo, w.issue)] : null),
       h('td', {}, w.phase || '–'), h('td', {}, w.attempt ?? '–'),
       h('td', {}, h('span', { class: 'dot ' + (w.alive ? 'ok' : 'err') }), w.pid ?? '–', w.killedReason ? h('span', { class: 'err' }, ' killed: ' + w.killedReason) : null),
       h('td', {}, h('span', { class: 'bar' }, h('i', { class: tone, style: 'width:' + Math.round(frac * 100) + '%' })), dur(elapsed), h('span', { class: 'faint' }, ' / ' + dur(w.wallClockMs))),
@@ -238,9 +260,112 @@ function events(d) {
   })) : h('div', { class: 'empty' }, 'no events recorded yet'))
 }
 
-const TABS = ['inbox', 'queue', 'health']
-const tabFromHash = () => (TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'inbox')
-let tab = tabFromHash(), last = null
+const usd = (n) => (n == null ? '–' : '$' + (n < 10 ? n.toFixed(2) : Math.round(n)))
+const runName = (t) => (t.repo && t.issue ? t.repo.split('/')[1] + '#' + t.issue : t.root)
+const runUrl = (t) => (t.repo && t.issue ? 'https://github.com/' + t.repo + '/issues/' + t.issue : null)
+const OUTCOME = { ok: 'ok', merged: 'ok', error: 'err', failed: 'err', stalled: 'warn', budgetSpent: 'warn' }
+const calmBox = (title, ...rest) => h('section', { class: 'calm' }, h('p', {}, h('b', {}, title)), h('p', { class: 'muted' }, ...rest))
+
+function traceFileNote(f) {
+  const bits = []
+  if (f.malformed) bits.push(plural(f.malformed, 'line', 'lines') + " couldn't be parsed and were skipped")
+  if (f.files > 1) bits.push('read from ' + f.files + ' files (the current one and its rotated backups)')
+  return bits.length ? h('div', { class: 'faint', style: 'margin-top:var(--s2)' }, 'Spans ' + bits.join('; ') + '.') : null
+}
+
+function runsView(f, now) {
+  if (f.status !== 'ok') return calmBox(f.status === 'missing' ? 'No traces yet.' : "Can't read the trace file.", f.message)
+  if (!f.traces.length) return calmBox('No workflow runs traced yet.', h('code', {}, f.path), ' has no spans. Runs appear once cambium moves an issue through a graph with tracing on.')
+  const rows = f.traces.map((t) => {
+    const open = (kid) => h('a', { class: 'row-link', href: '#traces/' + t.id }, kid)
+    return h('tr', { class: 'run' },
+      h('td', {}, open([h('span', { class: 'dot ' + (t.errors ? 'err' : 'ok') }), runName(t)])),
+      h('td', {}, t.graph || h('span', { class: 'faint' }, t.services.join(', ') || '–')),
+      h('td', { class: 'mono' }, t.node || '–'),
+      h('td', {}, t.outcome ? h('span', { class: 'pill ' + (OUTCOME[t.outcome] || '') }, t.outcome) : '–'),
+      h('td', { title: new Date(t.start).toISOString() }, ago(new Date(t.start).toISOString(), now)),
+      h('td', {}, dur(t.durationMs)),
+      h('td', {}, t.spans, t.errors ? h('span', { class: 'err' }, ' · ' + t.errors + ' failed') : null),
+      h('td', {}, usd(t.costUsd)))
+  })
+  return h('section', {}, h('h2', {}, 'Workflow runs', h('span', { class: 'n' }, f.total > f.traces.length ? f.traces.length + ' of ' + f.total : f.total)),
+    h('div', { class: 'scroll', tabindex: 0, 'aria-label': 'Workflow runs' }, h('table', {},
+      h('thead', {}, h('tr', {}, ['run', 'graph', 'last node', 'outcome', 'started', 'took', 'spans', 'cost'].map((x) => h('th', {}, x)))),
+      h('tbody', {}, rows))),
+    traceFileNote(f))
+}
+
+function spanDetail(sp) {
+  const a = sp.attrs
+  if (a['cambium.node']) return [a['cambium.node'], a['cambium.edge'] ? '→ ' + a['cambium.edge'] : null, a['cambium.attempt'] != null ? 'attempt ' + a['cambium.attempt'] : null]
+  if (a['claude.tool.name']) return [a['claude.tool.name'], a['claude.tool.command']]
+  if (a['claude.task.description']) return [a['claude.task.description']]
+  if (a['claude.model']) return [a['claude.model'], a['claude.cost_usd'] != null ? usd(a['claude.cost_usd']) : null]
+  if (a['mycelium.source']) return [a['mycelium.source'], a['mycelium.action']]
+  if (a['cambium.graph']) return [a['cambium.graph']]
+  return []
+}
+const showValue = (v) => (typeof v === 'string' ? v : JSON.stringify(v))
+let openSpans = new Set()
+
+function traceView(d) {
+  const t = d.summary, span = Math.max(1, t.end - t.start)
+  const head = h('div', { class: 'trace-head' },
+    h('a', { href: '#traces' }, '← all runs'),
+    h('span', { class: 'title' }, link(runUrl(t), runName(t))),
+    t.graph ? h('span', { class: 'pill' }, t.graph) : null,
+    t.node ? h('span', { class: 'muted' }, 'last at ', h('span', { class: 'mono' }, t.node), t.outcome ? ' · ' + t.outcome : '') : null,
+    h('span', { class: t.errors ? 'err' : 'faint' }, plural(t.spans, 'span', 'spans'), t.errors ? ' · ' + t.errors + ' failed' : ''),
+    h('span', { class: 'faint', title: new Date(t.start).toISOString() }, 'started ', new Date(t.start).toLocaleString(), ' · took ', dur(t.durationMs)),
+    t.costUsd != null ? h('span', { class: 'faint' }, usd(t.costUsd)) : null,
+    h('span', { class: 'faint mono', style: 'margin-left:auto' }, t.id))
+  const axis = h('div', { class: 'wf-axis', 'aria-hidden': 'true' }, h('span', {}, 'span'),
+    h('span', { class: 'ticks' }, [0, 0.25, 0.5, 0.75, 1].map((f) => h('span', {}, f ? '+' + dur(span * f) : '0'))), h('span', { style: 'text-align:right' }, 'took'))
+  const rows = d.spans.map((sp) => {
+    const left = ((sp.start - t.start) / span) * 100, width = ((sp.end - sp.start) / span) * 100
+    const open = openSpans.has(sp.spanId)
+    const detail = spanDetail(sp).filter((x) => x != null && x !== '')
+    const bar = [sp.name === 'cambium.wait' ? 'wait' : '', sp.status === 'error' ? 'err' : ''].join(' ').trim()
+    const row = h('button', { type: 'button', class: 'sp', 'data-span': sp.spanId, 'aria-expanded': String(open),
+        title: sp.name + ' · at +' + dur(sp.start - t.start) + ' · took ' + dur(sp.end - sp.start) },
+      h('span', { class: 'nm', style: 'padding-left:' + sp.depth * 14 + 'px' },
+        sp.status === 'error' ? h('span', { class: 'dot err' }) : null, sp.name, detail.length ? h('span', { class: 'faint' }, detail.join(' · ')) : null),
+      h('span', { class: 'track' }, h('i', { class: bar || null, style: 'left:' + left.toFixed(3) + '%;width:' + width.toFixed(3) + '%' })),
+      h('span', { class: 'd' }, dur(sp.end - sp.start)))
+    if (!open) return row
+    const kv = [['service', sp.service], ['status', sp.status + (sp.statusMessage ? ': ' + sp.statusMessage : '')],
+      ['started', new Date(sp.start).toISOString()], ['span id', sp.spanId], ...Object.entries(sp.attrs)].filter(([, v]) => v != null)
+    for (const e of sp.events) kv.push(['event · ' + e.name, (isFinite(e.at) ? '+' + dur(e.at - sp.start) + ' ' : '') + Object.entries(e.attrs).map(([k, v]) => k + '=' + showValue(v)).join(' ')])
+    return [row, h('dl', { class: 'attrs mono' }, kv.map(([k, v]) => [h('dt', {}, k), h('dd', {}, showValue(v))]))]
+  })
+  return h('section', {}, head, h('div', { class: 'wf' }, axis, rows), traceFileNote(d))
+}
+
+function tracesTab(now) {
+  if (!traceState || traceState.key !== traceKey()) return section('Traces', null, h('div', { class: 'empty' }, 'reading traces…'))
+  if (traceState.error) return h('div', { class: 'banner err' }, h('b', {}, traceSel ? "Can't load this trace: " : "Can't load traces: "), traceState.error,
+    traceSel ? [' · ', h('a', { href: '#traces' }, 'all runs')] : null)
+  return traceSel ? traceView(traceState.data) : runsView(traceState.data, now)
+}
+
+const TABS = ['inbox', 'queue', 'traces', 'health']
+const parseHash = () => {
+  const [t, id] = location.hash.slice(1).split('/')
+  return TABS.includes(t) ? [t, t === 'traces' && /^[0-9a-f]{32}$/.test(id || '') ? id : null] : ['inbox', null]
+}
+let [tab, traceSel] = parseHash(), last = null, traceState = null
+const traceKey = () => (traceSel ? '/api/traces/' + traceSel : '/api/traces')
+async function loadTraces() {
+  if (tab !== 'traces') return
+  const key = traceKey()
+  try {
+    const r = await fetch(key, { cache: 'no-store' })
+    const j = await r.json()
+    traceState = { key, data: r.ok ? j : null, error: r.ok ? null : j.error || 'HTTP ' + r.status }
+  } catch (err) {
+    traceState = { key, data: null, error: (err && err.message) || 'no answer' }
+  }
+}
 
 function tabs(s) {
   const human = s.github.columns.human.length, queued = inFlight(s.github), [tone, why] = healthOf(s)
@@ -252,6 +377,12 @@ function tabs(s) {
   $('d-health').className = 'dot ' + tone
   $('d-health').title = why
   $('tab-health').setAttribute('aria-label', 'Health: ' + why)
+  const tr = s.traces, traced = tr && tr.status === 'ok'
+  const tWhy = traced ? plural(tr.total, 'run', 'runs') + ' traced' + (tr.errored ? ', ' + tr.errored + ' with a failed span' : '') : (tr && tr.message) || 'tracing is off'
+  $('n-traces').textContent = traced ? tr.total : '–'
+  $('n-traces').className = 'count' + (traced && tr.errored ? ' attn' : '')
+  $('tab-traces').title = tWhy
+  $('tab-traces').setAttribute('aria-label', 'Traces: ' + tWhy)
   for (const t of TABS) {
     const b = $('tab-' + t), on = t === tab
     b.setAttribute('aria-selected', on)
@@ -260,13 +391,18 @@ function tabs(s) {
   $('main').setAttribute('aria-labelledby', 'tab-' + tab)
 }
 
-function go(t, focus) {
+async function go(t, focus) {
   if (!TABS.includes(t)) return
   tab = t
+  traceSel = null
   history.replaceState(null, '', '#' + t)
   window.scrollTo(0, 0)
   if (last) render(last)
   if (focus) $('tab-' + t).focus()
+  if (t === 'traces') {
+    await loadTraces()
+    if (last) render(last)
+  }
 }
 
 $('tabs').addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (b) go(b.dataset.tab) })
@@ -277,16 +413,35 @@ $('tabs').addEventListener('keydown', (e) => {
   e.preventDefault()
   go(TABS[(TABS.indexOf(tab) + step + TABS.length) % TABS.length], true)
 })
-$('main').addEventListener('click', (e) => { const b = e.target.closest('[data-go]'); if (b) go(b.dataset.go, true) })
-addEventListener('hashchange', () => { tab = tabFromHash(); if (last) render(last) })
+$('main').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-go]')
+  if (b) return go(b.dataset.go, true)
+  const sp = e.target.closest('[data-span]')
+  if (!sp) return
+  const id = sp.dataset.span
+  if (openSpans.has(id)) openSpans.delete(id)
+  else openSpans.add(id)
+  if (last) render(last)
+  document.querySelector('[data-span="' + id + '"]')?.focus({ preventScroll: true })
+})
+addEventListener('hashchange', async () => {
+  const before = traceSel
+  ;[tab, traceSel] = parseHash()
+  if (traceSel !== before) { openSpans = new Set(); window.scrollTo(0, 0) }
+  if (last) render(last)
+  await loadTraces()
+  if (last) render(last)
+})
 
 function render(s) {
   last = s
+  traceIdx = (s.traces && s.traces.byIssue) || {}
   const now = Date.parse(s.now) || Date.now()
   const d = s.heartbeat.data
   const body = [...banners(s, now)]
   if (tab === 'inbox') body.push(inbox(s, now))
   if (tab === 'queue') body.push(queues(s, now))
+  if (tab === 'traces') body.push(tracesTab(now))
   if (tab === 'health') {
     if (d) body.push(summary(d), h('div', { class: 'detail' }, workers(d, s.heartbeat.ageMs), events(d)))
     else body.push(section('Health', null, h('div', { class: 'empty' }, 'Ticks, workers and events appear once cambium writes a readable heartbeat; see the message above.')))
@@ -314,6 +469,7 @@ async function poll() {
     const s = await r.json()
     if (!r.ok) throw new Error(s.error || r.status)
     pollMs = s.pollMs || pollMs
+    await loadTraces()
     render(s)
   } catch (err) {
     $('down')?.remove()
@@ -341,6 +497,7 @@ export const PAGE = `<!doctype html>
 <nav class="tabs" id="tabs" role="tablist" aria-label="Views">
 <button class="tab" role="tab" type="button" id="tab-inbox" data-tab="inbox" aria-controls="main">Inbox <span class="count" id="n-inbox">–</span></button>
 <button class="tab" role="tab" type="button" id="tab-queue" data-tab="queue" aria-controls="main" tabindex="-1">Queue <span class="count" id="n-queue">–</span></button>
+<button class="tab" role="tab" type="button" id="tab-traces" data-tab="traces" aria-controls="main" tabindex="-1">Traces <span class="count" id="n-traces">–</span></button>
 <button class="tab" role="tab" type="button" id="tab-health" data-tab="health" aria-controls="main" tabindex="-1">Health <span class="dot" id="d-health"></span></button>
 </nav></div>
 <main id="main" role="tabpanel" aria-labelledby="tab-inbox"></main>

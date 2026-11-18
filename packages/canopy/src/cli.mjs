@@ -3,20 +3,22 @@ import { parseArgs } from 'node:util'
 import { resolveSettings } from './config.mjs'
 import { cachedQueues, graftClient, MIN_TTL_MS } from './github.mjs'
 import { createApp, DEFAULT_HOST, DEFAULT_PORT } from './server.mjs'
+import { traceStore } from './traces.mjs'
 
 export const HELP = `canopy — a local read-only page over cambium's heartbeat and the GitHub queues
 
-usage: canopy [--port <n>] [--host <addr>] [--state <file>] [--config <file>] [--repo <owner/name>]... [--cache <seconds>]
+usage: canopy [--port <n>] [--host <addr>] [--state <file>] [--traces <file>] [--config <file>] [--repo <owner/name>]... [--cache <seconds>]
 
   --port <n>         listen port (default ${DEFAULT_PORT})
   --host <addr>      listen address (default ${DEFAULT_HOST}; loopback only unless you say otherwise)
   --state <file>     cambium heartbeat (default: paths.heartbeat from the cambium config, else ~/.cambium/state.json)
+  --traces <file>    OTLP/JSON spans from cambium's collector (default: <paths.home>/otel/traces.jsonl)
   --config <file>    cambium config (default: $CAMBIUM_CONFIG, else ~/.cambium/config.json)
   --repo <o/n>       repository to show queues for; repeatable (default: the config's repos, else the heartbeat's)
   --cache <seconds>  how long a GitHub answer is reused (default and minimum ${MIN_TTL_MS / 1000})
   --graft <cmd>      graft binary (default: graft on PATH)
 
-Reads only. Open http://<host>:<port>/ ; the page polls /api/state.
+Reads only. Open http://<host>:<port>/ ; the page polls /api/state (and /api/traces on the Traces tab).
 `
 
 /**
@@ -44,6 +46,7 @@ export function main(
         port: { type: 'string' },
         host: { type: 'string' },
         state: { type: 'string' },
+        traces: { type: 'string' },
         config: { type: 'string' },
         repo: { type: 'string', multiple: true },
         cache: { type: 'string' },
@@ -72,7 +75,10 @@ export function main(
   }
   let settings
   try {
-    settings = resolveSettings({ state: values.state, config: values.config, repos: values.repo }, { env })
+    settings = resolveSettings(
+      { state: values.state, traces: values.traces, config: values.config, repos: values.repo },
+      { env },
+    )
   } catch (e) {
     err(`canopy: ${/** @type {Error} */ (e).message}\n`)
     return 2
@@ -83,6 +89,13 @@ export function main(
     ttlMs: cacheS * 1000,
   })
   const notes = settings.configError ? [settings.configError] : []
-  const server = createApp({ statePath: settings.statePath, repos: settings.repos, queues, host, notes })
+  const server = createApp({
+    statePath: settings.statePath,
+    repos: settings.repos,
+    queues,
+    host,
+    notes,
+    traces: traceStore({ path: settings.tracesPath }),
+  })
   return { server, host, port }
 }
