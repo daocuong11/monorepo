@@ -26,6 +26,7 @@
   },
   "exports": {
     "./graph": "./src/graph/index.mjs",
+    "./graph/langgraph": "./src/graph/langgraph.mjs",
     "./package.json": "./package.json"
   },
   "files": [
@@ -55,5 +56,17 @@
     "@opentelemetry/sdk-metrics": "^3.1.1",
     "@opentelemetry/sdk-trace": "^3.1.1",
     "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@langchain/core": "^1.4.1",
+    "@langchain/langgraph": "^1.7.5"
+  },
+  "peerDependencies": {
+    "@langchain/langgraph": "^1.7.5"
+  },
+  "peerDependenciesMeta": {
+    "@langchain/langgraph": {
+      "optional": true
+    }
   }
 }
