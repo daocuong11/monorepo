@@ -1,8 +1,8 @@
 # canopy
 
-A local, read-only page over [cambium](../cambium)'s heartbeat and the GitHub queues: mode, last tick and its staleness, step results, counts and caps, workers (attempt, elapsed against the wall-clock cap, log paths), recent events, the `q:human` items with their `why:*`, and one swim lane per queue (`q:intake`, `q:task`, `running`, `q:promote`) next to the open `agent/*` PRs and their checks.
+A local, read-only page over [cambium](../cambium)'s heartbeat and the GitHub queues: mode, last tick and its staleness, step results, counts and caps, workers (attempt, elapsed against the wall-clock cap, log paths), recent events, the `q:human` items with their `why:*`, issues stranded when their agent PR closed unmerged, and one swim lane per queue (`q:intake`, `q:task`, `running`, `q:promote`) next to the open `agent/*` PRs and their checks.
 
-The page has four tabs under a header that always shows mode and tick: **Inbox** (`q:human`, what needs you), **Queue** (the swim lanes and agent PRs), **Traces** (workflow runs, see [Traces](#traces)) and **Health** (last tick, workers, events). Tab badges carry the inbox count, the queued-issue count, the traced-run count (amber when a run has a failed span) and a health dot whose tooltip names the problem, and the browser tab title is prefixed with the inbox count. The tab is kept in the URL hash (`#inbox`, `#queue`, `#traces`, `#traces/<trace id>`, `#health`).
+The page has four tabs under a header that always shows mode and tick: **Inbox** (what needs you: `q:human`, and stranded issues), **Queue** (the swim lanes and agent PRs), **Traces** (workflow runs, see [Traces](#traces)) and **Health** (last tick, workers, events). Tab badges carry the inbox count, the queued-issue count, the traced-run count (amber when a run has a failed span) and a health dot whose tooltip names the problem, and the browser tab title is prefixed with the inbox count. The tab is kept in the URL hash (`#inbox`, `#queue`, `#traces`, `#traces/<trace id>`, `#health`).
 
 ## Traces
 
@@ -10,6 +10,7 @@ The **Traces** tab shows cambium's OpenTelemetry spans (see cambium's README, [T
 
 - **Runs.** One row per trace, newest first: one workflow run of an issue through cambium's graphs (the `cambium.issue` root and every `cambium.node` / `cambium.wait` / `claude.*` span under it, across ticks), or a mycelium intake. Each row shows the issue, graph, the last node to finish and its `cambium.outcome`, start, duration, span and failed-span counts and the summed `claude.cost_usd`.
 - **One run** (`#traces/<id>`): a waterfall of its spans, parents above children; waits are grey, failed spans red. Click a span for its attributes, status and events.
+- **Stranded.** An open issue with no queue label whose `agent/*` PR was closed unmerged (and no open agent PR closes it) has left the Release Queue and cambium won't pick it up again. The Inbox lists it under **PR closed, issue stranded** with the closed PR; it counts toward the inbox badge. Read from the 50 most recently updated closed PRs per repo.
 - **Links.** Inbox and Queue items and the Workers table link to the newest trace for their issue.
 
 Nothing is traced until cambium runs with `OTEL_EXPORTER_OTLP_ENDPOINT` pointing at that collector; until then the tab says so. Files are re-parsed only when one changes size or mtime.

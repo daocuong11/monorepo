@@ -62,7 +62,7 @@ export function cachedQueues({ client, ttlMs = MIN_TTL_MS, now = Date.now }) {
         const error = /** @type {Error} */ (err)?.message ?? String(err)
         value = prev
           ? { ...prev, ok: false, error }
-          : { slug, ok: false, error, fetchedAt: null, columns: emptyColumns(), prs: [] }
+          : { slug, ok: false, error, fetchedAt: null, columns: emptyColumns(), prs: [], stranded: [] }
       }
       entries.set(slug, { at: now(), value })
       return value

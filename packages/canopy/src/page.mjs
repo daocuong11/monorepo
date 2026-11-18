@@ -190,24 +190,39 @@ const list = (xs, render, multi, now) => xs.length ? h('ul', {}, xs.map((x) => r
 const LANES = [['intake', 'Intake', 'q:intake'], ['task', 'Task', 'q:task'], ['running', 'Running', 'running'], ['promote', 'Promote', 'q:promote']]
 const inFlight = (gh) => LANES.reduce((n, [k]) => n + gh.columns[k].length, 0)
 
+const strandedOf = (gh) => gh.stranded || []
+const needsYou = (gh) => gh.columns.human.length + strandedOf(gh).length
+
 function inbox(s, now) {
-  const gh = s.github, xs = gh.columns.human, multi = isMulti(gh)
+  const gh = s.github, xs = gh.columns.human, st = strandedOf(gh), multi = isMulti(gh)
   const failed = gh.repos.filter((r) => !r.ok).map((r) => r.slug)
   const calm = (title, ...rest) => h('section', { class: 'calm' }, h('p', {}, h('b', {}, title)), h('p', { class: 'muted' }, ...rest))
-  if (!xs.length && !gh.repos.length) return calm('No repositories to read.', "Pass --repo owner/name to canopy, or list repos in cambium's config.")
-  if (!xs.length && failed.length) return calm('The inbox may be incomplete.', 'GitHub read failed for ' + failed.join(', ') + '; see the error above.')
-  if (!xs.length) return calm('Nothing needs you.',
+  if (!xs.length && !st.length && !gh.repos.length) return [calm('No repositories to read.', "Pass --repo owner/name to canopy, or list repos in cambium's config.")]
+  if (!xs.length && !st.length && failed.length) return [calm('The inbox may be incomplete.', 'GitHub read failed for ' + failed.join(', ') + '; see the error above.')]
+  if (!xs.length && !st.length) return [calm('Nothing needs you.',
     plural(inFlight(gh), 'issue', 'issues') + ' queued · ' + plural(gh.prs.length, 'agent PR', 'agent PRs') + ' open · ',
-    h('button', { class: 'linkish', type: 'button', 'data-go': 'queue' }, 'see the queue'))
-  return h('section', { class: 'attn' }, h('h2', {}, 'Needs you', h('span', { class: 'n' }, xs.length), h('span', { class: 'lane-label mono' }, 'q:human')),
-    h('ul', { class: 'inbox' }, xs.map((i) => h('li', {},
-      link(i.url, h('span', { class: 'title', title: i.title }, h('span', { class: 'faint' }, '#' + i.number + ' '), i.title)),
+    h('button', { class: 'linkish', type: 'button', 'data-go': 'queue' }, 'see the queue'))]
+  const title = (i) => link(i.url, h('span', { class: 'title', title: i.title }, h('span', { class: 'faint' }, '#' + i.number + ' '), i.title))
+  const human = xs.length ? h('section', { class: 'attn' }, h('h2', {}, 'Needs you', h('span', { class: 'n' }, xs.length), h('span', { class: 'lane-label mono' }, 'q:human')),
+    h('ul', { class: 'inbox' }, xs.map((i) => h('li', {}, title(i),
       h('div', { class: 'meta' },
         i.why ? h('span', { class: 'why' }, 'why:' + i.why) : h('span', { class: 'faint' }, 'no why: label'),
         i.priority ? h('span', {}, 'priority:' + i.priority) : null,
         multi ? h('span', {}, i.repo) : null,
         h('span', { class: 'faint', title: i.updatedAt || i.createdAt || '' }, ago(i.updatedAt || i.createdAt, now)),
-        traceLink(i.repo, i.number))))))
+        traceLink(i.repo, i.number)))))) : null
+  const stranded = st.length ? h('section', { class: 'attn' },
+    h('h2', {}, 'PR closed, issue stranded', h('span', { class: 'n' }, st.length), h('span', { class: 'lane-label' }, "left the release queue unmerged; no queue label, so cambium won't pick it up")),
+    h('ul', { class: 'inbox' }, st.map((i) => h('li', {}, title(i),
+      h('div', { class: 'meta' },
+        h('span', { class: 'why' }, 'PR closed'),
+        link(i.pr.url, '#' + i.pr.number),
+        h('span', { class: 'faint mono' }, i.pr.branch),
+        i.priority ? h('span', {}, 'priority:' + i.priority) : null,
+        multi ? h('span', {}, i.repo) : null,
+        h('span', { class: 'faint', title: i.pr.closedAt || '' }, 'closed ' + ago(i.pr.closedAt, now)),
+        traceLink(i.repo, i.number)))))) : null
+  return [human, stranded].filter(Boolean)
 }
 
 function queues(s, now) {
@@ -368,7 +383,7 @@ async function loadTraces() {
 }
 
 function tabs(s) {
-  const human = s.github.columns.human.length, queued = inFlight(s.github), [tone, why] = healthOf(s)
+  const human = needsYou(s.github), queued = inFlight(s.github), [tone, why] = healthOf(s)
   $('n-inbox').textContent = human
   $('n-inbox').className = 'count' + (human ? ' attn' : '')
   $('tab-inbox').setAttribute('aria-label', 'Inbox: ' + plural(human, 'issue needs', 'issues need') + ' you')
@@ -439,7 +454,7 @@ function render(s) {
   const now = Date.parse(s.now) || Date.now()
   const d = s.heartbeat.data
   const body = [...banners(s, now)]
-  if (tab === 'inbox') body.push(inbox(s, now))
+  if (tab === 'inbox') body.push(...inbox(s, now))
   if (tab === 'queue') body.push(queues(s, now))
   if (tab === 'traces') body.push(tracesTab(now))
   if (tab === 'health') {
@@ -458,7 +473,7 @@ function render(s) {
   }
   if (href) [...document.querySelectorAll('a')].find((a) => a.getAttribute('href') === href)?.focus({ preventScroll: true })
   else if (focused && focused.classList && (focused.classList.contains('events') || focused.classList.contains('scroll'))) document.getElementsByClassName(focused.className)[0]?.focus({ preventScroll: true })
-  const human = s.github.columns.human.length
+  const human = needsYou(s.github)
   document.title = (human ? '(' + human + ') ' : '') + 'canopy' + (d ? ' · ' + d.mode : '') + (s.heartbeat.stale ? ' · stale' : '')
 }
 

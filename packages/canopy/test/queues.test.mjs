@@ -33,6 +33,28 @@ test('group: issues into columns, why and priority read, agent PRs only', () => 
   assert.deepEqual({ checks: prs[1].checks, draft: prs[1].draft }, { checks: null, draft: true })
 })
 
+test('group: an open, unqueued issue whose agent PR closed unmerged is stranded, once, newest PR', () => {
+  const { stranded } = group(graphqlAnswer(), REPO)
+  // 7: stranded (newest PR #30 kept, #31 dropped); 8: closed; 2: requeued (q:task);
+  // 9: an open agent PR (#22) still closes it; 10: not an agent branch.
+  assert.deepEqual(nums(stranded), [7])
+  assert.deepEqual(stranded[0].pr, {
+    number: 30,
+    title: 'closed 30',
+    url: 'https://github.com/oakgreencc/monorepo/pull/30',
+    branch: 'agent/issue-7',
+    closedAt: new Date(T0 - 30 * 60_000).toISOString(),
+  })
+  assert.equal(stranded[0].priority, 'low')
+  assert.equal(stranded[0].url, 'https://github.com/oakgreencc/monorepo/issues/7')
+})
+
+test('group: an answer without closed PRs strands nothing', () => {
+  const a = graphqlAnswer()
+  delete (/** @type {any} */ (a.repository).closed)
+  assert.deepEqual(group(a, REPO).stranded, [])
+})
+
 test('group: accepts { data } and refuses an answer without a repository', () => {
   assert.equal(group({ data: graphqlAnswer() }, REPO).prs.length, 2)
   assert.throws(() => group({ data: null }, REPO), /no repository/)
@@ -105,6 +127,7 @@ test('cache: a failed refresh keeps the last good answer, with the error', async
   const empty = await fresh.get([REPO])
   assert.equal(empty.repos[0].ok, false)
   assert.equal(empty.prs.length, 0)
+  assert.deepEqual(empty.stranded, [])
 })
 
 test('cache: several repos are combined, oldest fetch time reported', async () => {
@@ -116,5 +139,9 @@ test('cache: several repos are combined, oldest fetch time reported', async () =
     [REPO, 'oakgreencc/other'],
   )
   assert.equal(v.prs.length, 4)
+  assert.deepEqual(
+    v.stranded.map((i) => i.repo),
+    [REPO, 'oakgreencc/other'],
+  )
   assert.equal(v.fetchedAt, new Date(T0).toISOString())
 })

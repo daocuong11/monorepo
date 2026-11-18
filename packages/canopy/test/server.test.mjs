@@ -96,6 +96,10 @@ test('GET /api/state: heartbeat and grouped queues', async () => {
       s.github.prs.map((/** @type {any} */ p) => p.number),
       [20, 22],
     )
+    assert.deepEqual(
+      s.github.stranded.map((/** @type {any} */ i) => [i.number, i.pr.number]),
+      [[7, 30]],
+    )
     assert.equal(s.cacheMs, 15_000)
   })
 })
