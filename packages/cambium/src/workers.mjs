@@ -28,7 +28,10 @@ import { exec as defaultExec } from './github.mjs'
  * @typedef {{
  *   repo: import('./config.mjs').Repo, convention: Convention, issue: number, attempt: number, branch: string,
  *   phase: string, maxTurns: number, buildPrompt: (agentsMd: string | null) => string, foreground?: boolean,
+ *   readOnly?: boolean,
  * }} StartSpec
+ *   `readOnly`: a disposable checkout for a worker that only reads (triage): detached at the base branch, no
+ *   install, hydrate or prepare, no Edit/Write; `branch` only names its directory (see {@link topicOf}).
  * @typedef {{
  *   pid: number, worktree: string, stdout: string, stderr: string, prompt: string, exited: Promise<number | null>,
  *   reused: string | null,
@@ -37,8 +40,9 @@ import { exec as defaultExec } from './github.mjs'
  * @typedef {{
  *   convention(repo: import('./config.mjs').Repo): Convention,
  *   start(spec: StartSpec): Promise<Started>,
- *   cleanup(w: { repo: import('./config.mjs').Repo, worktree: string, branch: string }): Promise<Teardown>,
+ *   cleanup(w: { repo: import('./config.mjs').Repo, worktree: string, branch: string, readOnly?: boolean }): Promise<Teardown>,
  *   tail(path: string, lines?: number): string,
+ *   readLog(path: string): string,
  * }} Spawner
  * @typedef {{ alive(pid: number): boolean, kill(pid: number): void }} Procs
  */
@@ -47,8 +51,26 @@ import { exec as defaultExec } from './github.mjs'
 export const WORKER_TOOLS = ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash']
 export const WORKER_DENIED = ['Bash(graft issue label:*)', 'Bash(graft issue edit:*)', 'Bash(gh:*)']
 
-/** @param {import('./config.mjs').Config} config @param {number} maxTurns */
-export const workerArgs = (config, maxTurns) => [
+/** A read-only worker's tools: it reads code and issues; cambium makes every write on its verdict. */
+export const READONLY_TOOLS = ['Read', 'Glob', 'Grep', 'Bash']
+export const READONLY_DENIED = [
+  ...WORKER_DENIED,
+  'Edit',
+  'Write',
+  'NotebookEdit',
+  'Bash(graft publish:*)',
+  'Bash(graft merge:*)',
+  'Bash(graft pr:*)',
+  'Bash(graft issue create:*)',
+  'Bash(graft issue comment:*)',
+  'Bash(graft issue close:*)',
+  'Bash(graft issue assign:*)',
+  'Bash(git commit:*)',
+  'Bash(git push:*)',
+]
+
+/** @param {import('./config.mjs').Config} config @param {number} maxTurns @param {{ readOnly?: boolean }} [opts] */
+export const workerArgs = (config, maxTurns, { readOnly = false } = {}) => [
   '-p',
   '--output-format',
   'stream-json',
@@ -56,9 +78,9 @@ export const workerArgs = (config, maxTurns) => [
   '--max-turns',
   String(maxTurns),
   '--allowedTools',
-  WORKER_TOOLS.join(','),
+  (readOnly ? READONLY_TOOLS : WORKER_TOOLS).join(','),
   '--disallowedTools',
-  WORKER_DENIED.join(','),
+  (readOnly ? READONLY_DENIED : WORKER_DENIED).join(','),
   ...config.worker.args,
 ]
 
@@ -104,6 +126,15 @@ export function tailFile(path, lines = 30) {
   }
 }
 
+/** A whole log file, or '' when it cannot be read. @param {string} path */
+export function readLogFile(path) {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return ''
+  }
+}
+
 /**
  * @param {{ config: import('./config.mjs').Config, exec?: import('./github.mjs').Exec,
  *   spawnFn?: typeof spawn, stamp?: () => string }} opts
@@ -125,7 +156,8 @@ export function processSpawner({
    * @param {{ repo: import('./config.mjs').Repo, worktree: string, branch: string }} w
    * @returns {Promise<Teardown>}
    */
-  async function teardown({ repo, worktree, branch }) {
+  async function teardown({ repo, worktree, branch, readOnly = false }) {
+    if (readOnly) return dispose(repo, worktree)
     if (!existsSync(worktree)) {
       await git(repo.path, ['worktree', 'prune']).catch(() => {})
       return { removed: true, reason: null }
@@ -147,21 +179,52 @@ export function processSpawner({
     return { removed: true, reason: null }
   }
 
+  /**
+   * A read-only checkout holds nothing of value: it is removed outright, never checked with `graft status`.
+   * @param {import('./config.mjs').Repo} repo @param {string} worktree @returns {Promise<Teardown>}
+   */
+  async function dispose(repo, worktree) {
+    if (existsSync(join(worktree, '.git'))) await git(repo.path, ['worktree', 'remove', '--force', worktree])
+    else {
+      rmSync(worktree, { recursive: true, force: true })
+      await git(repo.path, ['worktree', 'prune']).catch(() => {})
+    }
+    return { removed: true, reason: null }
+  }
+
   return {
     convention: (repo) => readConvention(repo.path),
-    async start({ repo, convention, issue, attempt, branch, phase, maxTurns, buildPrompt, foreground = false }) {
+    async start({
+      repo,
+      convention,
+      issue,
+      attempt,
+      branch,
+      phase,
+      maxTurns,
+      buildPrompt,
+      foreground = false,
+      readOnly = false,
+    }) {
       const worktree = join(convention.root, topicOf(branch))
       if (config.worker.fetch) await git(repo.path, ['fetch', 'origin', repo.baseBranch])
       /** @type {string | null} */
       let reused = null
+      if (readOnly) await dispose(repo, worktree)
       // The same topic every attempt: a leftover is removed if GitHub holds it all, else continued in.
-      if (existsSync(join(worktree, '.git'))) {
+      else if (existsSync(join(worktree, '.git'))) {
         const left = await teardown({ repo, worktree, branch })
         if (!left.removed) reused = left.reason
       } else rmSync(worktree, { recursive: true, force: true })
       if (!reused) {
         mkdirSync(dirname(worktree), { recursive: true })
-        await git(repo.path, ['worktree', 'add', '--no-track', '-B', branch, worktree, `origin/${repo.baseBranch}`])
+        const at = `origin/${repo.baseBranch}`
+        await git(
+          repo.path,
+          readOnly
+            ? ['worktree', 'add', '--detach', worktree, at]
+            : ['worktree', 'add', '--no-track', '-B', branch, worktree, at],
+        )
       }
       const agentsPath = join(worktree, 'AGENTS.md')
       const agentsMd = existsSync(agentsPath) ? readFileSync(agentsPath, 'utf8') : null
@@ -179,14 +242,18 @@ export function processSpawner({
         CAMBIUM_REPO: repo.slug,
         CAMBIUM_ISSUE: String(issue),
         CAMBIUM_PHASE: phase,
-        CAMBIUM_BRANCH: branch,
-        CAMBIUM_PREPARE: JSON.stringify({
-          worktree,
-          source: repo.path,
-          install: convention.install,
-          hydrate: convention.hydrate,
-          prepare: convention.prepare,
-        }),
+        ...(readOnly ? {} : { CAMBIUM_BRANCH: branch }),
+        CAMBIUM_PREPARE: JSON.stringify(
+          readOnly
+            ? { worktree, source: repo.path, install: null, hydrate: { dirs: [], files: [] }, prepare: [] }
+            : {
+                worktree,
+                source: repo.path,
+                install: convention.install,
+                hydrate: convention.hydrate,
+                prepare: convention.prepare,
+              },
+        ),
         ...(config.worker.graftApp ? { GRAFT_APP: config.worker.graftApp } : {}),
       }
       /** @type {import('node:child_process').ChildProcess} */
@@ -194,7 +261,7 @@ export function processSpawner({
       try {
         child = spawnFn(
           process.execPath,
-          [PREPARE_MAIN, '--', config.worker.command, ...workerArgs(config, maxTurns)],
+          [PREPARE_MAIN, '--', config.worker.command, ...workerArgs(config, maxTurns, { readOnly })],
           { cwd: worktree, detached: !foreground, stdio: [fds[0], fds[1], fds[2]], env },
         )
       } finally {
@@ -210,6 +277,7 @@ export function processSpawner({
     },
     cleanup: teardown,
     tail: tailFile,
+    readLog: readLogFile,
   }
 }
 

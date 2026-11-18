@@ -90,10 +90,13 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
       i.comment = { id, body }
       return id
     },
-    async close(slug, number, body) {
-      calls.push({ op: 'close', args: [slug, number, body] })
+    async close(slug, number, body, opts) {
+      calls.push({ op: 'close', args: opts ? [slug, number, body, opts] : [slug, number, body] })
       const i = /** @type {Required<FakeIssue>} */ (store.get(number))
       i.state = 'CLOSED'
+    },
+    async comment(slug, number, body) {
+      calls.push({ op: 'comment', args: [slug, number, body] })
     },
     async deleteBranch(slug, branch) {
       calls.push({ op: 'deleteBranch', args: [slug, branch] })
@@ -191,14 +194,18 @@ export function fakeSpawner(procs) {
         reused: null,
       }
     },
-    /** @param {{ worktree: string }} w */
+    /** @param {{ worktree: string, readOnly?: boolean }} w */
     async cleanup(w) {
-      if (s.keep) return { removed: false, reason: s.keep }
+      if (s.keep && !w.readOnly) return { removed: false, reason: s.keep }
       cleaned.push(w.worktree)
       return { removed: true, reason: null }
     },
     stderrTail: 'Error: the last stderr line',
     tail: () => s.stderrTail,
+    /** Worker stdout logs by path, for workers whose output cambium reads (triage). */
+    logs: /** @type {Map<string, string>} */ (new Map()),
+    /** @param {string} path */
+    readLog: (path) => s.logs.get(path) ?? '',
   }
   return s
 }

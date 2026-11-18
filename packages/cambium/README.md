@@ -2,7 +2,7 @@
 
 The scheduler daemon. Every tick it reads the `q:*` queues from GitHub, starts headless `claude -p` workers in their own worktrees up to a cap, watches their PRs through CI and the merge queue, and makes every queue transition itself. GitHub is the truth; local SQLite only remembers which processes it started.
 
-This is the **Task phase** MVP. Dispatch is a seam; Release runs as graphs on `engine: "graph"` and is a seam on the legacy engine (see [Follow-ups](#follow-ups)).
+This is the **Task phase** MVP. With `engine: "graph"`, `q:intake` issues are triaged by the [`dispatch` graph](#the-dispatch-graph) and Release runs as graphs; on the legacy engine both are seams (see [Follow-ups](#follow-ups)).
 
 Runtime dependencies: `zod` (the [graph module](#graph-module-preview)) and OpenTelemetry via `@oakgreencc/mycelium` (loaded only when [tracing](#tracing) is on); Node ≥ 22.13 (`node:sqlite`). GitHub access goes through [`graft`](../graft), which must be on `PATH`.
 
@@ -40,7 +40,7 @@ Each step is bounded by `stepTimeoutSeconds`. A step that throws or times out is
 2. **Reconcile.** For each tracked worker: alive and under its wall-clock cap → nothing. Over the cap → kill its process group. Gone → exit check (a PR on its branch, or closing its issue, that is open or merged and not still on the commit CI already failed) → `submitted`; otherwise requeue with the stderr tail (a failed prepare step requeues as `spawn-failed`). Then the worktree is torn down if `graft status` says GitHub holds everything in it, else kept with a `warn` saying why.
 3. **Watch** (no agent), for agent PRs whose issue is in no queue: merged → close the issue, delete the branch; red → requeue with the failing checks' summaries; left the merge queue without merging → requeue; not merged `mergeQueueMinutes` after submission → `q:human`.
 4. **Sweep.** An issue labelled `running` with this host (or no host) in its marker and no tracked worker → requeue. This is what makes losing the SQLite file cost one requeue.
-5. **Schedule.** Start Task workers for `q:task` issues without `running`, by priority label then age, up to `phases.task.cap` counted from live workers. A task requeued earlier in the same tick can start in that tick.
+5. **Schedule.** Start Task workers for `q:task` issues without `running`, by priority label then age, up to `phases.task.cap` counted from live workers. A task requeued earlier in the same tick can start in that tick. Then, with `engine: "graph"` and `phases.dispatch.cap > 0`, start triage workers for `q:intake` issues the same way ([the dispatch graph](#the-dispatch-graph)).
 6. **Release.** Legacy: once a day at `release.time` when `release.enabled`; the run itself is a seam. Graph: the [release graphs](#the-release-graphs), per repo.
 7. **Heartbeat.** Write the state file.
 
@@ -52,7 +52,7 @@ A requeue is `q:task` with attempt + 1, or, once `maxAttempts` are spent, `q:hum
 | --------------------------------------------------- | ------------------------------------------------------------------------------ |
 | `q:intake`, `q:task`, `q:human`, `q:promote`        | The queue. At most one per open issue.                                         |
 | `running`                                           | A worker holds the lease (with `q:task`).                                      |
-| `why:budget` (also `why:reject`, `why:approve`)     | Why it is in `q:human`.                                                        |
+| `why:budget`, `why:triage` (also `why:reject`, …)   | Why it is in `q:human` (`why:triage`: sent there by triage, see below).        |
 | _no `q:` label_, cambium comment, open `agent/*` PR | Submitted: in the Release Queue, which is the PR's merge-queue state.          |
 | `priority:critical` … `priority:low`                | Scheduling order (configurable). Unlabelled sorts after every listed priority. |
 
@@ -117,7 +117,7 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
 
 - `repos[].path` is a local clone; worktrees are added from it and `graft` runs in it.
 - `graft.app` is the App cambium acts as (`GRAFT_APP` for its own `graft` calls); `worker.graftApp` the one workers act as. Neither leaks into the other.
-- `engine` picks how the Task phase runs: `"legacy"` (the stage tick, the default) or `"graph"` (the [`task` graph](#the-task-graph)). Both make the same moves; see [The task graph](#the-task-graph).
+- `engine` picks how the Task phase runs: `"legacy"` (the stage tick, the default) or `"graph"` (the [`task` graph](#the-task-graph)). Both make the same moves; see [The task graph](#the-task-graph). Only `"graph"` runs the [`dispatch` graph](#the-dispatch-graph) (gated by `phases.dispatch.cap`); legacy leaves `q:intake` alone.
 - Setting `paths.home` moves every default path under it.
 - `release.time` is host-local `HH:MM`.
 - `repos[].release` (`engine: "graph"`): `{ "enabled", "time", "from", "to" }`. `enabled` and `time` default to the top-level `release`, `from` to the repo's `baseBranch`, `to` to `"main"`. A repo whose `from` equals `to` has no promotion PR. Example: `{ "slug": "o/app", "path": "~/app", "baseBranch": "develop", "release": { "enabled": true, "time": "06:00", "from": "develop", "to": "main" } }`.
@@ -274,6 +274,53 @@ Generated by `toMermaid(task)`; a test keeps this copy current. Boxes are step n
 - **Where a turn stops.** At a wait that is not ready, on entering a wait (it is polled next tick; `merge-queue` is polled on entry, so a stall is caught in the same pass), on reaching `start-worker` again (only Schedule admits it), or at the end.
 - **Markers.** The graph writes marker v2 without `stage`: `node` is where the issue rests. `merge-queue` is the stage tick's `submitted` with `queued: true`, and a stage-era marker in that state resumes at `merge-queue`. A marker whose node the current graph version no longer has restarts at `start-worker` with a `graph-changed` history entry.
 - **Same moves.** Every scenario in `test/tick.test.mjs` runs on both engines; the test compares their GitHub calls in order (markers semantically, not by rendered text), worker starts with their prompts, kills, teardowns and logs.
+
+## The dispatch graph
+
+With `"engine": "graph"` and `phases.dispatch.cap > 0`, each `q:intake` issue is triaged by a one-shot `claude -p` worker (`src/graphs/dispatch.mjs`, steps in `src/dispatch-engine.mjs`, prompt and result in `src/phases/dispatch.mjs`), then moved to `q:task`, moved to `q:human`, or closed as a duplicate.
+
+```mermaid
+flowchart TD
+  start_(["q:intake"])
+  n0["start-triage"]
+  n1{{"triaging"}}
+  n2["retry-triage"]
+  n3["to-task"]
+  n4["to-human"]
+  n5["close-duplicate"]
+  end_(("end"))
+  start_ --> n0
+  n0 -->|"started"| n1
+  n0 -->|"budgetSpent"| n4
+  n0 --> n2
+  n1 -->|"issueGone"| end_
+  n1 -->|"leaseLost"| n2
+  n1 -->|"actionable"| n3
+  n1 -->|"duplicate"| n5
+  n1 -->|"needsHuman"| n4
+  n1 --> n4
+  n2 -->|"attemptsLeft"| n0
+  n2 --> n4
+  n3 --> end_
+  n4 --> end_
+  n5 --> end_
+```
+
+| Node              | Kind | Queue label | Holds `running` |
+| ----------------- | ---- | ----------- | --------------- |
+| `start-triage`    | step | `q:intake`  | no              |
+| `triaging`        | wait | `q:intake`  | yes             |
+| `retry-triage`    | step | `q:intake`  | no              |
+| `to-task`         | step | `q:task`    | no              |
+| `to-human`        | step | `q:human`   | no              |
+| `close-duplicate` | step | none        | no              |
+
+- **The verdict.** The worker's final message must end with a JSON block, validated by zod (`TriageResult`): `{ verdict: 'actionable' | 'needs-human' | 'duplicate', duplicateOf?, reason, title?, acceptance? }` (`duplicateOf` is required on a duplicate and cannot be the issue itself). cambium reads it from the worker's stdout log: the last `result` event's `result` text, its last fenced block (else the bare JSON).
+- **Outcomes.** `actionable` → a comment with the reason, the task title and acceptance checks (when given), then `q:task` with a task-graph marker at `start-worker`, attempt 1, history kept; the checks also ride in the marker (`triage`) into the task worker's prompt. The issue body is never rewritten: cambium's write path has no issue edit, and the author's text stays as written. `needs-human` → `q:human` + `why:triage`, the reason as the state comment's last failure. `duplicate` → closed with reason `duplicate` and `Duplicate of #n (<link>). <reason>`. A missing or invalid verdict (no `result` event, no JSON, a schema error) or a worker killed at `wallClockMinutes` (the unlabelled `triaging → to-human` edge) → `q:human` + `why:triage` with the error.
+- **Read-only checkout.** Triage reads code to judge feasibility and duplicates, so it gets a checkout, but a disposable one: a detached worktree at `<root>/triage-<n>` on `origin/<base>` (the repo's worktree root), no install, hydrate or `prepare`, tools `Read,Glob,Grep,Bash` with Edit/Write and every graft/git write verb denied. It is removed outright after the verdict (no `graft status`: nothing in it is worth keeping).
+- **Retries.** A worker that cannot start, or a lost `running` lease on a `q:intake` issue (Sweep), goes back to `q:intake` with attempt + 1, then to `q:human` once `phases.dispatch.maxAttempts` are spent. A marker from another graph or a finished triage starts over at attempt 1.
+- **Leaving intake.** If the issue is closed or relabelled while triage runs, the verdict is dropped and the checkout removed.
+- **Tracing.** Call sites are marked (`TRACING (follow-up)`) as in the task graph: the worker's `TRACEPARENT`, its stream-json spans, and `advanceHooks` in the driver, whose `cambium.issue` root continues mycelium's intake span from the issue body.
 
 ## The release graphs
 
@@ -501,7 +548,7 @@ Without Jaeger running the collector still writes the files; the Jaeger exporter
 
 Seams that exist, typed, and do nothing yet:
 
-- **Dispatch** (`src/phases/dispatch.mjs`): `Dispatch(input: { repo, intake, capacity, now }) → { started }`. Reached only when `phases.dispatch.cap > 0`; the stub starts nothing and logs that `q:intake` waits.
+- **Dispatch on the legacy engine** (`src/phases/dispatch.mjs`): `Dispatch(input: { repo, intake, capacity, now }) → { started }`. Reached only when `phases.dispatch.cap > 0`; the stub starts nothing and logs that `q:intake` waits. The graph engine runs [the dispatch graph](#the-dispatch-graph) instead; `cambium run dispatch` is not wired yet.
 - **Release**, legacy engine only (`src/phases/release.mjs`): `Release(input: { repo, now }) → { done, note }`. The once-a-day schedule (`releaseDue`) is real and recorded in the store; the run returns `{ done: false }`. The graph engine runs the [release graphs](#the-release-graphs).
 - Conditional (ETag) reads, so an unchanged poll is free against the rate limit; GraphQL has no ETag, so this needs a REST probe in front of the query.
 - More than 100 queued issues or open PRs per repo, and state comments beyond an issue's first 100 comments: the read is one page.

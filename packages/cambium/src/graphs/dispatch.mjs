@@ -1,0 +1,453 @@
+// @ts-check
+/**
+ * The Dispatch phase as a graph: a `q:intake` issue is triaged by a one-shot `claude -p` worker whose final
+ * message carries a typed verdict ({@link TriageResult}), then moved to `q:task`, moved to `q:human`, or closed as
+ * a duplicate. Same conventions as the task graph (graphs/task.mjs): each node declares its queue label and
+ * whether it holds `running`, and a node's write is the marker first, then the labels via `move()`.
+ *
+ * The triage worker runs in a read-only checkout (workers.mjs `readOnly`): detached at the base branch, no install,
+ * no Edit/Write. It reads code to judge the issue, and nothing it could leave behind is worth keeping.
+ */
+import { z } from 'zod'
+import { defineGraph, defineNode, defineWait, END } from '../graph/index.mjs'
+import { iso, key, markerOf, MIN, setLabels, setMarker } from '../issue-state.mjs'
+import { move, Q, WHY } from '../labels.mjs'
+import { newMarker, withHistory } from '../marker.mjs'
+import { readTriage, TriageResult, triageComment, triagePrompt } from '../phases/dispatch.mjs'
+import { task } from './task.mjs'
+
+/**
+ * @typedef {import('../github.mjs').Issue} Issue
+ * @typedef {import('../marker.mjs').Marker} Marker
+ * @typedef {import('./task.mjs').Subject} Subject
+ * @typedef {import('./task.mjs').TaskCtx} DispatchCtx
+ * @typedef {{ queue: string | null, running: boolean }} Declared
+ *   A stale `running` lease (at `triaging`) goes to `retry-triage` (dispatch-engine.mjs sweep).
+ * @typedef {import('../graph/define.mjs').GraphNode & Declared} DispatchNode
+ */
+
+/** The nodes an issue in `q:intake` can rest at; a marker elsewhere starts triage over at attempt 1. */
+const INTAKE_NODES = new Set(['start-triage', 'triaging', 'retry-triage'])
+
+/** The pseudo-branch that names an issue's triage checkout (`<root>/triage-<n>`); never created. @param {number} n */
+export const triageBranch = (n) => `cambium/triage-${n}`
+
+/**
+ * @template {import('../graph/define.mjs').GraphNode} N @param {N} node @param {Declared} decl
+ * @returns {N & Declared}
+ */
+const declare = (node, decl) => Object.freeze({ ...node, ...decl })
+
+/** @param {DispatchCtx} ctx */
+function issueOf(ctx) {
+  const { issue } = ctx.subject
+  if (!issue) throw new Error(`${ctx.subject.slug}#${ctx.subject.number} is not in the snapshot`)
+  return issue
+}
+
+/** @param {Marker} m */
+const graphMarker = (m) => /** @type {Marker} */ (Object.fromEntries(Object.entries(m).filter(([k]) => k !== 'stage')))
+
+/**
+ * Put the issue at `node` of this graph: the marker, then the labels `node` declares.
+ * @param {DispatchCtx} ctx @param {string} node @param {Marker} marker
+ * @param {{ extra?: string[], status?: Marker['status'] }} [opts]
+ */
+async function land(ctx, node, marker, { extra = [], status = 'waiting' } = {}) {
+  const { slug } = ctx.subject
+  const issue = issueOf(ctx)
+  const decl = nodeOf(node)
+  await setMarker(ctx, slug, issue, {
+    ...graphMarker(marker),
+    graph: dispatch.name,
+    graphVersion: dispatch.version,
+    phase: 'dispatch',
+    node,
+    status,
+    enteredAt: iso(ctx.tick.now),
+  })
+  await setLabels(ctx, slug, issue, move(issue.labels, decl.queue, { running: decl.running, extra }))
+  ctx.tick.touched.add(key(slug, issue.number))
+}
+
+/**
+ * The marker triage continues from: this graph's own while the issue is still in intake, else a fresh one at
+ * attempt 1 that keeps the history (e.g. a human sent a `q:human` issue back to `q:intake`).
+ * @param {Issue} issue @returns {Marker}
+ */
+function intakeMarker(issue) {
+  const m = markerOf(issue)
+  if (m.graph === dispatch.name && m.status !== 'done' && INTAKE_NODES.has(m.node)) return m
+  return newMarker({
+    graph: dispatch.name,
+    node: dispatch.entry.node,
+    phase: 'dispatch',
+    history: m.history,
+    traceparent: m.traceparent,
+  })
+}
+
+// ---- Schemas
+
+const failure = { reason: z.string(), outcome: z.string(), log: z.string().optional() }
+const Failure = z.object(failure)
+const Empty = z.object({})
+const Verdict = z.object({ result: TriageResult, log: z.string() })
+
+// ---- Edge predicates (their names label the Mermaid edges)
+
+const started = (/** @type {{ to: string }} */ o) => o.to === 'running'
+const budgetSpent = (/** @type {{ to: string }} */ o) => o.to === 'human'
+const attemptsLeft = (/** @type {{ to: string }} */ o) => o.to === 'start'
+const issueGone = (/** @type {{ exit: string }} */ o) => o.exit === 'gone'
+const leaseLost = (/** @type {{ exit: string }} */ o) => o.exit === 'lost'
+/** @typedef {{ exit: string, result?: { verdict: string } }} Triaged */
+const verdictOf = (/** @type {Triaged} */ o) => (o.exit === 'triaged' ? o.result?.verdict : undefined)
+const actionable = (/** @type {Triaged} */ o) => verdictOf(o) === 'actionable'
+const needsHuman = (/** @type {Triaged} */ o) => verdictOf(o) === 'needs-human'
+const duplicate = (/** @type {Triaged} */ o) => verdictOf(o) === 'duplicate'
+
+/** @param {DispatchCtx} ctx */
+export const lostLeaseOf = (ctx) => ({
+  reason: `triage worker lost: \`running\` on ${ctx.config.host} with no live process`,
+  outcome: 'lost',
+})
+
+// ---- Nodes
+
+const startTriage = declare(
+  defineNode({
+    name: 'start-triage',
+    input: Empty,
+    output: z.discriminatedUnion('to', [
+      z.object({ to: z.literal('running'), pid: z.number().int(), worktree: z.string(), attempt: z.number().int() }),
+      z.object({ to: z.literal('retry'), ...failure }),
+      z.object({ to: z.literal('human'), ...failure }),
+    ]),
+    /**
+     * Claim the issue (marker, then `running`), then start the triage worker in a read-only checkout.
+     * @param {{}} _ @param {DispatchCtx} ctx
+     */
+    run: async (_, ctx) => {
+      const { config, spawner, store } = ctx
+      const { slug, snap } = ctx.subject
+      const issue = issueOf(ctx)
+      const repo = config.repos.find((r) => r.slug === slug)
+      if (!repo) throw new Error(`${slug} is not in the config`)
+      const caps = config.phases.dispatch
+      const m0 = intakeMarker(issue)
+      if (m0.attempt > caps.maxAttempts)
+        return { to: 'human', reason: `${caps.maxAttempts} triage attempts spent`, outcome: 'budget' }
+      /** @type {import('../convention.mjs').Convention} */
+      let convention
+      try {
+        convention = spawner.convention(repo)
+      } catch (err) {
+        return { to: 'retry', reason: `could not start triage: ${errText(err)}`, outcome: 'spawn-failed' }
+      }
+      await land(ctx, 'triaging', {
+        ...m0,
+        host: config.host,
+        start: iso(ctx.tick.now),
+        input: { attempt: m0.attempt },
+      })
+      const marker = markerOf(issue)
+      const queued = [...(snap?.issues.values() ?? [])]
+        .filter((i) => i.state === 'OPEN')
+        .map(({ number, title, labels }) => ({ number, title, labels }))
+      /** @type {import('../workers.mjs').Started} */
+      let s
+      try {
+        s = await spawner.start({
+          repo,
+          convention,
+          issue: issue.number,
+          attempt: marker.attempt,
+          branch: triageBranch(issue.number),
+          phase: 'dispatch',
+          maxTurns: caps.maxTurns,
+          readOnly: true,
+          // TRACING (follow-up): as start-worker, the triage worker's env gets `TRACEPARENT: ctx.traceparent`
+          // (this node's cambium.node span, under the cambium.issue root that continues mycelium's intake span).
+          buildPrompt: (agentsMd) => triagePrompt({ repo: slug, baseBranch: repo.baseBranch, issue, queued, agentsMd }),
+        })
+      } catch (err) {
+        return {
+          to: 'retry',
+          reason: `could not start triage: ${errText(err)}`,
+          outcome: 'spawn-failed',
+          // The claim already put the marker at triaging; the failure is this node's.
+        }
+      }
+      store.addWorker({
+        repo: slug,
+        issue: issue.number,
+        phase: 'dispatch',
+        pid: s.pid,
+        worktree: s.worktree,
+        branch: triageBranch(issue.number),
+        attempt: marker.attempt,
+        startedAt: ctx.tick.now,
+        host: config.host,
+        stdout: s.stdout,
+        stderr: s.stderr,
+      })
+      ctx.log('info', `started triage worker pid ${s.pid} (attempt ${marker.attempt})`, {
+        repo: slug,
+        issue: issue.number,
+      })
+      ctx.subject.started = { ...s, attempt: marker.attempt }
+      return { to: 'running', pid: s.pid, worktree: s.worktree, attempt: marker.attempt }
+    },
+  }),
+  { queue: Q.intake, running: false },
+)
+
+const triaging = declare(
+  defineWait({
+    name: 'triaging',
+    input: z.object({ attempt: z.number().int() }),
+    output: z.discriminatedUnion('exit', [
+      z.object({ exit: z.literal('triaged'), ...Verdict.shape }),
+      z.object({ exit: z.literal('invalid'), ...failure }),
+      z.object({ exit: z.literal('lost'), ...failure }),
+      z.object({ exit: z.literal('gone') }),
+    ]),
+    /**
+     * Alive and under the wall-clock cap: hold. Over it: kill. Gone: read the verdict from its stdout log; a
+     * missing or invalid one is `invalid`, with the error.
+     * @param {unknown} _ @param {DispatchCtx} ctx
+     */
+    poll: async (_, ctx) => {
+      const { config, store, procs, spawner } = ctx
+      const { slug, number, snap, issue, reaped } = ctx.subject
+      const w = store.worker(slug, number)
+      if (!w) {
+        const host = issue?.stateComment?.marker.host
+        if (host && host !== config.host) return { ready: false }
+        return { ready: true, output: { exit: 'lost', ...lostLeaseOf(ctx) } }
+      }
+      const caps = config.phases.dispatch
+      if (procs.alive(w.pid) && !reaped?.has(w.pid)) {
+        if (!w.killedReason && ctx.tick.now - w.startedAt <= caps.wallClockMinutes * MIN) return { ready: false }
+        const reason = w.killedReason ?? `killed: over the ${caps.wallClockMinutes} min wall-clock cap`
+        procs.kill(w.pid)
+        store.markKilled(w.repo, w.issue, reason)
+        w.killedReason = reason
+        ctx.log('warn', `${reason} (pid ${w.pid})`, { repo: w.repo, issue: w.issue })
+      }
+      if (!snap) return { ready: false }
+      if (issue?.state !== 'OPEN' || !issue.labels.includes(Q.intake)) {
+        ctx.log('info', 'triage worker gone; issue is closed or left q:intake', { repo: w.repo, issue: w.issue })
+        return { ready: true, output: { exit: 'gone' } }
+      }
+      // TRACING (follow-up): the worker has ended; emit its spans here with tracing.mjs
+      // `workerSpans(<w.stdout log>, { tracer, parent: <start-triage's traceparent> })`.
+      const read = w.killedReason ? { ok: false, error: w.killedReason } : readTriage(spawner.readLog(w.stdout), number)
+      if (read.ok && 'result' in read)
+        return { ready: true, output: { exit: 'triaged', result: read.result, log: w.stdout } }
+      const tail = 'error' in read && !read.error.startsWith('invalid') ? spawner.tail(w.stderr, 15) : ''
+      return {
+        ready: true,
+        output: {
+          exit: 'invalid',
+          reason: `${'error' in read ? read.error : 'no verdict'}${tail ? `\n--- stderr (last lines, ${w.stderr})\n${tail}` : ''}`,
+          outcome: w.killedReason ? 'killed' : 'invalid',
+          log: w.stdout,
+        },
+      }
+    },
+  }),
+  { queue: Q.intake, running: true },
+)
+
+const retryTriage = declare(
+  defineNode({
+    name: 'retry-triage',
+    input: Failure,
+    output: z.discriminatedUnion('to', [
+      z.object({ to: z.literal('start'), attempt: z.number().int() }),
+      z.object({ to: z.literal('human'), ...failure }),
+    ]),
+    /** Back to `q:intake` with attempt + 1, or to a human once the attempts are spent. @param {z.infer<typeof Failure>} what @param {DispatchCtx} ctx */
+    run: async (what, ctx) => {
+      const issue = issueOf(ctx)
+      const m = intakeMarker(issue)
+      const max = ctx.config.phases.dispatch.maxAttempts
+      if (m.attempt >= max)
+        return { ...what, to: 'human', reason: `${max} triage attempts spent. Last: ${what.reason}` }
+      await land(ctx, 'start-triage', {
+        ...withHistory(m, { at: iso(ctx.tick.now), attempt: m.attempt, ...what }),
+        attempt: m.attempt + 1,
+        lastFailure: what.reason,
+        host: null,
+        start: null,
+        input: null,
+      })
+      ctx.log('info', `triage retried (attempt ${m.attempt + 1}/${max}): ${what.reason.split('\n')[0]}`, {
+        repo: ctx.subject.slug,
+        issue: issue.number,
+      })
+      return { to: 'start', attempt: m.attempt + 1 }
+    },
+  }),
+  { queue: Q.intake, running: false },
+)
+
+const ToTaskIn = z.object({
+  reason: z.string(),
+  title: z.string().optional(),
+  acceptance: z.array(z.string()).optional(),
+  log: z.string(),
+})
+const toTask = declare(
+  defineNode({
+    name: 'to-task',
+    input: ToTaskIn,
+    output: Empty,
+    /**
+     * Actionable: the triage comment (task title and acceptance checks, when given), then the hand-off: a task-graph
+     * marker at its entry, attempt 1, carrying the history and `triage` for the task prompt; then `q:task`.
+     * The issue body is left as its author wrote it.
+     * @param {z.infer<typeof ToTaskIn>} t @param {DispatchCtx} ctx
+     */
+    run: async (t, ctx) => {
+      const { slug } = ctx.subject
+      const issue = issueOf(ctx)
+      const m = markerOf(issue)
+      await ctx.github.comment(slug, issue.number, triageComment(t))
+      const at = iso(ctx.tick.now)
+      await setMarker(ctx, slug, issue, {
+        ...newMarker({
+          graph: task.name,
+          graphVersion: task.version,
+          node: task.entry.node,
+          phase: 'task',
+          enteredAt: at,
+          traceparent: m.traceparent,
+          history: withHistory(m, { at, attempt: m.attempt, outcome: 'actionable', reason: t.reason, log: t.log })
+            .history,
+        }),
+        triage: t.title || t.acceptance?.length ? { title: t.title, acceptance: t.acceptance } : null,
+      })
+      await setLabels(ctx, slug, issue, move(issue.labels, Q.task))
+      ctx.tick.touched.add(key(slug, issue.number))
+      ctx.log('info', `triaged actionable → q:task: ${t.reason.split('\n')[0]}`, { repo: slug, issue: issue.number })
+      return {}
+    },
+  }),
+  { queue: Q.task, running: false },
+)
+
+const toHuman = declare(
+  defineNode({
+    name: 'to-human',
+    input: Failure,
+    output: Empty,
+    /** Into the Human Queue with `why:triage` and the reason in the state comment. @param {z.infer<typeof Failure>} what @param {DispatchCtx} ctx */
+    run: async (what, ctx) => {
+      const issue = issueOf(ctx)
+      const m = markerOf(issue)
+      await land(
+        ctx,
+        'to-human',
+        {
+          ...withHistory(m, { at: iso(ctx.tick.now), attempt: m.attempt, ...what }),
+          lastFailure: what.reason,
+          host: null,
+          start: null,
+          input: null,
+        },
+        { extra: [WHY.triage] },
+      )
+      ctx.log('warn', `→ q:human (${WHY.triage}): ${what.reason.split('\n')[0]}`, {
+        repo: ctx.subject.slug,
+        issue: issue.number,
+      })
+      return {}
+    },
+  }),
+  { queue: Q.human, running: false },
+)
+
+const DupIn = z.object({ duplicateOf: z.number().int(), reason: z.string(), log: z.string() })
+const closeDuplicate = declare(
+  defineNode({
+    name: 'close-duplicate',
+    input: DupIn,
+    output: Empty,
+    /** Out of every queue, closed as a duplicate with a link to the original. @param {z.infer<typeof DupIn>} d @param {DispatchCtx} ctx */
+    run: async (d, ctx) => {
+      const { slug } = ctx.subject
+      const issue = issueOf(ctx)
+      const m = markerOf(issue)
+      await land(
+        ctx,
+        'close-duplicate',
+        {
+          ...withHistory(m, {
+            at: iso(ctx.tick.now),
+            attempt: m.attempt,
+            outcome: 'duplicate',
+            reason: d.reason,
+            log: d.log,
+          }),
+          host: null,
+          start: null,
+          input: null,
+        },
+        { status: 'done' },
+      )
+      const link = `https://github.com/${slug}/issues/${d.duplicateOf}`
+      await ctx.github.close(
+        slug,
+        issue.number,
+        `Duplicate of #${d.duplicateOf} (${link}). ${d.reason}\n\nClosed by cambium.`,
+        {
+          reason: 'duplicate',
+        },
+      )
+      issue.state = 'CLOSED'
+      ctx.log('info', `duplicate of #${d.duplicateOf}; closed`, { repo: slug, issue: issue.number })
+      return {}
+    },
+  }),
+  { queue: null, running: false },
+)
+
+/** @param {unknown} err */
+const errText = (err) => /** @type {Error} */ (err)?.message ?? String(err)
+
+/** The Dispatch phase. Bump `version` when a node is removed or renamed. */
+export const dispatch = defineGraph({
+  name: 'dispatch',
+  version: 1,
+  entry: { queue: Q.intake, node: 'start-triage', input: () => ({}) },
+  nodes: [startTriage, triaging, retryTriage, toTask, toHuman, closeDuplicate],
+  edges: [
+    ['start-triage', 'triaging', started, (o) => ({ attempt: o.attempt })],
+    ['start-triage', 'to-human', budgetSpent],
+    ['start-triage', 'retry-triage'],
+    ['triaging', END, issueGone],
+    ['triaging', 'retry-triage', leaseLost],
+    ['triaging', 'to-task', actionable, (o) => ({ ...pick(o.result, ['reason', 'title', 'acceptance']), log: o.log })],
+    ['triaging', 'close-duplicate', duplicate, (o) => ({ ...pick(o.result, ['duplicateOf', 'reason']), log: o.log })],
+    ['triaging', 'to-human', needsHuman, (o) => ({ reason: o.result.reason, outcome: 'needs-human', log: o.log })],
+    ['triaging', 'to-human'],
+    ['retry-triage', 'start-triage', attemptsLeft, () => ({})],
+    ['retry-triage', 'to-human'],
+    ['to-task', END],
+    ['to-human', END],
+    ['close-duplicate', END],
+  ],
+})
+
+/** @param {Record<string, unknown>} o @param {string[]} keys */
+const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]))
+
+/** @param {string} name @returns {DispatchNode} */
+export function nodeOf(name) {
+  const node = dispatch.nodes.find((n) => n.name === name)
+  if (!node) throw new Error(`dispatch graph has no node "${name}"`)
+  return /** @type {DispatchNode} */ (node)
+}

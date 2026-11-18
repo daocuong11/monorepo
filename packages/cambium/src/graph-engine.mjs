@@ -21,6 +21,7 @@ import { iso, key, markerOf, setLabels, setMarker } from './issue-state.mjs'
 import { effectivePosition, graphVersionDecision, withHistory } from './marker.mjs'
 import { each, newCtx, staleLeases, taskCandidates, watched, watchPairs } from './tick.mjs'
 import { move, Q } from './labels.mjs'
+import { DISPATCH_STEPS } from './dispatch-engine.mjs'
 
 /**
  * @typedef {import('./tick.mjs').Deps} Deps
@@ -136,7 +137,7 @@ async function restart(deps, ctx, slug, issue, note) {
 async function reconcile(deps, ctx) {
   await each(
     deps,
-    deps.store.workers(),
+    deps.store.workers().filter((w) => w.phase === 'task'),
     async (w) => {
       const snap = ctx.snaps.get(w.repo)
       const subject = { slug: w.repo, number: w.issue, snap, issue: snap?.issues.get(w.issue) }
@@ -178,7 +179,7 @@ async function sweep(deps, ctx) {
   for (const [slug, snap] of ctx.snaps)
     await each(
       deps,
-      staleLeases(deps, ctx, slug, snap),
+      staleLeases(deps, ctx, slug, snap).filter((issue) => !issue.labels.includes(Q.intake)),
       async (issue) => {
         const subject = { slug, number: issue.number, snap, issue }
         const c = taskCtx(deps, ctx, subject)
@@ -206,8 +207,21 @@ async function scheduleTasks(deps, ctx) {
 /** A stale lease at a node without its own `recover`: requeue. @param {import('./graphs/task.mjs').TaskCtx} c */
 const defaultRecover = (c) => ({ node: 'requeue', input: lostLeaseOf(c) })
 
+/** @param {import('./tick.mjs').StepFn[]} steps @returns {import('./tick.mjs').StepFn} */
+const inOrder =
+  (...steps) =>
+  async (deps, ctx) => {
+    for (const step of steps) await step(deps, ctx)
+  }
+
 /** @type {import('./tick.mjs').Engine} */
-export const GRAPH_ENGINE = { reconcile, watch, sweep, scheduleTasks }
+export const GRAPH_ENGINE = {
+  reconcile: inOrder(reconcile, DISPATCH_STEPS.reconcile),
+  watch,
+  sweep: inOrder(sweep, DISPATCH_STEPS.sweep),
+  scheduleTasks,
+  scheduleDispatch: DISPATCH_STEPS.schedule,
+}
 
 // ---- `cambium run <graph> --issue <n> [--follow]`
 

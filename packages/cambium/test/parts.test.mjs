@@ -287,7 +287,7 @@ test('normalize: issues, agent PRs only, failing checks, markers from the bot on
 test('graft client: every call is one graft invocation, as the Clock App, in the repo', async () => {
   /** @type {{ cmd: string, args: string[], opts: any }[]} */
   const calls = []
-  const answers = [JSON.stringify(graphqlAnswer), '', JSON.stringify({ id: 77 }), '', '', '']
+  const answers = [JSON.stringify(graphqlAnswer), '', JSON.stringify({ id: 77 }), '', '', '', '', '']
   const config = resolveConfig({ repos: [{ slug: 'o/r', path: '/src/r' }], graft: { app: 'clock-app' } })
   const gh = graftGitHub({
     config,
@@ -303,6 +303,8 @@ test('graft client: every call is one graft invocation, as the Clock App, in the
   assert.equal(await gh.writeState('o/r', 5, null, 'BODY'), 77)
   assert.equal(await gh.writeState('o/r', 5, 77, 'BODY2'), 77)
   await gh.close('o/r', 5, 'bye')
+  await gh.close('o/r', 6, 'dup', { reason: 'duplicate' })
+  await gh.comment('o/r', 5, 'hello')
   await gh.deleteBranch('o/r', 'agent/issue-5')
   const argv = calls.map((c) => c.args)
   assert.equal(argv[0][0], 'graphql')
@@ -320,6 +322,8 @@ test('graft client: every call is one graft invocation, as the Clock App, in the
     ['issue', 'comment', '5', '--body-file', '-', '--repo', 'o/r'],
     ['api', 'PATCH', '/repos/o/r/issues/comments/77', '--body', '{"body":"BODY2"}', '--repo', 'o/r'],
     ['issue', 'close', '5', '--body-file', '-', '--repo', 'o/r'],
+    ['issue', 'close', '6', '--body-file', '-', '--reason', 'duplicate', '--repo', 'o/r'],
+    ['issue', 'comment', '5', '--body-file', '-', '--repo', 'o/r'],
     ['api', 'DELETE', '/repos/o/r/git/refs/heads/agent/issue-5', '--repo', 'o/r'],
   ])
   assert.ok(calls.every((c) => c.cmd === 'graft' && c.opts.cwd === '/src/r' && c.opts.env.GRAFT_APP === 'clock-app'))
