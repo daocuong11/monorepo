@@ -4,7 +4,7 @@ The scheduler daemon. Every tick it reads the `q:*` queues from GitHub, starts h
 
 This is the **Task phase** MVP. Dispatch and the daily Release run are seams (see [Follow-ups](#follow-ups)).
 
-One runtime dependency (`zod`, for the [graph module](#graph-module-preview)), Node ≥ 22.13 (`node:sqlite`). GitHub access goes through [`graft`](../graft), which must be on `PATH`.
+Runtime dependencies: `zod` (the [graph module](#graph-module-preview)) and OpenTelemetry via `@oakgreencc/mycelium` (loaded only when [tracing](#tracing) is on); Node ≥ 22.13 (`node:sqlite`). GitHub access goes through [`graft`](../graft), which must be on `PATH`.
 
 ## Quick start
 
@@ -258,6 +258,105 @@ const { transitions, reason, node, input } = await advance(g, { node: 'open-pr',
 - **`validateGraph(graph)`** returns every problem as a string (`defineGraph` throws on any): unknown edge endpoints, nodes unreachable from `entry.node`, a node with outgoing edges whose last edge is conditional (no fallback), duplicate names, a non-integer `version`.
 - **`advance(graph, { node, input }, ctx, { maxTransitions = 8, signal })`** runs step nodes and ready waits and returns `{ transitions, reason, node, input, error? }`: `reason` is `waiting` (a wait that is not ready), `end`, `limit`, `aborted` (`signal`, or `ctx.signal`, checked before each node) or `error`; `node`/`input` is where it stopped. Each transition is `{ from, to, edge, input, output, next }`. `ctx` is passed to `run`/`poll` untouched apart from `ctx.signal`; edges see `ctx.subject`.
 - **`toMermaid(graph)`** renders a flowchart: boxes for steps, hexagons for waits, conditional edges labelled with `when`'s function name.
+- **`opts.instrument(visit, step)`** (optional) wraps each node visit: `visit` is `{ node, kind: 'node' | 'wait', input }`; `step(extraCtx?)` runs the node (or poll) and picks the edge, returning the transition, or `null` for a wait that is not ready, and throws on a node error. `extraCtx` is merged into that node's `ctx`. Return what `step` returned. Without it, `advance` behaves exactly as before. [`advanceHooks`](#tracing) is the tracing implementation.
+
+## Tracing
+
+`src/tracing.mjs` is OpenTelemetry for cambium, configured only by the standard `OTEL_*` variables with `service.name=cambium`. It reuses mycelium's `createTracing` (same packages, same on/off rule): **on only when `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set**, unless `OTEL_SDK_DISABLED=true` or `OTEL_TRACES_EXPORTER=none`; otherwise nothing is imported and every call is a no-op. Metrics follow the same rule for their signal (`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, `OTEL_METRICS_EXPORTER`). With an endpoint but no collector, shutdown can take ~8 s; set `OTEL_EXPORTER_OTLP_TIMEOUT=2000` for the daemon.
+
+Why not a shared package: cambium is published to npm, so it can only depend on published packages; a new publishable `@oakgreencc/telemetry` needs a protected `nx.json` release change. mycelium already publishes `createTracing`, so it gained a `serviceName` option and cambium depends on `@oakgreencc/mycelium` (which also gives it `parseTraceparent` for the intake trace).
+
+| Span / metric                        | When                                                                                                     | Parent                                                         |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `cambium.issue`                      | Once per issue, when the marker has no `traceparent`. Ended at once; its traceparent goes in the marker. | mycelium's intake span from the issue body, else none (a root) |
+| `cambium.node`                       | Each step-node run                                                                                       | The marker's `traceparent`                                     |
+| `cambium.wait`                       | When a wait ends; `startTime` = the marker's `enteredAt`. No span stays open across ticks.               | The marker's `traceparent`                                     |
+| `cambium.wait.not_ready`             | Counter, +1 per not-ready poll (attributes graph, node, repo)                                            |                                                                |
+| `claude.session` / `.tool` / `.task` | From the worker's stream-json log, see below                                                             | The start-worker `cambium.node` span                           |
+
+Node and wait spans carry `cambium.graph`, `cambium.graph.version`, `cambium.node`, `cambium.attempt`, `cambium.repo`, `cambium.issue.number`, `cambium.edge`, `cambium.outcome`.
+
+```js
+import { advanceHooks, createTelemetry } from './tracing.mjs' // inside cambium
+
+const telemetry = await createTelemetry() // { env, exporter, metricReader, now } are for tests
+try {
+  const hooks = advanceHooks(telemetry, {
+    graph,
+    graphVersion,
+    attempt,
+    traceparent,
+    enteredAt,
+    repo,
+    issue,
+    issueBody,
+  })
+  const r = await advance(g, at, ctx, { instrument: hooks.instrument })
+  marker.traceparent = hooks.traceparent // new when a cambium.issue root was started
+} finally {
+  await telemetry.shutdown()
+}
+```
+
+- `telemetry.nodeSpan(info, fn)`: runs `fn(run)` inside a `cambium.node` span. `run` is `{ span, issueTraceparent, traceparent, set({ edge, outcome }) }`: `issueTraceparent` is what the marker should hold; `traceparent` is this span's, to give a worker as `TRACEPARENT`. A throw sets ERROR and outcome `error` and is rethrown.
+- `telemetry.waitSpan({ ...info, enteredAt, polls? })`: emits the `cambium.wait` span; returns the issue traceparent.
+- `telemetry.notReady(info)`, `telemetry.issueTrace(info)` (the marker traceparent, starting a root if needed), `traceparentFor(spanContext)`, `flush()`, `shutdown()`.
+- `advanceHooks(telemetry, base)` → `{ instrument, traceparent }`: step nodes run in `nodeSpan` and get **`ctx.traceparent`** (start-worker sets the worker's `TRACEPARENT` from it); `cambium.outcome` is the output's `outcome` string, else `ok`. A ready wait emits `waitSpan` (from `enteredAt`, or from the previous transition within one advance); a not-ready one bumps the counter.
+
+### Worker spans from stream-json
+
+Worker telemetry comes from the worker's own stdout log (`claude -p --output-format stream-json --verbose`), not from Claude Code's OTel export, so it works with telemetry off on the worker side:
+
+```js
+workerSpans(stream, { tracer, parent }) → { sessionId, complete, ok, start, end, tools, tasks, malformed, costUsd }
+telemetry.workerSpans(stream, parent)   // same, with cambium's tracer
+```
+
+`stream` is the log text, its lines, or parsed events; `parent` is the start-worker span's context or traceparent. Call it once the worker has exited; every span it makes is already ended.
+
+- `claude.session`: first to last `timestamp`. Attributes from `result` and `system/init`: `claude.session_id`, `claude.model`, `claude_code.version`, `claude.cost_usd`, `claude.tokens.{input,output,cache_read,cache_creation}`, `claude.turns`, `claude.duration_ms`, `claude.terminal_reason`, `claude.result`, `claude.permission_denials`. No `result` (killed, truncated) or an error result → ERROR.
+- `claude.tool`: each `tool_use` → `tool_result` by id (a subagent's tools nest under its Agent tool span); `claude.tool.name`, `claude.tool.outcome` (`ok` / `error` / `unfinished`), `claude.tool.command` (Bash, clipped to 200 chars). Unpaired → ends at the last timestamp, ERROR.
+- `claude.task`: each background task, `task_started` → `task_notification` (or `task_updated.patch.end_time`), under the tool that started it. These events have no timestamp, so their times are those of the latest timestamped event.
+- Malformed lines are counted (`malformed`) and skipped; `system/thinking_tokens`, `tool_progress`, hooks and rate-limit events are ignored.
+
+### Does `claude -p` export traces that honour `TRACEPARENT`?
+
+**Yes, opt-in and beta**; cambium does not depend on it (worker spans come from stream-json above). Per the [Claude Code monitoring docs](https://code.claude.com/docs/en/monitoring-usage) (checked with Claude Code 2.1.327; `claude --help` lists no telemetry flags, it is env-only):
+
+- Traces need `CLAUDE_CODE_ENABLE_TELEMETRY=1` **and** `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1` plus `OTEL_TRACES_EXPORTER=otlp` and the usual `OTEL_EXPORTER_OTLP_*` endpoint/protocol (use `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf` against this collector). Spans: `claude_code.interaction` → `claude_code.llm_request`, `claude_code.tool` (→ `.execution`, `.blocked_on_user`).
+- "In Agent SDK and non-interactive sessions started with `-p`, Claude Code also reads `TRACEPARENT` and `TRACESTATE` from its own environment when starting each interaction span": the interaction span becomes a child of the caller's span (`parent.source=env`). Interactive sessions ignore an inbound `TRACEPARENT`.
+- Bash subprocesses it runs inherit a `TRACEPARENT` for the active tool span, so a `graft` call inside a worker could continue the trace.
+- Prompts and tool inputs are redacted from spans unless `OTEL_LOG_USER_PROMPTS` / `OTEL_LOG_TOOL_DETAILS` / `OTEL_LOG_TOOL_CONTENT` are set.
+
+So to also get Claude's own spans in the issue trace, add `CLAUDE_CODE_ENABLE_TELEMETRY=1`, `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`, `OTEL_TRACES_EXPORTER=otlp` and the endpoint to `worker.env`; start-worker already sets `TRACEPARENT`. Not verified against a live run here.
+
+### Local collector
+
+[`otel/`](otel/) holds an [otelcol-contrib](https://github.com/open-telemetry/opentelemetry-collector-releases/releases) config (OTLP/HTTP on `127.0.0.1:4318` → `~/.cambium/otel/{traces,metrics}.jsonl` + Jaeger) and a launchd agent, `com.oakgreencc.otelcol`. Nothing here loads it.
+
+```sh
+# 1. otelcol-contrib on PATH (darwin_arm64 release tarball; or darwin_amd64)
+V=0.x.y   # latest from the releases page
+curl -fsSLO https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$V/otelcol-contrib_${V}_darwin_arm64.tar.gz
+tar -xzf otelcol-contrib_${V}_darwin_arm64.tar.gz otelcol-contrib && mv otelcol-contrib /opt/homebrew/bin/
+
+# 2. config + agent
+mkdir -p ~/.cambium/otel
+cp otel/otelcol.yaml ~/.cambium/otel/otelcol.yaml
+otelcol-contrib validate --config ~/.cambium/otel/otelcol.yaml
+cp otel/com.oakgreencc.otelcol.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.oakgreencc.otelcol.plist
+
+# 3. Jaeger UI on :16686, OTLP/gRPC on 14317 (its 4318 would clash with the collector)
+docker run -d --name jaeger -p 16686:16686 -p 14317:4317 jaegertracing/jaeger:latest
+
+# 4. point cambium (and mycelium) at it, e.g. in the cambium launchd plist's environment
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 OTEL_EXPORTER_OTLP_TIMEOUT=2000
+```
+
+Without Jaeger running the collector still writes the files; the Jaeger exporter just logs failures. Stop it with `launchctl bootout gui/$(id -u)/com.oakgreencc.otelcol`.
+
+**AWS** is a collector-config change only: [`otel/otelcol-aws.yaml`](otel/otelcol-aws.yaml) keeps the same receiver and sends traces to X-Ray's OTLP endpoint (`https://xray.<region>.amazonaws.com/v1/traces`, `otlphttp` + `sigv4auth` with `service: xray`; needs X-Ray Transaction Search enabled) and metrics to Amazon Managed Service for Prometheus (`prometheusremotewrite` + `sigv4auth` with `service: aps`). Credentials come from the default AWS chain of the collector's process. cambium's env stays `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318`.
 
 ## Lessons from the old Clock
 

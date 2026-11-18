@@ -1,0 +1,50 @@
+# Local collector for cambium (and mycelium): OTLP/HTTP in on :4318,
+# traces and metrics out to JSON-lines files, traces also to a local Jaeger.
+# See ../README.md#tracing for install and the AWS variant (otelcol-aws.yaml).
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+
+processors:
+  batch: {}
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+
+exporters:
+  file/traces:
+    path: ${env:HOME}/.cambium/otel/traces.jsonl
+    rotation:
+      max_megabytes: 50
+      max_backups: 5
+  file/metrics:
+    path: ${env:HOME}/.cambium/otel/metrics.jsonl
+    rotation:
+      max_megabytes: 50
+      max_backups: 5
+  # Jaeger takes OTLP natively. Its own OTLP/HTTP port (4318) would clash with
+  # this collector, so run it with OTLP/gRPC published on 14317 (see README).
+  otlp/jaeger:
+    endpoint: 127.0.0.1:14317
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: false
+    sending_queue:
+      enabled: true
+
+service:
+  telemetry:
+    logs:
+      level: warn
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [file/traces, otlp/jaeger]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [file/metrics]

@@ -48,7 +48,8 @@ export function otlpConfigured(env) {
 }
 
 /**
- * A tracer for `service.name=mycelium`. Without an OTLP endpoint in `env` (and
+ * A tracer for `service.name=mycelium` (or `serviceName`, so cambium shares
+ * this setup). Without an OTLP endpoint in `env` (and
  * no `exporter` given) this is {@link NO_TRACING}: the SDK is never loaded.
  * The OTLP/HTTP exporter reads its endpoint, headers and timeout from the
  * standard `OTEL_EXPORTER_OTLP_*` variables; `OTEL_SERVICE_NAME` and
@@ -57,16 +58,17 @@ export function otlpConfigured(env) {
  * @param {{
  *   env?: Record<string, string | undefined>,
  *   exporter?: import('@opentelemetry/sdk-trace').SpanExporter,
+ *   serviceName?: string,
  * }} [opts]
  * @returns {Promise<Tracing>}
  */
-export async function createTracing({ env = process.env, exporter } = {}) {
+export async function createTracing({ env = process.env, exporter, serviceName = SERVICE_NAME } = {}) {
   if (!exporter && !otlpConfigured(env)) return NO_TRACING
   const [sdk, res] = await Promise.all([import('@opentelemetry/sdk-trace'), import('@opentelemetry/resources')])
   const out = exporter ?? new (await import('@opentelemetry/exporter-trace-otlp-http')).OTLPTraceExporter()
   const resource = res
     .defaultResource()
-    .merge(res.resourceFromAttributes({ 'service.name': SERVICE_NAME }))
+    .merge(res.resourceFromAttributes({ 'service.name': serviceName }))
     .merge(res.detectResources({ detectors: [res.envDetector] }))
   const provider = new sdk.TracerProvider({
     resource,
@@ -75,7 +77,7 @@ export async function createTracing({ env = process.env, exporter } = {}) {
   let down = false
   return {
     enabled: true,
-    tracer: provider.getTracer(SERVICE_NAME),
+    tracer: provider.getTracer(serviceName),
     flush: () => provider.forceFlush(),
     /** Flushes what is queued, then stops; safe to call twice. */
     shutdown: async () => {

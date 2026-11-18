@@ -1,0 +1,52 @@
+# AWS variant: the same OTLP/HTTP receiver; traces go to AWS X-Ray's OTLP
+# endpoint and metrics to Amazon Managed Service for Prometheus, both signed
+# with SigV4 from the default AWS credential chain. cambium itself does not
+# change: only the collector config does. Fill in REGION and WORKSPACE_ID.
+#
+# Prerequisites: X-Ray Transaction Search enabled in the account (the OTLP
+# endpoint requires it); an AMP workspace; credentials allowed
+# xray:PutTraceSegments (and the OTLP span ingest permission for Transaction
+# Search) plus aps:RemoteWrite on the workspace.
+extensions:
+  sigv4auth/xray:
+    region: REGION
+    service: xray
+  sigv4auth/aps:
+    region: REGION
+    service: aps
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+
+processors:
+  batch: {}
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+
+exporters:
+  otlphttp/xray:
+    traces_endpoint: https://xray.REGION.amazonaws.com/v1/traces
+    auth:
+      authenticator: sigv4auth/xray
+  prometheusremotewrite/amp:
+    endpoint: https://aps-workspaces.REGION.amazonaws.com/workspaces/WORKSPACE_ID/api/v1/remote_write
+    auth:
+      authenticator: sigv4auth/aps
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  extensions: [sigv4auth/xray, sigv4auth/aps]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/xray]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheusremotewrite/amp]
