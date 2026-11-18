@@ -19,6 +19,14 @@ export const QUEUES_QUERY = `query($owner: String!, $name: String!, $labels: [St
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }
     }
+    closed: pullRequests(states: CLOSED, first: 50, orderBy: { field: UPDATED_AT, direction: DESC }) {
+      nodes {
+        number title url headRefName closedAt
+        closingIssuesReferences(first: 5) {
+          nodes { number title url state createdAt updatedAt labels(first: 30) { nodes { name } } }
+        }
+      }
+    }
   }
 }`
 
@@ -33,7 +41,10 @@ export const queryVars = (/** @type {string} */ slug) => {
  * @typedef {{ repo: string, number: number, title: string, url: string, branch: string, draft: boolean,
  *   checks: string | null, inMergeQueue: boolean, autoMerge: boolean, closes: number[], updatedAt: string | null }} Pr
  * @typedef {{ intake: Item[], task: Item[], running: Item[], human: Item[], promote: Item[] }} Columns
- * @typedef {{ columns: Columns, prs: Pr[] }} Queues
+ * @typedef {Item & { pr: { number: number, title: string, url: string, branch: string, closedAt: string | null } }} Stranded
+ *   An open issue with no queue label whose `agent/*` PR was closed unmerged and nothing open replaces it:
+ *   it left the Release Queue, and cambium will not pick it up again.
+ * @typedef {{ columns: Columns, prs: Pr[], stranded: Stranded[] }} Queues
  */
 
 export const emptyColumns = () => /** @type {Columns} */ ({ intake: [], task: [], running: [], human: [], promote: [] })
@@ -89,12 +100,55 @@ export function group(answer, repo) {
       closes: (p.closingIssuesReferences?.nodes ?? []).map((/** @type {any} */ i) => i.number),
       updatedAt: p.updatedAt ?? null,
     }))
-  return { columns, prs }
+  return { columns, prs, stranded: strandedOf(r.closed?.nodes ?? [], prs, repo) }
+}
+
+/**
+ * Closed unmerged `agent/*` PRs (newest first) → the open, unqueued issues they would have closed,
+ * once each, skipping any an open agent PR still closes.
+ *
+ * @param {any[]} closed
+ * @param {Pr[]} open
+ * @param {string} repo
+ * @returns {Stranded[]}
+ */
+export function strandedOf(closed, open, repo) {
+  const covered = new Set(open.flatMap((p) => p.closes))
+  /** @type {Stranded[]} */
+  const out = []
+  for (const p of closed) {
+    if (!p?.headRefName?.startsWith('agent/')) continue
+    for (const n of p.closingIssuesReferences?.nodes ?? []) {
+      if (!n || n.state !== 'OPEN' || covered.has(n.number)) continue
+      const labels = (n.labels?.nodes ?? []).map((/** @type {any} */ l) => l.name)
+      if (columnOf(labels)) continue
+      covered.add(n.number)
+      out.push({
+        repo,
+        number: n.number,
+        title: n.title ?? '',
+        url: n.url ?? `https://github.com/${repo}/issues/${n.number}`,
+        createdAt: n.createdAt ?? null,
+        updatedAt: n.updatedAt ?? null,
+        labels,
+        why: null,
+        priority: labels.find((/** @type {string} */ l) => l.startsWith('priority:'))?.slice(9) ?? null,
+        pr: {
+          number: p.number,
+          title: p.title ?? '',
+          url: p.url ?? `https://github.com/${repo}/pull/${p.number}`,
+          branch: p.headRefName,
+          closedAt: p.closedAt ?? null,
+        },
+      })
+    }
+  }
+  return out
 }
 
 /**
  * @typedef {{ slug: string, ok: boolean, error: string | null, fetchedAt: string | null } & Queues} RepoQueues
- * @typedef {{ repos: { slug: string, ok: boolean, error: string | null, fetchedAt: string | null }[], columns: Columns, prs: Pr[], fetchedAt: string | null, cached: boolean }} QueueView
+ * @typedef {{ repos: { slug: string, ok: boolean, error: string | null, fetchedAt: string | null }[], columns: Columns, prs: Pr[], stranded: Stranded[], fetchedAt: string | null, cached: boolean }} QueueView
  */
 
 /**
@@ -114,6 +168,7 @@ export function combine(repos, cached = false) {
     repos: repos.map(({ slug, ok, error, fetchedAt }) => ({ slug, ok, error, fetchedAt })),
     columns,
     prs: repos.flatMap((r) => r.prs),
+    stranded: repos.flatMap((r) => r.stranded ?? []),
     fetchedAt: times[0] ?? null,
     cached,
   }

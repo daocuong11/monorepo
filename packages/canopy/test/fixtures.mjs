@@ -96,11 +96,36 @@ export function graphqlAnswer() {
             title: 'no checks yet',
             url: 'https://github.com/oakgreencc/monorepo/pull/22',
             headRefName: 'agent/issue-9',
+            closingIssuesReferences: { nodes: [{ number: 9 }] },
             isDraft: true,
             commits: { nodes: [{ commit: { statusCheckRollup: null } }] },
           },
         ],
       },
+      closed: {
+        nodes: [
+          closedPr(30, 'agent/issue-7', [stray(7, 'OPEN', ['priority:low']), stray(8, 'CLOSED', [])]),
+          closedPr(31, 'agent/issue-7-old', [stray(7, 'OPEN', [])]),
+          closedPr(32, 'agent/issue-2', [stray(2, 'OPEN', ['q:task'])]),
+          closedPr(33, 'agent/issue-9-old', [stray(9, 'OPEN', [])]),
+          closedPr(34, 'jl/abandoned', [stray(10, 'OPEN', [])]),
+        ],
+      },
     },
   }
 }
+
+/** An issue as a closed PR's `closingIssuesReferences` returns it. */
+const stray = (/** @type {number} */ number, /** @type {string} */ state, /** @type {string[]} */ labels) => ({
+  ...issue(number, labels),
+  state,
+})
+
+const closedPr = (/** @type {number} */ number, /** @type {string} */ headRefName, /** @type {any[]} */ issues) => ({
+  number,
+  title: `closed ${number}`,
+  url: `https://github.com/oakgreencc/monorepo/pull/${number}`,
+  headRefName,
+  closedAt: iso(T0 - number * 60_000),
+  closingIssuesReferences: { nodes: issues },
+})

@@ -15,7 +15,7 @@ Primary: a solo maintainer running cambium against their own repos. canopy sits 
 canopy is the window onto an autonomous loop. cambium runs headless Claude workers off GitHub label queues; canopy shows, on one local page, whether that loop is alive and what it is doing. Three jobs carry equal weight, and none may be buried to serve another:
 
 - **Health:** mode, last tick and its staleness, step results, workers against their caps and wall-clock limits.
-- **What needs me:** `q:human` items and their `why:*` reasons.
+- **What needs me:** `q:human` items and their `why:*` reasons, and issues stranded when their agent PR closed unmerged.
 - **Flow:** work moving `q:intake` → `q:task` → `running` → `q:promote`, beside the open `agent/*` PRs and their checks.
 
 Success is a glance that answers "is it healthy, does anything need me, is work moving" without reading.

@@ -45,7 +45,7 @@ export async function buildState({
   const slugs = reposFor(repos, heartbeat)
   const github = slugs.length
     ? await queues.get(slugs)
-    : { repos: [], columns: emptyColumns(), prs: [], fetchedAt: null, cached: false }
+    : { repos: [], columns: emptyColumns(), prs: [], stranded: [], fetchedAt: null, cached: false }
   return {
     now: new Date(now()).toISOString(),
     pollMs: POLL_MS,
