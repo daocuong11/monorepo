@@ -9,7 +9,15 @@ import { resolveConfig } from '../src/config.mjs'
 import { graftGitHub, normalize, SNAPSHOT_QUERY } from '../src/github.mjs'
 import { byPriorityThenAge, move } from '../src/labels.mjs'
 import { plist } from '../src/launchd.mjs'
-import { newMarker, parseMarker, renderMarker, withHistory } from '../src/marker.mjs'
+import {
+  effectivePosition,
+  enteringDecision,
+  graphVersionDecision,
+  newMarker,
+  parseMarker,
+  renderMarker,
+  withHistory,
+} from '../src/marker.mjs'
 import { releaseDue } from '../src/phases/release.mjs'
 import { prFor, taskExit } from '../src/phases/task.mjs'
 import { openStore } from '../src/store.mjs'
@@ -31,6 +39,122 @@ test('marker: round-trips through the comment, even with "-->" in a failure', ()
   assert.match(body, /\| failed \| a\\\|b c \|/)
   assert.equal(parseMarker('no marker here'), null)
   assert.equal(parseMarker('<!-- cambium:state {not json} -->'), null)
+})
+
+test('marker v2: the writer emits v2; v1 stages read back as task-graph nodes', () => {
+  const v1 = (/** @type {any} */ m) =>
+    `<!-- cambium:state ${JSON.stringify({ v: 1, phase: 'task', history: [], ...m })} -->`
+  const expected = {
+    queued: 'start-worker',
+    running: 'worker-running',
+    submitted: 'ci-running',
+    human: 'to-human',
+    done: 'close-out',
+  }
+  for (const [stage, node] of Object.entries(expected)) {
+    const m = parseMarker(v1({ stage, attempt: 2, start: '2026-11-16T00:00:00.000Z' }))
+    assert.equal(m?.v, 2)
+    assert.equal(m?.graph, 'task')
+    assert.equal(m?.node, node, stage)
+    assert.equal(m?.status, stage === 'done' ? 'done' : 'waiting')
+    assert.equal(m?.stage, stage, 'the stage tick still sees its stage')
+    assert.equal(m?.enteredAt, '2026-11-16T00:00:00.000Z')
+  }
+  const legacy = parseMarker(v1({ stage: 'running', attempt: 1 }))
+  assert.ok(legacy)
+  const body = renderMarker({ ...legacy, stage: 'submitted' })
+  assert.match(body, /"v":2/)
+  assert.match(body, /\*\*cambium\*\* · task · ci-running · attempt 1/)
+  assert.equal(parseMarker(body)?.node, 'ci-running')
+
+  const graphOwned = newMarker({ graph: 'release', graphVersion: 3, node: 'cut', status: 'entering' })
+  assert.equal(graphOwned.stage, undefined, 'a marker placed by node carries no stage')
+  assert.deepEqual(parseMarker(renderMarker(graphOwned)), graphOwned)
+  assert.match(renderMarker(graphOwned), /release · cut \(entering\)/)
+  assert.equal(parseMarker('<!-- cambium:state {"v":3} -->'), null, 'a newer marker is not misread')
+})
+
+test('marker v2: history keeps 20 entries with nodes, well under the 65,536-char comment limit', () => {
+  let m = newMarker({ stage: 'running', traceparent: `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01` })
+  for (let i = 0; i < 25; i++)
+    m = withHistory(m, {
+      at: new Date(Date.UTC(2026, 10, 16, 0, i)).toISOString(),
+      attempt: i + 1,
+      outcome: 'failed',
+      reason: `ci failed: ${'x'.repeat(300)}`,
+      pr: 1000 + i,
+      log: `/Users/someone/.cambium/logs/o-r-${i}.out.log`,
+      spanId: 'c'.repeat(16),
+    })
+  assert.equal(m.history.length, 20)
+  assert.equal(m.history[0].attempt, 6)
+  assert.equal(m.history[0].node, 'worker-running')
+  const body = renderMarker(m, { maxAttempts: 3 })
+  assert.ok(body.length < 65_536 / 2, `${body.length} chars`)
+  assert.deepEqual(parseMarker(body), m)
+})
+
+test('marker v2: the queue label beats the marker and restarts at the owning graph’s entry', () => {
+  const queues = {
+    'q:task': { graph: 'task', entryNode: 'start-worker' },
+    'q:human': { graph: 'task', entryNode: 'start-worker', nodes: ['to-human'] },
+    'q:release': { graph: 'release', entryNode: 'cut' },
+  }
+  const running = newMarker({ stage: 'running' })
+  assert.deepEqual(effectivePosition(['q:task', 'running'], running, queues), {
+    graph: 'task',
+    node: 'worker-running',
+    reset: false,
+  })
+  assert.deepEqual(effectivePosition(['q:release'], running, queues), { graph: 'release', node: 'cut', reset: true })
+  assert.deepEqual(effectivePosition(['q:human'], running, queues), {
+    graph: 'task',
+    node: 'start-worker',
+    reset: true,
+  })
+  assert.deepEqual(effectivePosition(['q:human'], newMarker({ stage: 'human' }), queues), {
+    graph: 'task',
+    node: 'to-human',
+    reset: false,
+  })
+  assert.deepEqual(effectivePosition(['q:task'], newMarker({ stage: 'done' }), queues), {
+    graph: 'task',
+    node: 'start-worker',
+    reset: true,
+  })
+  assert.deepEqual(effectivePosition(['q:release', 'bug'], null, queues), {
+    graph: 'release',
+    node: 'cut',
+    reset: false,
+  })
+  assert.deepEqual(effectivePosition(['bug'], running, queues), { graph: 'task', node: 'worker-running', reset: false })
+  assert.equal(effectivePosition(['bug'], null, queues), null)
+})
+
+test('marker v2: an old graph version keeps running while its node exists, else restarts with a note', () => {
+  const m = newMarker({ graph: 'task', graphVersion: 1, node: 'ci-running', attempt: 2 })
+  const at = '2026-11-17T00:00:00.000Z'
+  const same = { version: 1, nodes: ['start-worker'], entryNode: 'start-worker', at }
+  assert.deepEqual(graphVersionDecision(m, same), { action: 'keep' })
+  const kept = { version: 2, nodes: ['start-worker', 'ci-running'], entryNode: 'start-worker', at }
+  assert.deepEqual(graphVersionDecision(m, kept), { action: 'keep' })
+  const gone = graphVersionDecision(m, { version: 2, nodes: new Set(['start-worker']), entryNode: 'start-worker', at })
+  assert.equal(gone.action, 'restart')
+  if (gone.action !== 'restart') return
+  assert.equal(gone.node, 'start-worker')
+  assert.deepEqual(
+    { ...gone.note, reason: undefined },
+    { at, attempt: 2, node: 'ci-running', outcome: 'graph-changed', reason: undefined },
+  )
+  assert.match(String(gone.note.reason), /task v1 → v2: node ci-running no longer exists; restarting at start-worker/)
+})
+
+test('marker v2: entering with no tracked process recovers; anything else resumes', () => {
+  const entering = newMarker({ node: 'start-worker', status: 'entering', enteredAt: '2026-11-17T00:00:00.000Z' })
+  assert.equal(entering.status, 'entering')
+  assert.equal(enteringDecision(entering, false), 'recover')
+  assert.equal(enteringDecision(entering, true), 'resume')
+  assert.equal(enteringDecision(newMarker({ node: 'ci-running' }), false), 'resume')
 })
 
 test('labels: exactly one q:*, running only while leased, why:* only in the Human Queue', () => {
