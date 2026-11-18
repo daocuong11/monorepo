@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // @ts-check
 // `pnpm start`: the local stack from this checkout, one prefixed log stream, Ctrl-C stops what it started.
+// Dependencies are installed first (a no-op when current), so a fresh pull never starts against stale node_modules.
 // canopy always runs under `node --watch`; cambium unless its lock says one already runs; mycelium only when configured.
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -13,6 +14,15 @@ const tty = process.stdout.isTTY
 const tag = (/** @type {keyof typeof COLORS} */ name) =>
   tty ? `\x1b[${COLORS[name]}m${name.padEnd(8)}\x1b[0m ` : `${name.padEnd(8)} `
 const say = (/** @type {string} */ msg) => console.log(tag('start') + msg)
+
+const install = spawnSync('pnpm', ['install', '--frozen-lockfile', '--prefer-offline', '--reporter=silent'], {
+  cwd: root,
+  stdio: 'inherit',
+})
+if (install.status !== 0) {
+  say('pnpm install failed; fix it and run pnpm start again')
+  process.exit(install.status ?? 1)
+}
 
 /** @type {import('node:child_process').ChildProcess[]} */
 const children = []
