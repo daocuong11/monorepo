@@ -13,7 +13,9 @@ import { DatabaseSync } from 'node:sqlite'
  * @typedef {{
  *   repo: string, issue: number, phase: string, pid: number, worktree: string, branch: string,
  *   attempt: number, startedAt: number, host: string, stdout: string, stderr: string, killedReason: string | null,
+ *   traceparent: string | null,
  * }} Worker
+ *   `traceparent`: the span of the step that started it, when traced; its `claude.*` spans go under it on exit.
  */
 
 export const MODES = /** @type {const} */ (['running', 'paused', 'draining'])
@@ -22,7 +24,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS workers (
   repo TEXT NOT NULL, issue INTEGER NOT NULL, phase TEXT NOT NULL, pid INTEGER NOT NULL,
   worktree TEXT NOT NULL, branch TEXT NOT NULL, attempt INTEGER NOT NULL, started_at INTEGER NOT NULL,
-  host TEXT NOT NULL, stdout TEXT NOT NULL, stderr TEXT NOT NULL, killed_reason TEXT,
+  host TEXT NOT NULL, stdout TEXT NOT NULL, stderr TEXT NOT NULL, killed_reason TEXT, traceparent TEXT,
   PRIMARY KEY (repo, issue)
 );
 CREATE TABLE IF NOT EXISTS control (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -42,6 +44,7 @@ const toWorker = (r) => ({
   stdout: r.stdout,
   stderr: r.stderr,
   killedReason: r.killed_reason ?? null,
+  traceparent: r.traceparent ?? null,
 })
 
 /** @param {string} path a file, or `:memory:` */
@@ -50,6 +53,9 @@ export function openStore(path) {
   const db = new DatabaseSync(path)
   db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;')
   db.exec(SCHEMA)
+  // Databases from before `traceparent` existed.
+  const cols = /** @type {{ name: string }[]} */ (db.prepare('PRAGMA table_info(workers)').all())
+  if (!cols.some((c) => c.name === 'traceparent')) db.exec('ALTER TABLE workers ADD COLUMN traceparent TEXT')
   const get = (/** @type {string} */ key) =>
     /** @type {any} */ (db.prepare('SELECT value FROM control WHERE key = ?').get(key))?.value ?? null
   const set = (/** @type {string} */ key, /** @type {string} */ value) =>
@@ -65,12 +71,25 @@ export function openStore(path) {
       const r = db.prepare('SELECT * FROM workers WHERE repo = ? AND issue = ?').get(repo, issue)
       return r ? toWorker(r) : null
     },
-    /** @param {Omit<Worker, 'killedReason'>} w */
+    /** @param {Omit<Worker, 'killedReason' | 'traceparent'> & { traceparent?: string | null }} w */
     addWorker(w) {
       db.prepare(
-        `INSERT OR REPLACE INTO workers (repo, issue, phase, pid, worktree, branch, attempt, started_at, host, stdout, stderr, killed_reason)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-      ).run(w.repo, w.issue, w.phase, w.pid, w.worktree, w.branch, w.attempt, w.startedAt, w.host, w.stdout, w.stderr)
+        `INSERT OR REPLACE INTO workers (repo, issue, phase, pid, worktree, branch, attempt, started_at, host, stdout, stderr, killed_reason, traceparent)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+      ).run(
+        w.repo,
+        w.issue,
+        w.phase,
+        w.pid,
+        w.worktree,
+        w.branch,
+        w.attempt,
+        w.startedAt,
+        w.host,
+        w.stdout,
+        w.stderr,
+        w.traceparent ?? null,
+      )
     },
     /** @param {string} repo @param {number} issue @param {string} reason */
     markKilled(repo, issue, reason) {

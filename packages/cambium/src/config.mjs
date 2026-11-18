@@ -27,7 +27,7 @@ import { join, resolve } from 'node:path'
  *   paths: { home: string, db: string, heartbeat: string, logs: string },
  *   logs: { keepPerIssue: number, daemonMaxBytes: number },
  *   graft: { command: string, app: string | null, botLogin: string | null },
- *   worker: { command: string, args: string[], graftApp: string | null, fetch: boolean },
+ *   worker: { command: string, args: string[], graftApp: string | null, fetch: boolean, env: Record<string, string> },
  * }} Config
  */
 
@@ -56,7 +56,7 @@ export function defaults(home = DEFAULT_HOME) {
     },
     logs: { keepPerIssue: 20, daemonMaxBytes: 10 * 1024 * 1024 },
     graft: { command: 'graft', app: null, botLogin: null },
-    worker: { command: 'claude', args: [], graftApp: null, fetch: true },
+    worker: { command: 'claude', args: [], graftApp: null, fetch: true, env: {} },
   }
 }
 
@@ -103,6 +103,14 @@ export function resolveConfig(raw = {}) {
     if (!/^\d{2}:\d{2}$/.test(release.time)) throw new Error(`config: repo ${r.slug} release.time must be HH:MM`)
     return { slug: r.slug, path: untilde(r.path), baseBranch, release }
   })
+  const wenv = config.worker.env
+  if (
+    !wenv ||
+    typeof wenv !== 'object' ||
+    Array.isArray(wenv) ||
+    Object.values(wenv).some((v) => typeof v !== 'string')
+  )
+    throw new Error('config: worker.env must be an object of string values')
   if (config.engine !== 'legacy' && config.engine !== 'graph')
     throw new Error(`config: engine must be "legacy" or "graph", got ${JSON.stringify(config.engine)}`)
   return config

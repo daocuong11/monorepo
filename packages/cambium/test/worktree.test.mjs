@@ -373,6 +373,21 @@ test('a worker that cannot start is an error, not a phantom pid', async () => {
   await assert.rejects(bare.start(startSpec(config)), /could not start the worker/)
 })
 
+test('worker env: config worker.env, then the start spec env (TRACEPARENT) wins', async () => {
+  const config = resolveConfig({
+    repos: [{ slug: 'o/r', path: tmp() }],
+    paths: { home: tmp() },
+    worker: { env: { CLAUDE_CODE_ENABLE_TELEMETRY: '1', TRACEPARENT: 'from-config' } },
+  })
+  const { spawner, spawned } = spawnerWith({ config })
+  const tp = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01'
+  await spawner.start(startSpec(config, { env: { TRACEPARENT: tp } }))
+  assert.equal(spawned[0].opts.env.CLAUDE_CODE_ENABLE_TELEMETRY, '1')
+  assert.equal(spawned[0].opts.env.TRACEPARENT, tp)
+  assert.throws(() => resolveConfig({ worker: { env: { N: 1 } } }), /worker\.env must be an object of string values/)
+  assert.throws(() => resolveConfig({ worker: { env: ['x'] } }), /worker\.env/)
+})
+
 // ---- prepare
 
 test('the entry point: prepare, then become the worker; a failure exits 78 with the marker line', () => {

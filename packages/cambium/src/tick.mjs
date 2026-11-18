@@ -35,6 +35,7 @@ import { DISPATCH_NOT_BUILT, dispatchNotBuilt } from './phases/dispatch.mjs'
  *   dispatch?: import('./phases/dispatch.mjs').Dispatch,
  *   release?: import('./phases/release.mjs').Release,
  *   tickNumber?: number,
+ *   telemetry?: import('./tracing.mjs').Telemetry,
  *   daemonStartedAt?: number,
  *   pid?: number,
  * }} Deps

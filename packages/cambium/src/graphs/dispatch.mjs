@@ -14,6 +14,7 @@ import { iso, key, markerOf, MIN, setLabels, setMarker } from '../issue-state.mj
 import { move, Q, WHY } from '../labels.mjs'
 import { newMarker, withHistory } from '../marker.mjs'
 import { readTriage, TriageResult, triageComment, triagePrompt } from '../phases/dispatch.mjs'
+import { traceWorker } from '../tracing.mjs'
 import { task } from './task.mjs'
 
 /**
@@ -167,8 +168,8 @@ const startTriage = declare(
           phase: 'dispatch',
           maxTurns: caps.maxTurns,
           readOnly: true,
-          // TRACING (follow-up): as start-worker, the triage worker's env gets `TRACEPARENT: ctx.traceparent`
-          // (this node's cambium.node span, under the cambium.issue root that continues mycelium's intake span).
+          // This node's cambium.node span, so Claude Code's own spans (when worker.env turns them on) join the trace.
+          env: ctx.traceparent ? { TRACEPARENT: ctx.traceparent } : undefined,
           buildPrompt: (agentsMd) => triagePrompt({ repo: slug, baseBranch: repo.baseBranch, issue, queued, agentsMd }),
         })
       } catch (err) {
@@ -191,6 +192,7 @@ const startTriage = declare(
         host: config.host,
         stdout: s.stdout,
         stderr: s.stderr,
+        traceparent: ctx.traceparent ?? null,
       })
       ctx.log('info', `started triage worker pid ${s.pid} (attempt ${marker.attempt})`, {
         repo: slug,
@@ -241,8 +243,7 @@ const triaging = declare(
         ctx.log('info', 'triage worker gone; issue is closed or left q:intake', { repo: w.repo, issue: w.issue })
         return { ready: true, output: { exit: 'gone' } }
       }
-      // TRACING (follow-up): the worker has ended; emit its spans here with tracing.mjs
-      // `workerSpans(<w.stdout log>, { tracer, parent: <start-triage's traceparent> })`.
+      traceWorker(ctx, w)
       const read = w.killedReason ? { ok: false, error: w.killedReason } : readTriage(spawner.readLog(w.stdout), number)
       if (read.ok && 'result' in read)
         return { ready: true, output: { exit: 'triaged', result: read.result, log: w.stdout } }

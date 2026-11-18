@@ -19,13 +19,17 @@ import { iso, setLabels, setMarker } from '../issue-state.mjs'
 import { move, Q } from '../labels.mjs'
 import { effectivePosition, newMarker, withHistory } from '../marker.mjs'
 import { releaseDue } from '../phases/release.mjs'
+import { markerTrace, turnTracer } from '../tracing.mjs'
 
 /**
  * @typedef {import('../github.mjs').PromotionPr} PromotionPr
  * @typedef {import('../github.mjs').Release} Release
  * @typedef {import('../marker.mjs').Marker} Marker
- * @typedef {{ slug: string, repo: import('../config.mjs').Repo, release: Release, pr?: PromotionPr }} ReleaseSubject
- *   One repo's turn; `pr` is the promotion PR a `release-promote` turn is about.
+ * @typedef {{
+ *   slug: string, repo: import('../config.mjs').Repo, release: Release, pr?: PromotionPr, traceparent?: string | null,
+ * }} ReleaseSubject
+ *   One repo's turn; `pr` is the promotion PR a `release-promote` turn is about; `traceparent` the turn's trace
+ *   while it is traced (tracing.mjs `turnTracer`), which markers written in the turn take when they have none.
  * @typedef {import('../tick.mjs').Deps & { tick: import('../tick.mjs').Ctx, subject: ReleaseSubject }} ReleaseCtx
  * @typedef {{ queue: string | null, enter?: (input: any, ctx: ReleaseCtx) => Promise<void> }} Declared
  *   `queue`: the label a PR resting here carries. `enter`: the write that lands a PR on this wait.
@@ -248,7 +252,6 @@ const merge = declare(
      */
     run: async (input, ctx) => {
       const pr = prOf(ctx)
-      // TRACING (follow-up): a span per merge attempt here, parented on the PR marker's traceparent.
       try {
         await ctx.github.mergePull(ctx.subject.slug, input.pr)
       } catch (err) {
@@ -364,11 +367,21 @@ export const RELEASE_QUEUES = {
  * @param {{ node: string, input: unknown }} at
  */
 async function drive(graph, ctx, at) {
+  const { pr } = ctx.subject
+  // A promote turn is traced on its PR (the marker's trace); a prepare run is a root of its own, which the PR it
+  // opens or updates takes into its marker when that has none.
+  const traced = turnTracer(ctx.telemetry, ctx.subject, {
+    graph: graph.name,
+    graphVersion: graph.version,
+    repo: ctx.subject.slug,
+    issue: pr?.number,
+    ...markerTrace(pr?.stateComment?.marker),
+  })
   let pos = at
   for (;;) {
-    // TRACING (follow-up): pass tracing.mjs `advanceHooks` as `instrument` here, as the task graph will.
-    const r = await advance(graph, pos, ctx, { maxTransitions: 1 })
+    const r = await advance(graph, pos, ctx, { maxTransitions: 1, instrument: traced.instrument })
     if (r.error) throw r.error.cause instanceof Error ? r.error.cause : r.error
+    traced.sync()
     const t = r.transitions[0]
     const next = /** @type {(import('../graph/define.mjs').GraphNode & Declared) | undefined} */ (
       graph.nodes.find((n) => n.name === r.node)

@@ -80,7 +80,7 @@ A worker is `claude -p --output-format stream-json --verbose --max-turns <maxTur
 - in its own worktree, by the target repo's [worktree convention](#target-repo-convention);
 - behind the prepare step: `node src/prepare.mjs -- claude …` runs install-fresh, hydrate and the repo's `prepare` commands in the worktree, writing to the worker's stderr log, then becomes the worker. It runs in the detached process so a long install never blocks a tick;
 - detached, leading its own process group (a kill takes its children), stdin from the prompt file;
-- with `CAMBIUM_REPO`, `CAMBIUM_ISSUE`, `CAMBIUM_PHASE`, `CAMBIUM_BRANCH` set, and `GRAFT_APP=<worker.graftApp>` when configured;
+- with `CAMBIUM_REPO`, `CAMBIUM_ISSUE`, `CAMBIUM_PHASE`, `CAMBIUM_BRANCH` set, `GRAFT_APP=<worker.graftApp>` when configured, then `worker.env`, then `TRACEPARENT` (the starting node's span) when [tracing](#tracing) is on;
 - with its prompt, stdout and stderr at `<paths.logs>/<owner>__<name>/issue-<n>/a<attempt>-<stamp>.{prompt.md,out.log,err.log}`, keeping the newest `logs.keepPerIssue` runs per issue.
 
 The prompt states the four-point contract (task issue, `pnpm verify`, `graft publish <branch> … --closes <n>`, `graft ci wait`), the attempt, the existing PR if any (`graft advance` onto it), the last failure, the issue's history, the issue body, and the worktree's `AGENTS.md`.
@@ -111,9 +111,11 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
   },
   "logs": { "keepPerIssue": 20, "daemonMaxBytes": 10485760 },
   "graft": { "command": "graft", "app": null, "botLogin": null },
-  "worker": { "command": "claude", "args": [], "graftApp": null, "fetch": true }
+  "worker": { "command": "claude", "args": [], "graftApp": null, "fetch": true, "env": {} }
 }
 ```
+
+- `worker.env` is extra environment for every worker (string values only), e.g. Claude Code's own telemetry ([Tracing](#claude-codes-own-spans-under-the-worker)).
 
 - The daemon re-reads the file before every tick, so caps, limits, `tickSeconds`, `repos`, priority labels, `release` and `worker` take effect without a restart (logged as `config reloaded: <keys>`). `host`, `engine`, `paths`, `logs` and `graft` are baked in at start: a change to them logs `restart cambium to apply` once and is not applied. A file that does not load, or has no `repos`, keeps the running config and logs one warning until it is fixed.
 - `repos[].path` is a local clone; worktrees are added from it and `graft` runs in it.
@@ -452,6 +454,16 @@ Why not a shared package: cambium is published to npm, so it can only depend on 
 
 Node and wait spans carry `cambium.graph`, `cambium.graph.version`, `cambium.node`, `cambium.attempt`, `cambium.repo`, `cambium.issue.number`, `cambium.edge`, `cambium.outcome`.
 
+### What is traced
+
+With `engine: "graph"`, every graph run is traced: the `task` and `dispatch` graphs per issue and both release graphs (the legacy stage tick is not). [canopy](../canopy)'s Traces tab shows them from the local collector's file.
+
+- **Lifecycle.** `cambium start` and `cambium run` create the telemetry from their environment (a no-op without OTLP config), flush it after every tick and shut it down on exit.
+- **One trace per issue, across ticks.** Each turn (`drive`, `driveDispatch`, release `drive`) runs `advance` with `turnTracer`'s `instrument` (`advanceHooks` underneath). The first span of an issue starts its `cambium.issue` root, a child of mycelium's intake span when the body carries one; the marker written in that turn takes the root's traceparent (`setMarker` fills `traceparent` from the turn's subject when the marker has none), and every later tick parents on it. Requeues and later attempts stay in the trace, and the dispatch → task hand-off carries it, so one issue reads intake → triage → each task attempt → CI → close-out.
+- **Release.** A release-prepare run is a root of its own; the promotion PR it opens or refreshes takes that trace into its marker when it has none, and its release-promote turns (`merge`, `merging`) continue it, with `cambium.issue.number` the PR's number.
+- **Workers.** start-worker and start-triage start their worker with `TRACEPARENT` set to their own `cambium.node` span and record it on the worker row (`workers.traceparent` in SQLite; older databases gain the column on open). When the worker is found exited, its stdout log becomes `claude.*` spans under that span ([below](#worker-spans-from-stream-json)); a log that cannot be read is a warning, never a failed tick.
+- **Off is unchanged.** Without OTLP config there is no `instrument`, no `TRACEPARENT`, and markers keep `traceparent: null`; the legacy/graph differential test covers that the moves are identical.
+
 ```js
 import { advanceHooks, createTelemetry } from './tracing.mjs' // inside cambium
 
@@ -495,7 +507,40 @@ telemetry.workerSpans(stream, parent)   // same, with cambium's tracer
 - `claude.task`: each background task, `task_started` → `task_notification` (or `task_updated.patch.end_time`), under the tool that started it. These events have no timestamp, so their times are those of the latest timestamped event.
 - Malformed lines are counted (`malformed`) and skipped; `system/thinking_tokens`, `tool_progress`, hooks and rate-limit events are ignored.
 
-### Does `claude -p` export traces that honour `TRACEPARENT`?
+### Claude Code's own spans under the worker
+
+**`claude -p` honours `TRACEPARENT`: verified live** (Claude Code 2.1.327, 2026-11-18). A `claude -p` run with a Bash call, given `TRACEPARENT=00-<trace>-<span>-01` and the variables below, exported into `<trace>`:
+
+```
+<the TRACEPARENT span>
+└ claude_code.interaction        parent.source=env
+  ├ claude_code.llm_request      model, input/output/cache tokens, ttft_ms, stop_reason
+  ├ claude_code.tool             tool_name=Bash
+  │ ├ claude_code.tool.blocked_on_user
+  │ └ claude_code.tool.execution
+  └ claude_code.llm_request
+```
+
+Workers already get `TRACEPARENT`, so turning these on is config only:
+
+```jsonc
+"worker": {
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+    "OTEL_TRACES_EXPORTER": "otlp",
+    "OTEL_METRICS_EXPORTER": "none",
+    "OTEL_LOGS_EXPORTER": "none",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318"
+  }
+}
+```
+
+- They complement the stream-json spans rather than replace them: they carry per-request timing and tokens but no cost, and need telemetry on in the worker; `claude.session` carries the session's `claude.cost_usd` and works without it. With both on, a worker has `claude.*` and `claude_code.*` spans side by side under start-worker.
+- **Identity in spans.** Every `claude_code.*` span carries `user.email`, `user.account_uuid`, `user.account_id` and `organization.id`. Fine for the local collector file; mind it before exporting elsewhere (strip them in the collector with an `attributes` processor).
+
+### Does `claude -p` export traces that honour `TRACEPARENT`? (the docs)
 
 **Yes, opt-in and beta**; cambium does not depend on it (worker spans come from stream-json above). Per the [Claude Code monitoring docs](https://code.claude.com/docs/en/monitoring-usage) (checked with Claude Code 2.1.327; `claude --help` lists no telemetry flags, it is env-only):
 
@@ -504,7 +549,7 @@ telemetry.workerSpans(stream, parent)   // same, with cambium's tracer
 - Bash subprocesses it runs inherit a `TRACEPARENT` for the active tool span, so a `graft` call inside a worker could continue the trace.
 - Prompts and tool inputs are redacted from spans unless `OTEL_LOG_USER_PROMPTS` / `OTEL_LOG_TOOL_DETAILS` / `OTEL_LOG_TOOL_CONTENT` are set.
 
-So to also get Claude's own spans in the issue trace, add `CLAUDE_CODE_ENABLE_TELEMETRY=1`, `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`, `OTEL_TRACES_EXPORTER=otlp` and the endpoint to `worker.env`; start-worker already sets `TRACEPARENT`. Not verified against a live run here.
+Confirmed against a live run: see [Claude Code's own spans under the worker](#claude-codes-own-spans-under-the-worker).
 
 ### Local collector
 

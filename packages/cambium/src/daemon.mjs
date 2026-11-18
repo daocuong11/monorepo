@@ -134,6 +134,8 @@ export async function runDaemon(
     } catch (err) {
       deps.log('error', `tick ${n}: ${/** @type {Error} */ (err)?.message ?? err}`)
     }
+    // Every span is ended within its tick; export them now rather than when the batch fills.
+    await deps.telemetry?.flush().catch((err) => deps.log('warn', `telemetry flush: ${err?.message ?? err}`))
     if (once) break
     try {
       await wait(deps.config.tickSeconds * 1000, signal)

@@ -14,6 +14,7 @@ import { plist, plistPath } from './launchd.mjs'
 import { openStore } from './store.mjs'
 import { finish, newCtx, startTask } from './tick.mjs'
 import { runIssue } from './graph-engine.mjs'
+import { createTelemetry } from './tracing.mjs'
 
 export const VERSION = '0.0.0'
 
@@ -40,6 +41,24 @@ const flag = (argv, name) => {
 }
 /** @param {string[]} argv @param {string} name */
 const has = (argv, name) => argv.includes(name)
+
+/**
+ * Run `fn` with `deps.telemetry` set (from the OTEL_* vars in `io.env`, a no-op without them, unless the deps
+ * already carry one), shutting it down afterwards so queued spans are exported before the process exits.
+ *
+ * @template T
+ * @param {import('./tick.mjs').Deps} deps @param {IO} io @param {() => Promise<T>} fn
+ * @returns {Promise<T>}
+ */
+async function withTelemetry(deps, io, fn) {
+  const own = !deps.telemetry
+  if (own) deps.telemetry = await createTelemetry({ env: io.env })
+  try {
+    return await fn()
+  } finally {
+    if (own) await deps.telemetry?.shutdown().catch(() => {})
+  }
+}
 
 /**
  * @typedef {{
@@ -73,7 +92,9 @@ export async function main(argv, io) {
       if (!config.repos.length) return fail(io, `no repos in ${cfgPath}; see the README for the config file`)
       const deps = depsFor(config)
       acquireLock(deps.store, deps.procs, deps.pid ?? process.pid)
-      await runDaemon(deps, { signal: io.signal, once: has(rest, '--once'), reload: () => loadConfig(cfgPath) })
+      await withTelemetry(deps, io, () =>
+        runDaemon(deps, { signal: io.signal, once: has(rest, '--once'), reload: () => loadConfig(cfgPath) }),
+      )
       return 0
     }
     case 'status':
@@ -169,7 +190,9 @@ async function runOne(config, argv, io, depsFor) {
     )
   const deps = depsFor(config)
   if (config.engine === 'graph') {
-    const r = await runIssue(deps, { graph, slug, number: n, follow, out: io.out, sleep: io.sleep, signal: io.signal })
+    const r = await withTelemetry(deps, io, () =>
+      runIssue(deps, { graph, slug, number: n, follow, out: io.out, sleep: io.sleep, signal: io.signal }),
+    )
     return r.ok ? 0 : fail(io, /** @type {string} */ (r.error))
   }
   if (deps.store.worker(slug, n)) return fail(io, `${slug}#${n} already has a tracked worker`)

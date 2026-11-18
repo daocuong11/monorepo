@@ -290,6 +290,62 @@ export function advanceHooks(telemetry, base) {
   }
 }
 
+/**
+ * Tracing for one turn of a graph driver (graph-engine `drive`, dispatch-engine `driveDispatch`, release `drive`).
+ * Wraps {@link advanceHooks} and keeps `holder.traceparent` (the turn's subject) on the issue trace, so a marker
+ * written during the turn stores it (issue-state.mjs `setMarker`). Call `sync()` before writes made outside
+ * `advance` (a wait's `enter`). With telemetry off, or none, `instrument` is undefined and `advance` runs exactly
+ * as it does untraced.
+ *
+ * @param {Telemetry | undefined} telemetry
+ * @param {{ traceparent?: string | null }} holder
+ * @param {TraceInfo & { enteredAt?: string | null }} base as for {@link advanceHooks}
+ * @returns {{ instrument: import('./graph/advance.mjs').Instrument | undefined, sync: () => void }}
+ */
+export function turnTracer(telemetry, holder, base) {
+  if (!telemetry?.enabled) return { instrument: undefined, sync: () => {} }
+  const hooks = advanceHooks(telemetry, base)
+  const sync = () => {
+    if (hooks.traceparent) holder.traceparent = hooks.traceparent
+  }
+  return {
+    instrument: (visit, step) =>
+      hooks.instrument(visit, (extra) => {
+        sync()
+        return step(extra)
+      }),
+    sync,
+  }
+}
+
+/**
+ * The marker fields a turn's {@link turnTracer} starts from. No marker yet is a fresh issue: attempt 1, as
+ * marker.mjs `newMarker` has it.
+ * @param {{ traceparent?: string | null, enteredAt?: string | null, attempt?: number } | null | undefined} marker
+ */
+export const markerTrace = (marker) => ({
+  traceparent: marker?.traceparent ?? null,
+  enteredAt: marker?.enteredAt ?? null,
+  attempt: marker?.attempt ?? 1,
+})
+
+/**
+ * A finished worker's `claude.*` spans from its stream-json stdout log, under the step span that started it
+ * (`parent`, kept on the worker row). Never throws: tracing must not fail a tick.
+ *
+ * @param {{ telemetry?: Telemetry, spawner: { readLog(path: string): string },
+ *   log: (level: 'info' | 'warn' | 'error', msg: string, where?: { repo?: string, issue?: number }) => void }} ctx
+ * @param {{ repo: string, issue: number, stdout: string, traceparent?: string | null }} w
+ */
+export function traceWorker(ctx, w) {
+  if (!ctx.telemetry?.enabled || !w.traceparent) return
+  try {
+    ctx.telemetry.workerSpans(ctx.spawner.readLog(w.stdout), w.traceparent)
+  } catch (err) {
+    ctx.log('warn', `worker spans: ${/** @type {Error} */ (err)?.message ?? err}`, { repo: w.repo, issue: w.issue })
+  }
+}
+
 /** A node output's own `outcome` string when it has one, else `ok`. @param {unknown} output */
 const outcomeOf = (output) => {
   const o = /** @type {any} */ (output)?.outcome

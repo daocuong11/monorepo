@@ -24,6 +24,10 @@ export async function setLabels(deps, slug, issue, change) {
 
 /** @param {Writers} deps @param {string} slug @param {Issue} issue @param {import('./marker.mjs').Marker} marker */
 export async function setMarker(deps, slug, issue, marker) {
+  // A traced graph turn keeps its issue trace on the subject (tracing.mjs `turnTracer`); a marker without one
+  // takes it, so later ticks parent on the same trace. One that already has a trace keeps it.
+  const tp = /** @type {any} */ (deps).subject?.traceparent
+  if (tp && !marker.traceparent) marker = { ...marker, traceparent: tp }
   const maxAttempts = deps.config.phases[marker.phase]?.maxAttempts
   const id = await deps.github.writeState(
     slug,
