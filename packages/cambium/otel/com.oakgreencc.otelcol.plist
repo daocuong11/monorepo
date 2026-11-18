@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The local OpenTelemetry collector as a launchd user agent. Not loaded by
+  anything in this repo: copy it to ~/Library/LaunchAgents and bootstrap it
+  yourself (see ../README.md#tracing). It reads
+  ~/.cambium/otel/otelcol.yaml and logs to ~/.cambium/otel/otelcol.log.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.oakgreencc.otelcol</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>exec otelcol-contrib --config "$HOME/.cambium/otel/otelcol.yaml" &gt;&gt;"$HOME/.cambium/otel/otelcol.log" 2&gt;&amp;1</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

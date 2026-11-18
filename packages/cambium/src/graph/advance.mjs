@@ -9,6 +9,10 @@ import { check, END, GraphNodeError } from './define.mjs'
  * @typedef {'waiting' | 'end' | 'limit' | 'aborted' | 'error'} StopReason
  * @typedef {{ transitions: Transition[], reason: StopReason, node: string, input: unknown, error?: GraphNodeError }} Advanced
  *   `node`/`input` is where it stopped: the held wait, END with the last output, the next node to run, or the failed node.
+ * @typedef {{ node: string, kind: 'node' | 'wait', input: unknown }} Visit
+ * @typedef {(visit: Visit, step: (extraCtx?: Record<string, unknown>) => Promise<Transition | null>) => Promise<Transition | null>} Instrument
+ *   Wraps each node visit (tracing). `step` runs the node (or poll) and picks the edge: a Transition, or null for a
+ *   wait that is not ready; it throws on a node error. `extraCtx` is merged into the node's ctx. Return what `step` returned.
  */
 
 /** @param {unknown} err @param {string} node @param {'run' | 'poll' | 'edge'} phase */
@@ -37,7 +41,7 @@ async function call(node, phase, fn) {
  * @param {import('./define.mjs').Graph} graph
  * @param {Position} at
  * @param {Record<string, unknown>} [ctx]
- * @param {{ maxTransitions?: number, signal?: AbortSignal }} [opts]
+ * @param {{ maxTransitions?: number, signal?: AbortSignal, instrument?: Instrument }} [opts]
  * @returns {Promise<Advanced>}
  */
 export async function advance(graph, at, ctx = {}, opts = {}) {
@@ -56,22 +60,29 @@ export async function advance(graph, at, ctx = {}, opts = {}) {
     if (transitions.length >= maxTransitions) return stop('limit')
     const node = byName.get(name)
     if (!node) return stop('error', new GraphNodeError(name, 'run', 'no such node in the graph'))
-    try {
+    /** @type {(extraCtx?: Record<string, unknown>) => Promise<Transition | null>} */
+    const step = async (extraCtx) => {
+      const c = extraCtx ? { ...nodeCtx, ...extraCtx } : nodeCtx
       const valid = await check(node.input, input, name, 'input')
       let output
       if (node.kind === 'wait') {
-        const polled = await call(name, 'poll', () => node.poll(valid, nodeCtx))
+        const polled = await call(name, 'poll', () => node.poll(valid, c))
         if (typeof polled?.ready !== 'boolean')
           throw new GraphNodeError(name, 'poll', 'poll must return { ready: false } or { ready: true, output }')
-        if (!polled.ready) return stop('waiting')
+        if (!polled.ready) return null
         output = await check(node.output, polled.output, name, 'output')
       } else {
-        output = await check(node.output, await call(name, 'run', () => node.run(valid, nodeCtx)), name, 'output')
+        output = await check(node.output, await call(name, 'run', () => node.run(valid, c)), name, 'output')
       }
       const { edge, to, next } = pick(graph, name, output, ctx.subject)
-      transitions.push({ from: name, to, edge, input, output, next })
-      name = to
-      input = next
+      return { from: name, to, edge, input, output, next }
+    }
+    try {
+      const t = opts.instrument ? await opts.instrument({ node: name, kind: node.kind, input }, step) : await step()
+      if (!t) return stop('waiting')
+      transitions.push(t)
+      name = t.to
+      input = t.next
     } catch (err) {
       return stop('error', asNodeError(err, name, 'edge'))
     }
