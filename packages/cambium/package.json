@@ -24,6 +24,10 @@
   "bin": {
     "cambium": "bin/cambium.mjs"
   },
+  "exports": {
+    "./graph": "./src/graph/index.mjs",
+    "./package.json": "./package.json"
+  },
   "files": [
     "bin/",
     "src/"
@@ -41,5 +45,8 @@
   },
   "nx": {
     "name": "cambium"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
   }
 }

@@ -4,7 +4,7 @@ The scheduler daemon. Every tick it reads the `q:*` queues from GitHub, starts h
 
 This is the **Task phase** MVP. Dispatch and the daily Release run are seams (see [Follow-ups](#follow-ups)).
 
-Zero runtime dependencies, Node ≥ 22.13 (`node:sqlite`). GitHub access goes through [`graft`](../graft), which must be on `PATH`.
+One runtime dependency (`zod`, for the [graph module](#graph-module-preview)), Node ≥ 22.13 (`node:sqlite`). GitHub access goes through [`graft`](../graft), which must be on `PATH`.
 
 ## Quick start
 
@@ -217,6 +217,47 @@ Written at the end of every tick to `paths.heartbeat` (default `~/.cambium/state
 ```
 
 The mode lives in the SQLite file (`paths.db`, table `control`), so `cambium status --json` returns `{ "mode", "heartbeat" }` even when the daemon is down. The daemon's own log is `<paths.logs>/cambium.log` (one `.1` kept); launchd's stderr goes to `<paths.logs>/cambium.launchd.err.log`.
+
+## Graph module (preview)
+
+`@oakgreencc/cambium/graph` is the start of typed workflows: nodes with schemas, edges as data, and a loop that advances a position through them. Nothing in the tick uses it yet.
+
+```js
+import { z } from 'zod'
+import { advance, defineGraph, defineNode, defineWait, END, toMermaid } from '@oakgreencc/cambium/graph'
+
+const Pr = z.object({ pr: z.number() })
+const open = defineNode({
+  name: 'open-pr',
+  input: z.object({ issue: z.number() }),
+  output: Pr,
+  run: async (i, ctx) => ({ pr: 1 }),
+})
+const ci = defineWait({
+  name: 'ci',
+  input: Pr,
+  output: z.object({ pr: z.number(), green: z.boolean() }),
+  poll: async ({ pr }, ctx) => (done ? { ready: true, output: { pr, green } } : { ready: false }),
+})
+const g = defineGraph({
+  name: 'demo',
+  version: 1,
+  entry: { queue: 'q:task', node: 'open-pr' },
+  nodes: [open, ci],
+  edges: [
+    ['open-pr', 'ci'],
+    ['ci', END, (out) => out.green],
+    ['ci', 'open-pr', null, (out) => ({ issue: out.pr })],
+  ],
+})
+const { transitions, reason, node, input } = await advance(g, { node: 'open-pr', input: { issue: 7 } }, ctx)
+```
+
+- **Nodes.** `defineNode({ name, input, output, run })` and `defineWait({ name, input, output, poll })`; `poll` returns `{ ready: false }` or `{ ready: true, output }`. `input`/`output` are any [Standard Schema](https://standardschema.dev) (zod v4 here). Input is validated before `run`/`poll` and output after; a failure is a `GraphNodeError` naming the node, the phase and the schema issues.
+- **Edges** are `[from, to, when?, map?]`, tried in order; the first whose `when(output, subject)` is true (or that has none) wins. `map(output, subject)` builds `to`'s input and defaults to identity. `to` may be `END`; a node with no outgoing edges also ends the graph.
+- **`validateGraph(graph)`** returns every problem as a string (`defineGraph` throws on any): unknown edge endpoints, nodes unreachable from `entry.node`, a node with outgoing edges whose last edge is conditional (no fallback), duplicate names, a non-integer `version`.
+- **`advance(graph, { node, input }, ctx, { maxTransitions = 8, signal })`** runs step nodes and ready waits and returns `{ transitions, reason, node, input, error? }`: `reason` is `waiting` (a wait that is not ready), `end`, `limit`, `aborted` (`signal`, or `ctx.signal`, checked before each node) or `error`; `node`/`input` is where it stopped. Each transition is `{ from, to, edge, input, output, next }`. `ctx` is passed to `run`/`poll` untouched apart from `ctx.signal`; edges see `ctx.subject`.
+- **`toMermaid(graph)`** renders a flowchart: boxes for steps, hexagons for waits, conditional edges labelled with `when`'s function name.
 
 ## Lessons from the old Clock
 
