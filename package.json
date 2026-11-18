@@ -8,6 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "start": "node scripts/start.mjs",
     "verify": "nx run-many -t lint test",
     "verify:affected": "nx affected -t lint test",
     "format": "biome format --write ."

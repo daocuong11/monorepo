@@ -8,6 +8,7 @@ Tooling for any software project: graft (agent writes to GitHub), cambium (the s
 
 ```sh
 pnpm install
+pnpm start           # the stack from source: canopy (restarts on edits), cambium unless one already runs, mycelium if configured
 pnpm verify          # lint + test, every project, from the Nx cache when unchanged
 ```
 
