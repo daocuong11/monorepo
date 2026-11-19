@@ -18,6 +18,7 @@ const TEXT_MAX = 50_000
  *   openIntents: () => Promise<Intent[]>,
  *   createIssue: (issue: { title: string, body: string, labels: string[] }) => Promise<{ number: number, html_url?: string }>,
  *   comment: (number: number, body: string) => Promise<{ html_url?: string }>,
+ *   issuesSince?: (since: string) => Promise<import('./notify.mjs').Issue[]>,
  * }} GithubClient
  * @typedef {{ source: string, externalId: string, fingerprint: string }} Origin
  * @typedef {Origin & ({ action: 'create', title: string, body: string, labels: string[] }
