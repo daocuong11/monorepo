@@ -1,7 +1,13 @@
 // @ts-check
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
+import { envFilePath, withEnvFile } from './envfile.mjs'
 import { graftClient } from './github.mjs'
 import { createIntake } from './intake.mjs'
+import { logPath, plist, plistPath } from './launchd.mjs'
 import { BACKFILL_HOURS, SOURCES, pass, runLoop, sourceFromEnv } from './runner.mjs'
 import { defaultStatePath, fileState, memoryState } from './state.mjs'
 import { createTracing, NO_TRACING } from './telemetry.mjs'
@@ -10,13 +16,15 @@ export const HELP = `mycelium — intake connectors: external events become q:in
 
   mycelium poll <source> [--dry-run]   one pass over one source (${SOURCES.join(', ')})
   mycelium run [--dry-run]             every configured source, each on its own interval
+  mycelium install [--dry-run]         write the launchd agent for \`run\` (start it: oakgreen start mycelium)
 
 Flags:
   --dry-run          print envelopes and the issue actions; no writes, no cursor moves
   --repo <o/r>       target repository (else $MYCELIUM_REPO)
   --state <file>     cursor file (else $MYCELIUM_STATE, else $XDG_STATE_HOME/mycelium/state.json)
 
-Credentials and settings come from the environment; see the README. Spans export over
+Credentials and settings come from the environment over $MYCELIUM_ENV (default ~/.mycelium/env),
+a KEY=value file with the same keys; see the README. Spans export over
 OTLP/HTTP when OTEL_EXPORTER_OTLP_ENDPOINT is set; --dry-run never exports.`
 
 /** @type {import('./intake.mjs').GithubClient} */
@@ -42,11 +50,13 @@ const offline = {
  *   signal?: AbortSignal,
  *   out?: (line: string) => void,
  *   err?: (line: string) => void,
+ *   home?: string,
+ *   write?: (path: string, text: string) => void,
  * }} [deps]
  */
 export async function main(argv, deps = {}) {
   const {
-    env = process.env,
+    env = withEnvFile(process.env).env,
     fetch = /** @type {any} */ (globalThis.fetch),
     signal,
     sleep = (ms) =>
@@ -81,6 +91,7 @@ export async function main(argv, deps = {}) {
     return verb || values.help ? 0 : 1
   }
   const dryRun = values['dry-run']
+  if (verb === 'install') return install(env, dryRun, deps, out)
   const repo = values.repo ?? env.MYCELIUM_REPO
   if (!repo && !deps.github && !dryRun) throw new Error('no repository: pass --repo <owner/name> or set MYCELIUM_REPO')
   const github = deps.github ?? (repo ? graftClient({ repo }) : offline)
@@ -114,7 +125,8 @@ export async function main(argv, deps = {}) {
         }
       }
       if (sources.length === 0) throw new Error('no source is configured')
-      await runLoop(sources, { ...ctx, now, sleep, signal, report: err })
+      const stamp = (/** @type {string} */ l) => err(`${new Date(now()).toISOString()} ${l}`)
+      await runLoop(sources, { ...ctx, now, sleep, signal, report: stamp })
       return 0
     }
     throw new Error(`unknown verb '${verb}'\n\n${HELP}`)
@@ -123,4 +135,47 @@ export async function main(argv, deps = {}) {
     // trouble is reported, never the reason a command fails.
     await tracing.shutdown().catch((e) => err(`tracing: span export failed: ${e?.message || e?.code || e}`))
   }
+}
+
+/**
+ * Write the launchd agent. Refused when no source is configured: KeepAlive would restart a process that exits at
+ * once, every ThrottleInterval, forever.
+ *
+ * @param {Record<string, string | undefined>} env @param {boolean} dryRun
+ * @param {{ home?: string, write?: (path: string, text: string) => void }} deps @param {(l: string) => void} out
+ */
+function install(env, dryRun, deps, out) {
+  const home = deps.home ?? env.HOME ?? homedir()
+  const text = plist({
+    node: process.execPath,
+    bin: resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'mycelium.mjs'),
+    home,
+    path: env.PATH ?? '/usr/bin:/bin',
+    logFile: logPath(home),
+    envFile: env.MYCELIUM_ENV,
+  })
+  const target = plistPath(home)
+  if (dryRun) {
+    out(`# would write ${target}\n${text}`)
+    return 0
+  }
+  const configured = SOURCES.filter((n) => {
+    try {
+      return Boolean(sourceFromEnv(n, { env, fetch: /** @type {any} */ (null), sleep: async () => {} }))
+    } catch {
+      return false
+    }
+  })
+  if (!configured.length) throw new Error(`no source is configured; write settings to ${envFilePath(env, home)} first`)
+  if (!env.MYCELIUM_REPO) throw new Error(`no repository: set MYCELIUM_REPO in ${envFilePath(env, home)}`)
+  const write =
+    deps.write ??
+    ((/** @type {string} */ p, /** @type {string} */ t) => {
+      mkdirSync(dirname(p), { recursive: true })
+      writeFileSync(p, t)
+    })
+  write(target, text)
+  if (!deps.write) mkdirSync(dirname(logPath(home)), { recursive: true })
+  out(`wrote ${target} (sources: ${configured.join(', ')})\nstart it: oakgreen start mycelium`)
+  return 0
 }

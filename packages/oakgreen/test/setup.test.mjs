@@ -41,7 +41,7 @@ test('creates the missing labels and a config skeleton, then is a no-op', async 
   assert.ok(gh.created.every((c) => c.repo === 'o/r' && /^[0-9a-f]{6}$/.test(c.label.color)))
   const config = JSON.parse(readFileSync(join(home, '.cambium/config.json'), 'utf8'))
   assert.deepEqual(config.repos, [{ slug: 'o/r', path: cwd, baseBranch: 'main' }])
-  assert.match(first.out, /Remaining human steps:[\s\S]*graft setup app[\s\S]*cambium install/)
+  assert.match(first.out, /Remaining human steps:[\s\S]*graft setup app[\s\S]*oakgreen start/)
 
   const before = readFileSync(join(home, '.cambium/config.json'), 'utf8')
   const second = await run(['setup'], ports)

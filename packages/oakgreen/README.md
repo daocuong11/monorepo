@@ -1,6 +1,6 @@
 # oakgreen
 
-One command for the stack: `oakgreen doctor` checks a machine and repository, `oakgreen setup` creates what is missing, `oakgreen restart`/`reload` cycle its services, and `oakgreen <tool>` runs any of the stack's tools.
+One command for the stack: `oakgreen doctor` checks a machine and repository, `oakgreen setup` creates what is missing, `oakgreen start`/`stop`/`restart`/`reload` run its services, and `oakgreen <tool>` runs any of the stack's tools.
 
 Zero third-party dependencies, Node ≥ 22.13 (cambium needs `node:sqlite`). GitHub access goes through [`graft api`](../graft).
 
@@ -11,8 +11,10 @@ npm install -g oakgreen
 oakgreen setup --repo owner/name    # labels + cambium config skeleton, then the human steps
 oakgreen doctor                     # one checklist, exit 1 if a required check fails
 oakgreen graft status               # any tool, args passed through
-oakgreen services                    # are otelcol and cambium running?
+oakgreen start                       # install (first time) and start every service that is configured
+oakgreen services                    # are otelcol, cambium and mycelium running?
 oakgreen restart                     # new processes, e.g. after npm updates
+oakgreen stop mycelium               # stopped until the next start, across logins too
 ```
 
 | Command                                                     | What                                                                                                           |
@@ -21,6 +23,8 @@ oakgreen restart                     # new processes, e.g. after npm updates
 | `oakgreen doctor [--json] [--repo o/n] [--config <file>]`   | The checklist below, `✓`/`✗` with a fix per failing line; `--json` prints `{ ok, checks }`.                    |
 | `oakgreen setup [--dry-run] [--repo o/n] [--config <file>]` | Idempotent bootstrap; `--dry-run` prints what it would do and writes nothing.                                  |
 | `oakgreen services [--json] [service...]`                   | The stack's launchd agents: installed, loaded, running, pid. See [Services](#services).                        |
+| `oakgreen start [service...]`                               | Install the agent if missing (its tool's `install`), enable it, start it. Default: every service.              |
+| `oakgreen stop [service...]`                                | Disable and unload each, in reverse order; it stays stopped across logins until `start`.                       |
 | `oakgreen restart [service...]`                             | A new process for each (all installed ones by default), on the same agent definition.                          |
 | `oakgreen reload [service...]`                              | Re-read each agent's plist too (its env, its program), then start it.                                          |
 
@@ -32,15 +36,18 @@ A tool runs from its installed package's `bin` (resolved from `oakgreen`'s own `
 
 The long-running parts of the stack are launchd user agents (macOS only for now), handled in this order:
 
-| Service   | Agent                    | What                                                                                 |
-| --------- | ------------------------ | ------------------------------------------------------------------------------------ |
-| `otelcol` | `com.oakgreencc.otelcol` | The local OpenTelemetry collector (cambium's `otel/`), whose trace file canopy reads |
-| `cambium` | `com.oakgreencc.cambium` | The scheduler daemon (`cambium install` writes the agent)                            |
+| Service    | Agent                     | What                                                                                 |
+| ---------- | ------------------------- | ------------------------------------------------------------------------------------ |
+| `otelcol`  | `com.oakgreencc.otelcol`  | The local OpenTelemetry collector (cambium's `otel/`), whose trace file canopy reads |
+| `cambium`  | `com.oakgreencc.cambium`  | The scheduler daemon (`cambium install` writes the agent)                            |
+| `mycelium` | `com.oakgreencc.mycelium` | The intake connectors, `mycelium run` (`mycelium install` writes the agent)          |
 
+- **`start`** leaves a running service alone. A missing agent is written by its tool (`cambium install`, `mycelium install`; otelcol has none, see cambium's [Tracing](../cambium/README.md#tracing)); with no names, one its tool refuses (no cambium config, no mycelium source) is skipped with the reason. Then `launchctl enable` and `bootstrap`, or `kickstart` when it is loaded but idle.
+- **`stop`** is `launchctl disable` then `bootout`, waiting for the process to exit. Disabled, launchd will not start it at login; `start`, `restart` and `reload` all enable it again.
 - **`restart`** sends SIGTERM (`launchctl kill TERM`) and waits for KeepAlive to bring up a new pid. cambium finishes its current tick first; its workers keep running and are re-adopted. Use it after `npm i -g` of a new version (or let `cambium update` do both, see cambium's [Self-update](../cambium/README.md#self-update)). An installed agent that is not loaded is loaded.
 - **`reload`** is for a changed plist (an added `OTEL_*` variable, a new Node path): `launchctl bootout`, then it **waits until launchd has let go of the old process** before `launchctl bootstrap` (retried a few times). Bootstrapping while cambium is still finishing a tick is what fails with `Bootstrap failed: 5: Input/output error`.
 - With no names, every service is handled and one that is not installed is skipped; a named one that is not installed fails. Each waits up to 3 minutes for its process; exit 1 if any did not come up.
-- canopy and mycelium are not services here: canopy runs in the foreground (`canopy`, or `pnpm start` in the monorepo), mycelium's `run` likewise.
+- canopy is not a service here: it runs in the foreground (`canopy`, or `pnpm start` in the monorepo).
 
 ## Doctor
 
@@ -53,7 +60,7 @@ The long-running parts of the stack are launchd user agents (macOS only for now)
 | `cambium status`      | `cambium status --json --config <file>` exits 0 and reports a heartbeat; not run without a config, since it would create its database                        | yes      |
 | `cambium heartbeat`   | the heartbeat's `tick.finishedAt` is within 3 × `daemon.tickSeconds` (file: `paths.heartbeat`, else `<paths.home>/state.json`, else `~/.cambium/state.json`) | yes      |
 | `queue labels <repo>` | `q:intake q:task q:human q:promote running why:budget why:reject why:approve` all exist                                                                      | yes      |
-| `mycelium <source>`   | per enabled source (any of its `MYCELIUM_*` vars set): every var it needs, plus `MYCELIUM_REPO`                                                              | yes      |
+| `mycelium <source>`   | per enabled source (any of its `MYCELIUM_*` vars set, in the environment or mycelium's env file): every var it needs, plus `MYCELIUM_REPO`                   | yes      |
 | `canker config`       | `canker.json` or `package.json` `"canker"` at the git root of the current directory                                                                          | no       |
 | `deadwood config`     | `deadwood.json` or `package.json` `"deadwood"` at the git root                                                                                               | no       |
 
@@ -63,7 +70,7 @@ The repositories checked are `--repo`, else every `repos[].slug` in the cambium 
 
 1. Writes a cambium config skeleton if the file is absent: one repo (`--repo`, else `$MYCELIUM_REPO`, else the `origin` remote; `OWNER/NAME` if none), its path the current git root. An existing file is never touched.
 2. Creates each missing queue label on each configured repository with `graft api POST /repos/<repo>/labels`.
-3. Prints the steps only a human can do: create and install the GitHub Apps (`graft setup app`), fill in `graft.app`/`graft.botLogin`/`worker.graftApp`, install the launchd agent (`cambium install`, then the `launchctl bootstrap` it prints), and optionally the mycelium env vars.
+3. Prints the steps only a human can do: create and install the GitHub Apps (`graft setup app`), fill in `graft.app`/`graft.botLogin`/`worker.graftApp`, start the services (`oakgreen start`), and optionally write mycelium's settings to `~/.mycelium/env`.
 
 Running it again creates nothing.
 
