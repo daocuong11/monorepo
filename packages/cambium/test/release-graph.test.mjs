@@ -9,6 +9,7 @@ import { toMermaid, validateGraph } from '../src/graph/index.mjs'
 import { lastRunKey, releasePrepare, releasePromote } from '../src/graphs/release.mjs'
 import { newMarker, parseMarker, renderMarker } from '../src/marker.mjs'
 import { tick } from '../src/tick.mjs'
+import { runIssue } from '../src/graph-engine.mjs'
 import { createTelemetry } from '../src/tracing.mjs'
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace'
 import { harness, SLUG, T0 } from './fakes.mjs'
@@ -391,6 +392,53 @@ test('promote: a refused merge is recorded and not retried on the same head', as
   await tick(h.deps)
   assert.equal(h.gh.calls.filter((c) => c.op === 'mergePull').length, 2)
   assert.equal(h.marker(47)?.node, 'merging')
+})
+
+test("run release-prepare: prepares now, whatever the clock, and counts as the day's run", async () => {
+  const h = promoHarness({ aheadBy: 1, merged: [{ number: 11, title: 'feat: a' }], release: { time: '23:59' } })
+  /** @type {string[]} */
+  const out = []
+  const r = await runIssue(h.deps, { graph: 'release-prepare', slug: SLUG, out: (l) => out.push(l) })
+  assert.deepEqual(r, { ok: true })
+  assert.deepEqual(h.pr(500).labels, ['q:promote'])
+  assert.equal(h.marker(500)?.node, 'prepare')
+  assert.equal(h.deps.store.get(lastRunKey(SLUG)), String(T0))
+  assert.deepEqual(out, [`${SLUG} release-prepare: prepare → end`])
+})
+
+test('run release-promote: merges the approved q:promote PR, reports one not ready, refuses a non-promotion PR', async () => {
+  const h = promoHarness({
+    prs: [
+      { number: 44, labels: ['q:promote'], approved: true },
+      { number: 45, labels: ['q:promote'] },
+    ],
+  })
+  /** @type {string[]} */
+  const out = []
+  const r = await runIssue(h.deps, { graph: 'release-promote', slug: SLUG, out: (l) => out.push(l) })
+  assert.deepEqual(r, { ok: true })
+  assert.deepEqual(
+    h.gh.calls.filter((c) => c.op === 'mergePull').map((c) => c.args),
+    [[SLUG, 44]],
+  )
+  assert.equal(h.marker(44)?.node, 'merging')
+  assert.deepEqual(out, ['PR #44: merging', 'PR #45: not ready (not approved, open)'])
+
+  h.pr(44).state = 'MERGED'
+  out.length = 0
+  assert.deepEqual(
+    await runIssue(h.deps, { graph: 'release-promote', slug: SLUG, number: 44, out: (l) => out.push(l) }),
+    {
+      ok: true,
+    },
+  )
+  assert.equal(h.marker(44)?.node, 'promoted')
+  assert.equal(out.length, 1)
+  assert.match(out[0], /^PR #44: promoted/)
+
+  const bad = await runIssue(h.deps, { graph: 'release-promote', slug: SLUG, number: 9, out: () => {} })
+  assert.equal(bad.ok, false)
+  assert.match(bad.error ?? '', /#9 is not a promotion PR/)
 })
 
 test('legacy engine keeps the release stub: no promotion PR is touched', async () => {

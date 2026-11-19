@@ -123,7 +123,10 @@ test('run task --issue N on the graph engine: foreground worker, then the task g
   assert.equal(h.spawner.started.length, 1)
 
   assert.equal(await main(['run', 'release', '--issue', '5'], { ...s.io, deps: () => h.deps }), 1)
-  assert.match(s.err.join('\n'), /unknown graph "release"; known: task, pr/)
+  assert.match(s.err.join('\n'), /unknown graph "release"; known: task, pr, dispatch, release-prepare, release-promote/)
+  // The release graphs take the repo; --issue is optional for them only.
+  assert.equal(await main(['run', 'dispatch'], { ...s.io, deps: () => h.deps }), 1)
+  assert.match(s.err.at(-1) ?? '', /usage: cambium run/)
 })
 
 test('run pr --issue N --follow polls every tickSeconds: merges the green PR, then closes out', async () => {
@@ -186,6 +189,9 @@ test('start with no repos refuses; unknown verbs refuse; help', async () => {
   assert.equal(await main(['frobnicate'], s.io), 1)
   assert.equal(await main(['help'], s.io), 0)
   assert.match(s.out.at(-1) ?? '', /cambium run task --issue/)
+  assert.match(s.out.at(-1) ?? '', /cambium run release-prepare \[--repo/)
+  assert.match(s.out.at(-1) ?? '', /cambium run release-promote \[--repo <owner\/name>\] \[--issue <pr>\]/)
+  assert.match(s.out.at(-1) ?? '', /run <task\|pr\|dispatch>/)
 })
 
 test('start --once: one tick through the injected deps, then out', async () => {
