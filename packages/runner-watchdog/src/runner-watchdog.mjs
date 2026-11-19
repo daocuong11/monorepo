@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // @ts-check
 /**
- * Free the self-hosted runner from a `Runner.Worker` wedged spawning a step.
+ * Free the self-hosted runner from a `Runner.Worker` wedged spawning a step,
+ * and restart a `Runner.Listener` that stopped polling for jobs.
  *
  * ---------------------------------------------------------------------------
  * WHY THIS EXISTS (sektorapp/monorepo#1739).
@@ -35,7 +36,7 @@
  * a hang, and is never signalled. With more than one `Runner.Worker` alive the
  * newest log cannot be attributed to a pid, so nothing is signalled and the
  * verdict says so. Only a process whose executable is named `Runner.Worker` can
- * be a target; the Listener is never signalled and never restarted (rung 3 does
+ * be a target; this path never signals or restarts the Listener (rung 3 does
  * not free this hang — the old worker outlived it on 2026-10-10).
  *
  * The kill is SIGTERM, then SIGKILL after `GRACE_MS` if the same pid is still a
@@ -52,6 +53,28 @@
  * build under Rosetta 2 is the cause of the wedge (sektorapp/monorepo#3107, #3446), and nothing
  * else would notice the runner drifting back to it. A log line only — no alert
  * channel — and an unreadable binary is silent.
+ *
+ * ---------------------------------------------------------------------------
+ * A LISTENER THAT STOPPED POLLING (2026-11-19).
+ *
+ * The Listener long-polls `broker.actions.githubusercontent.com` for jobs over
+ * one keep-alive TLS connection, held ESTABLISHED for as long as it is healthy.
+ * On 2026-11-19 at 17:27Z that poll died (`SocketException (89): Operation
+ * canceled`) as a job finished, the Listener logged its usual back-off, and
+ * never polled again: alive, refreshing its token hourly, and taking no job for
+ * ~5 h until restarted by hand. Its `_diag/Runner_*.log` cannot tell this from
+ * a healthy idle Listener — every job completion logs the same `Back off` /
+ * `Continue to get messages` pair followed by hours of token refreshes — so the
+ * signal is the socket, not the log.
+ *
+ * The Listener is unpolled when, on every tick for `UNPOLLED_MS`: it is the
+ * only `Runner.Listener`, no `Runner.Worker` is alive (a job owns the runner),
+ * and `lsof` shows it holding no ESTABLISHED TCP connection. Then the runner's
+ * launchd service — the label in `<runnerDir>/.service` — gets
+ * `launchctl kickstart -k`, at most once per `RESTART_COOLDOWN_MS`, so a Mac
+ * with no network restarts an idle Listener every half hour, not every minute.
+ * An `lsof` that fails is not evidence: nothing is restarted. The Listener is
+ * never signalled directly; launchd restarts it as `svc.sh` would.
  *
  * Every verdict other than "nothing to do" and every signal goes to
  * `<runnerDir>/runner-watchdog.log`, one line each, naming the worker pid, the
@@ -73,6 +96,7 @@ import {
   readFileSync,
   readSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
@@ -100,6 +124,13 @@ const TAIL_BYTES = 64 * 1024
 const LOG_MAX_BYTES = 256 * 1024
 
 const WORKER = 'Runner.Worker'
+const LISTENER = 'Runner.Listener'
+
+/** How long an idle Listener may hold no connection before it counts as unpolled. */
+export const UNPOLLED_MS = 5 * 60 * 1000
+
+/** The least time between two Listener restarts. */
+export const RESTART_COOLDOWN_MS = 30 * 60 * 1000
 const SPAWN = 'ProcessInvokerWrapper] Starting process:'
 const STARTED = 'Process started with process id'
 const INVOKER = 'ProcessInvokerWrapper]'
@@ -345,6 +376,124 @@ export async function watch(
   return { assessment: a, actions }
 }
 
+// --- the Listener ----------------------------------------------------------
+
+/** True when `command` is the Listener's executable. */
+export function isListener(command) {
+  return basename(String(command).trim()) === LISTENER
+}
+
+/**
+ * @typedef {{ verdict: 'none' | 'healthy' | 'ambiguous' | 'pending' | 'unpolled', reason: string,
+ *   pid?: number, sinceMs?: number }} ListenerAssessment
+ */
+
+/**
+ * Decide, from a snapshot, whether the Listener has stopped polling.
+ *
+ * @param {{
+ *   processes: Proc[],
+ *   connections: (pid: number) => number,
+ *   unpolledSince: { pid: number, sinceMs: number } | null,
+ *   now: number,
+ *   unpolledMs?: number,
+ * }} snapshot `connections` counts the pid's ESTABLISHED TCP connections, and
+ *   throws when it cannot tell. `unpolledSince` is the previous tick's record.
+ * @returns {ListenerAssessment}
+ */
+export function assessListener({ processes, connections, unpolledSince, now, unpolledMs = UNPOLLED_MS }) {
+  const listeners = processes.filter((p) => isListener(p.command))
+  if (listeners.length === 0) return { verdict: 'none', reason: 'no Runner.Listener' }
+  if (listeners.length > 1) {
+    return {
+      verdict: 'ambiguous',
+      reason: `${listeners.length} Runner.Listener processes (${listeners.map((l) => l.pid).join(',')}), touching none`,
+    }
+  }
+  const [{ pid }] = listeners
+  if (processes.some((p) => isWorker(p.command))) {
+    return { verdict: 'healthy', reason: 'a Runner.Worker is running a job', pid }
+  }
+  let open
+  try {
+    open = connections(pid)
+  } catch (/** @type {any} */ err) {
+    return { verdict: 'healthy', reason: `connections unreadable: ${err?.message ?? err}`, pid }
+  }
+  if (open > 0) return { verdict: 'healthy', reason: `${open} ESTABLISHED TCP connection(s)`, pid }
+  const sinceMs = unpolledSince?.pid === pid ? unpolledSince.sinceMs : now
+  const silentMs = now - sinceMs
+  if (silentMs < unpolledMs) {
+    return { verdict: 'pending', reason: `idle with no connection for ${Math.round(silentMs / 1000)}s`, pid, sinceMs }
+  }
+  return {
+    verdict: 'unpolled',
+    reason: `idle with no ESTABLISHED TCP connection for ${Math.round(silentMs / 1000)}s: not polling the broker`,
+    pid,
+    sinceMs,
+  }
+}
+
+/**
+ * Run one Listener check and, unless `dryRun`, restart an unpolled Listener.
+ *
+ * @param {{
+ *   listProcesses: () => Proc[],
+ *   connections: (pid: number) => number,
+ *   readUnpolled: () => { pid: number, sinceMs: number } | null,
+ *   writeUnpolled: (state: { pid: number, sinceMs: number } | null) => void,
+ *   lastRestartMs: () => number | null,
+ *   markRestarted: (ms: number) => void,
+ *   restart: () => string,
+ *   now: () => number,
+ *   log: (line: string) => void,
+ * }} ports `restart` restarts the runner service and returns what it ran.
+ * @param {{ dryRun?: boolean, unpolledMs?: number, cooldownMs?: number }} [opts]
+ */
+export function watchListener(
+  ports,
+  { dryRun = false, unpolledMs = UNPOLLED_MS, cooldownMs = RESTART_COOLDOWN_MS } = {},
+) {
+  const now = ports.now()
+  const iso = new Date(now).toISOString()
+  const previous = ports.readUnpolled()
+  const a = assessListener({
+    processes: ports.listProcesses(),
+    connections: ports.connections,
+    unpolledSince: previous,
+    now,
+    unpolledMs,
+  })
+  /** @type {string[]} */
+  const actions = []
+
+  if (a.verdict === 'ambiguous') ports.log(formatLogLine(iso, 'ambiguous', a))
+  if (a.verdict !== 'pending' && a.verdict !== 'unpolled') {
+    if (previous) ports.writeUnpolled(null)
+    return { assessment: a, actions }
+  }
+  const pid = /** @type {number} */ (a.pid)
+  const sinceMs = /** @type {number} */ (a.sinceMs)
+  if (previous?.pid !== pid || previous.sinceMs !== sinceMs) ports.writeUnpolled({ pid, sinceMs })
+  if (a.verdict === 'pending') return { assessment: a, actions }
+
+  const last = ports.lastRestartMs()
+  if (last !== null && now - last < cooldownMs) return { assessment: a, actions }
+
+  ports.log(formatLogLine(iso, 'unpolled', { pid, reason: `${a.reason}${dryRun ? ' (dry run)' : ''}` }))
+  if (dryRun) return { assessment: a, actions }
+  ports.markRestarted(now)
+  ports.writeUnpolled(null)
+  try {
+    const ran = ports.restart()
+    actions.push('restart')
+    ports.log(formatLogLine(iso, 'restarted', { pid, reason: ran }))
+  } catch (/** @type {any} */ err) {
+    ports.log(formatLogLine(iso, 'error', { pid, reason: `restart failed: ${err?.message ?? err}` }))
+  }
+  return { assessment: a, actions }
+}
+
 // --- real ports ------------------------------------------------------------
 
 /** `ps -axo pid=,ppid=,comm=` rows. `comm` may be a path containing spaces. */
@@ -378,6 +527,41 @@ export function newestWorkerLog(diagDir) {
     closeSync(fd)
   }
   return { path: best.path, mtimeMs: best.mtimeMs, tail: buf.toString('utf8') }
+}
+
+/**
+ * ESTABLISHED TCP connections of `pid`, from `lsof -nP -a -p <pid> -iTCP
+ * -sTCP:ESTABLISHED -Fn` output: one `n<addr>` line per connection.
+ */
+export function countLsofConnections(text) {
+  return String(text)
+    .split('\n')
+    .filter((l) => l.startsWith('n')).length
+}
+
+/**
+ * Count `pid`'s ESTABLISHED TCP connections. `lsof` exits 1 with no output when
+ * there are none; any other failure throws, which is "cannot tell".
+ */
+export function establishedConnections(pid) {
+  try {
+    return countLsofConnections(
+      execFileSync('/usr/sbin/lsof', ['-nP', '-a', '-p', String(pid), '-iTCP', '-sTCP:ESTABLISHED', '-Fn'], {
+        encoding: 'utf8',
+        timeout: 10_000,
+      }),
+    )
+  } catch (/** @type {any} */ err) {
+    if (err?.status === 1 && !String(err.stdout ?? '').trim()) return 0
+    throw err
+  }
+}
+
+/** The runner service's launchd label, from `<runnerDir>/.service` (the plist path `svc.sh` wrote). */
+export function serviceLabel(serviceFileText) {
+  const label = basename(String(serviceFileText).trim()).replace(/\.plist$/, '')
+  if (!label) throw new Error('empty .service file')
+  return label
 }
 
 /** `wedge-<iso>-<pid>.sample.txt`, with the ISO's colons made filename-safe. */
@@ -442,7 +626,39 @@ async function main() {
     },
     { dryRun: argv.includes('--dry-run') },
   )
-  if (!quiet) console.log(`${assessment.verdict}: ${assessment.reason}`)
+  if (!quiet) console.log(`worker: ${assessment.verdict}: ${assessment.reason}`)
+
+  const unpolledPath = join(runnerDir, 'runner-watchdog.unpolled.json')
+  const restartedStamp = join(runnerDir, 'runner-watchdog.listener-restarted')
+  const listener = watchListener(
+    {
+      listProcesses: () => parsePs(execFileSync('ps', ['-axo', 'pid=,ppid=,comm='], { encoding: 'utf8' })),
+      connections: establishedConnections,
+      readUnpolled: () => {
+        try {
+          return JSON.parse(readFileSync(unpolledPath, 'utf8'))
+        } catch {
+          return null
+        }
+      },
+      writeUnpolled: (state) => {
+        if (state) writeFileSync(unpolledPath, JSON.stringify(state))
+        else rmSync(unpolledPath, { force: true })
+      },
+      lastRestartMs: () => (existsSync(restartedStamp) ? statSync(restartedStamp).mtimeMs : null),
+      markRestarted: () => writeFileSync(restartedStamp, ''),
+      restart: () => {
+        const label = serviceLabel(readFileSync(join(runnerDir, '.service'), 'utf8'))
+        const target = `gui/${process.getuid?.() ?? ''}/${label}`
+        execFileSync('launchctl', ['kickstart', '-k', target], { encoding: 'utf8', timeout: 30_000 })
+        return `launchctl kickstart -k ${target}`
+      },
+      now: () => Date.now(),
+      log: (line) => appendLog(logPath, line, quiet),
+    },
+    { dryRun: argv.includes('--dry-run') },
+  )
+  if (!quiet) console.log(`listener: ${listener.assessment.verdict}: ${listener.assessment.reason}`)
   return 0
 }
 

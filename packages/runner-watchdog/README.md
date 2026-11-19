@@ -4,7 +4,9 @@ Private, unreleased. A launchd job for the self-hosted GitHub Actions runner Mac
 
 The runner's `Runner.Worker` sometimes hangs while spawning a step's bash: no child process, its newest `_diag/Worker_*.log` ends on a `Starting process:` block with no `Process started` after it. The runner takes one job at a time, so everything queues behind it until `timeout-minutes` + 5 fires (sektorapp/monorepo#1739).
 
-Once a minute this script checks for that wedge and, when every condition holds (single worker, no children, log ends on a spawn, log silent ≥ 5 min), samples the worker's stacks, then sends SIGTERM and, after 10 s, SIGKILL. The Listener is never touched. It also logs once a day if the worker binary is the x86_64 build, which runs under Rosetta 2 and causes the wedge (sektorapp/monorepo#3606).
+Once a minute this script checks for that wedge and, when every condition holds (single worker, no children, log ends on a spawn, log silent ≥ 5 min), samples the worker's stacks, then sends SIGTERM and, after 10 s, SIGKILL. It also logs once a day if the worker binary is the x86_64 build, which runs under Rosetta 2 and causes the wedge (sektorapp/monorepo#3606).
+
+It also catches a `Runner.Listener` that stopped polling for jobs (2026-11-19: the broker long-poll died with `SocketException (89)` as a job finished, and the Listener sat alive but idle for ~5 h). The `_diag/Runner_*.log` of that state is identical to a healthy idle Listener, so the check is the socket: a healthy Listener always holds an ESTABLISHED TCP connection to the broker. When the only Listener, with no Worker alive, holds none on every tick for 5 min, the runner service (label from `<runner>/.service`) gets `launchctl kickstart -k`, at most once per 30 min.
 
 Node ≥ 22 built-ins only. The runner install is `FACTORY_RUNNER_DIR`, default `~/SeKtor/actions-runner`.
 
@@ -32,7 +34,8 @@ rm ~/Library/LaunchAgents/com.oakgreencc.runner-watchdog.plist
 
 All under `$FACTORY_RUNNER_DIR`:
 
-- `runner-watchdog.log`: one line per verdict or signal (`wedged`, `ambiguous`, `captured`, `SIGTERM`, `freed`, `x86_64`, …). Quiet is normal; healthy ticks write nothing.
+- `runner-watchdog.log`: one line per verdict or signal (`wedged`, `ambiguous`, `captured`, `SIGTERM`, `freed`, `x86_64`, `unpolled`, `restarted`, …). Quiet is normal; healthy ticks write nothing.
+- `runner-watchdog.unpolled.json` / `runner-watchdog.listener-restarted`: when the idle Listener was first seen with no connection, and the last restart (its mtime).
 - `runner-watchdog.launchd.log`: stdout/stderr from launchd, for anything that stopped the script first (missing node, missing file).
 - `wedge-<iso>-<pid>.sample.txt`: the `sample` capture taken before each kill.
 
