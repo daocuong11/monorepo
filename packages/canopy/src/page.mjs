@@ -315,11 +315,13 @@ function spanDetail(sp) {
   if (a['cambium.node']) return [a['cambium.node'], a['cambium.edge'] ? '→ ' + a['cambium.edge'] : null, a['cambium.attempt'] != null ? 'attempt ' + a['cambium.attempt'] : null]
   if (a['claude.tool.name']) return [a['claude.tool.name'], a['claude.tool.command']]
   if (a['claude.task.description']) return [a['claude.task.description']]
+  if (a['claude.thinking'] || a['claude.text']) return [a['claude.turn.tools'] || null, preview(a['claude.thinking'] || a['claude.text'])]
   if (a['claude.model']) return [a['claude.model'], a['claude.cost_usd'] != null ? usd(a['claude.cost_usd']) : null]
   if (a['mycelium.source']) return [a['mycelium.source'], a['mycelium.action']]
   if (a['cambium.graph']) return [a['cambium.graph']]
   return []
 }
+const preview = (v) => { const t = String(v).replace(/\s+/g, ' ').trim(); return t.length > 120 ? t.slice(0, 119) + '…' : t }
 const showValue = (v) => (typeof v === 'string' ? v : JSON.stringify(v))
 let openSpans = new Set()
 
