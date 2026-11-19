@@ -15,6 +15,7 @@ oakgreen start                       # install (first time) and start every serv
 oakgreen services                    # are otelcol, cambium and mycelium running?
 oakgreen restart                     # new processes, e.g. after npm updates
 oakgreen stop mycelium               # stopped until the next start, across logins too
+oakgreen update                      # latest oakgreen and its tools, then restart what runs
 ```
 
 | Command                                                     | What                                                                                                           |
@@ -27,6 +28,7 @@ oakgreen stop mycelium               # stopped until the next start, across logi
 | `oakgreen stop [service...]`                                | Disable and unload each, in reverse order; it stays stopped across logins until `start`.                       |
 | `oakgreen restart [service...]`                             | A new process for each (all installed ones by default), on the same agent definition.                          |
 | `oakgreen reload [service...]`                              | Re-read each agent's plist too (its env, its program), then start it.                                          |
+| `oakgreen update [--check]`                                 | Install the latest oakgreen and its tools, restart running services. See [Update](#update).                    |
 
 A tool runs from its installed package's `bin` (resolved from `oakgreen`'s own `node_modules`) with the current Node; if the package is not installed, the bare name is looked up on `PATH`. A tool found in neither exits 127 with the install command.
 
@@ -48,6 +50,14 @@ The long-running parts of the stack are launchd user agents (macOS only for now)
 - **`reload`** is for a changed plist (an added `OTEL_*` variable, a new Node path): `launchctl bootout`, then it **waits until launchd has let go of the old process** before `launchctl bootstrap` (retried a few times). Bootstrapping while cambium is still finishing a tick is what fails with `Bootstrap failed: 5: Input/output error`.
 - With no names, every service is handled and one that is not installed is skipped; a named one that is not installed fails. Each waits up to 3 minutes for its process; exit 1 if any did not come up.
 - canopy is not a service here: it runs in the foreground (`canopy`, or `pnpm start` in the monorepo).
+
+## Update
+
+oakgreen depends on every tool, so updating it updates the stack. It updates itself only when it is a **global npm install** (`<prefix>/lib/node_modules/oakgreen`), into that same prefix, so `PATH` and the launchd agents' paths stay valid; a source checkout or `npm link` is refused with a hint. npm is the one next to the running Node, else `npm` on `PATH`; the version is the registry's `latest` dist-tag.
+
+- **`oakgreen update --check`** only reports: up to date, or `a → b available`.
+- **`oakgreen update`** runs `npm install --global --prefix <prefix> oakgreen@<latest>`, then (macOS) restarts each service that is running, as `oakgreen restart` does; a stopped one stays stopped. Exit 1 if the install or a restart fails.
+- cambium's own `cambium update` / `update.auto` cover a separately installed `@oakgreencc/cambium`.
 
 ## Doctor
 
