@@ -131,6 +131,25 @@ scenario('reconcile: a finished worker with an open PR → submitted, out of eve
   assert.equal(new Set(h.gh.calls.filter((c) => c.op === 'writeState').map((c) => c.args[2] ?? 'new')).size, 2)
 })
 
+scenario('reconcile: a PR found only by its branch gets Closes #n, so Watch can see it', async () => {
+  const h = harness({ issues: [task(9)] })
+  await tick(h.deps)
+  const w = /** @type {any} */ (h.deps.store.worker(SLUG, 9))
+  h.procs.live.delete(w.pid)
+  // A base other than the default branch: GitHub links no closing refs, and this body names none.
+  h.gh.addPr({ number: 90, closes: [], branch: w.branch })
+  await tick(h.deps)
+  assert.equal(h.gh.marker(9)?.pr, 90)
+  assert.deepEqual(
+    h.gh.calls.filter((c) => c.op === 'linkIssue').map((c) => c.args),
+    [[SLUG, 90, 9]],
+  )
+  // Now Watch pairs them: red CI on the PR requeues the issue.
+  Object.assign(h.gh.pr(90), { checks: 'FAILURE', headSha: 'red9' })
+  await tick(h.deps)
+  assert.equal(h.gh.marker(9)?.history.at(-1)?.outcome, 'ci-red')
+})
+
 scenario('lesson #4349: a dead worker without a result is requeued with attempt + 1 and the stderr tail', async () => {
   const h = harness({ issues: [task(8)], config: { phases: { task: { cap: 0 } } } })
   h.deps.store.addWorker({

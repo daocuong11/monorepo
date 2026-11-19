@@ -47,10 +47,12 @@ import { Q, QUEUE_LABELS } from './labels.mjs'
  *   editPull(slug: string, number: number, change: { title: string, body: string }): Promise<void>,
  *   closePull(slug: string, number: number, comment: string): Promise<void>,
  *   mergePull(slug: string, number: number): Promise<void>,
+ *   linkIssue(slug: string, pr: number, issue: number): Promise<void>,
  * }} GitHub
+ *   `linkIssue`: put `Closes #<issue>` at the top of the PR's body, so the PR names the issue it closes.
  */
 
-const PR_FIELDS = `number url headRefName state headRefOid isInMergeQueue
+const PR_FIELDS = `number url headRefName state headRefOid isInMergeQueue body
   headRef { id }
   autoMergeRequest { enabledAt }
   closingIssuesReferences(first: 5) { nodes { ...I } }
@@ -92,6 +94,26 @@ fragment P on PullRequest {
   labels(first: 30) { nodes { name } }
   comments(first: 100) { nodes { databaseId body author { login } } }
 }`
+
+/** GitHub's closing keywords before a same-repo `#n` (graft's closing-refs.mjs, without cross-repo refs). */
+const CLOSING = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s+#(\d+)\b/gi
+
+/**
+ * The issues a PR body says it closes. GitHub links these (`closingIssuesReferences`) only for a PR into the
+ * DEFAULT branch, so a repo whose agents target another base (sektorapp: `develop`) gets nothing from GitHub;
+ * cambium reads the body itself.
+ * @param {string | null | undefined} body @returns {number[]}
+ */
+export function bodyCloses(body) {
+  return [...new Set([...(body ?? '').matchAll(CLOSING)].map((m) => Number(m[1])))]
+}
+
+/** The issues `numbers`, by alias, for {@link addIssues}. @param {number[]} numbers */
+export const issuesQuery = (numbers) =>
+  `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${numbers
+    .map((n) => `i${n}: issueOrPullRequest(number: ${n}) { __typename ... on Issue { ...I } }`)
+    .join(' ')} } }
+${SNAPSHOT_QUERY.slice(SNAPSHOT_QUERY.indexOf('fragment I on Issue'), SNAPSHOT_QUERY.indexOf('fragment P on'))}`
 
 const FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'])
 
@@ -156,6 +178,38 @@ function normalizeRelease(repo, { from, to }, botLogin) {
   }
 }
 
+/** An issue node → {@link Issue}. @param {any} n @param {string | null} botLogin @returns {Issue} */
+function toIssue(n, botLogin) {
+  return {
+    number: n.number,
+    title: n.title ?? '',
+    url: n.url ?? '',
+    state: n.state,
+    createdAt: n.createdAt,
+    body: n.body ?? '',
+    labels: labelsOf(n),
+    stateComment: stateCommentOf(n, botLogin),
+  }
+}
+
+/** The PRs' closed issues the snapshot has not read. @param {Snapshot} snap @returns {number[]} */
+export const unreadCloses = (snap) => [...new Set(snap.prs.flatMap((p) => p.closes).filter((n) => !snap.issues.has(n)))]
+
+/**
+ * Add the answer to {@link issuesQuery} to the snapshot; a number that is not an issue (a PR, or gone) is dropped
+ * from every PR's `closes`.
+ * @param {Snapshot} snap @param {any} data @param {number[]} asked @param {string | null} [botLogin]
+ */
+export function addIssues(snap, data, asked, botLogin = null) {
+  const repo = (data?.data ?? data)?.repository ?? {}
+  for (const n of asked) {
+    const node = repo[`i${n}`]
+    if (node?.__typename === 'Issue') snap.issues.set(n, toIssue(node, botLogin))
+  }
+  for (const p of snap.prs) p.closes = p.closes.filter((n) => snap.issues.has(n))
+  return snap
+}
+
 /**
  * GraphQL `data` → {@link Snapshot}. Only `agent/*` PRs are kept.
  *
@@ -170,18 +224,7 @@ export function normalize(data, { botLogin = null, release = null } = {}) {
   /** @type {Map<number, Issue>} */
   const issues = new Map()
   const addIssue = (/** @type {any} */ n) => {
-    if (!issues.has(n.number)) {
-      issues.set(n.number, {
-        number: n.number,
-        title: n.title ?? '',
-        url: n.url ?? '',
-        state: n.state,
-        createdAt: n.createdAt,
-        body: n.body ?? '',
-        labels: labelsOf(n),
-        stateComment: stateCommentOf(n, botLogin),
-      })
-    }
+    if (!issues.has(n.number)) issues.set(n.number, toIssue(n, botLogin))
     return n.number
   }
   for (const n of [...(repo.issues?.nodes ?? []), ...(repo.awaiting?.nodes ?? [])]) addIssue(n)
@@ -208,7 +251,7 @@ export function normalize(data, { botLogin = null, release = null } = {}) {
       autoMerge: Boolean(p.autoMergeRequest),
       checks: rollup?.state ?? null,
       failing,
-      closes: (p.closingIssuesReferences?.nodes ?? []).map(addIssue),
+      closes: [...new Set([...(p.closingIssuesReferences?.nodes ?? []).map(addIssue), ...bodyCloses(p.body)])],
     })
   }
   return { issues, prs, ...(release ? { release: normalizeRelease(repo, release, botLogin) } : {}) }
@@ -262,7 +305,18 @@ export function graftGitHub({ config, exec: run = exec }) {
       const branches = release ?? { from: '', to: '' }
       const vars = JSON.stringify({ owner, name, labels: QUEUE_LABELS, release: Boolean(release), ...branches })
       const data = await json(graft(slug, ['graphql', SNAPSHOT_QUERY, '--vars', vars]))
-      return normalize(data, { botLogin: config.graft.botLogin, release })
+      const snap = normalize(data, { botLogin: config.graft.botLogin, release })
+      const unread = unreadCloses(snap)
+      if (!unread.length) return snap
+      // Issues named only in PR bodies (in no queue): one more query, for those.
+      const ask = (/** @type {number[]} */ ns) =>
+        json(graft(slug, ['graphql', issuesQuery(ns), '--vars', JSON.stringify({ owner, name })]))
+      // A number that resolves to nothing fails the whole query: then one at a time, skipping those.
+      const more = await ask(unread).catch(async () => {
+        const one = await Promise.all(unread.map((n) => ask([n]).catch(() => null)))
+        return { repository: Object.assign({}, ...one.map((d) => d?.repository ?? {})) }
+      })
+      return addIssues(snap, more, unread, config.graft.botLogin)
     },
     async label(slug, number, { add, remove }) {
       if (!add.length && !remove.length) return
@@ -311,6 +365,13 @@ export function graftGitHub({ config, exec: run = exec }) {
     // Through graft's merge policy, as an agent's merge would: auto-merge, or a merge now when the PR is clean.
     async mergePull(slug, number) {
       await graft(slug, ['pr', 'merge', String(number), '--auto'])
+    },
+    async linkIssue(slug, pr, issue) {
+      const path = `/repos/${slug}/pulls/${pr}`
+      const { body } = await json(graft(slug, ['api', 'GET', path]))
+      if (bodyCloses(body).includes(issue)) return
+      const linked = `Closes #${issue}${body ? `\n\n${body}` : ''}`
+      await graft(slug, ['api', 'PATCH', path, '--body', JSON.stringify({ body: linked })])
     },
   }
 }

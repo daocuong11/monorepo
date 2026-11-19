@@ -13,7 +13,7 @@ import { branchName } from '../convention.mjs'
 import { failureSummary, iso, key, markerOf, MIN, setLabels, setMarker } from '../issue-state.mjs'
 import { move, Q, WHY } from '../labels.mjs'
 import { withHistory } from '../marker.mjs'
-import { prFor, taskExit, taskPrompt } from '../phases/task.mjs'
+import { linkIssue, prFor, taskExit, taskPrompt } from '../phases/task.mjs'
 import { PREPARE_FAILED_LINE } from '../prepare.mjs'
 import { traceWorker } from '../tracing.mjs'
 
@@ -418,6 +418,7 @@ const ciRunning = declare(
         input: { pr: input.pr, branch: input.branch },
       })
       ctx.log('info', `submitted PR #${input.pr}; watching CI`, { repo: ctx.subject.slug, issue: ctx.subject.number })
+      await linkIssue(ctx, ctx.subject.slug, prOf(ctx, input), ctx.subject.number)
     },
   },
 )

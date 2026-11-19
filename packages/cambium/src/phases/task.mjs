@@ -72,3 +72,29 @@ export function taskExit(pr, marker = {}) {
     reason: pr ? `PR #${pr.number} was closed without merging` : 'worker exited without a published PR',
   }
 }
+
+/**
+ * Make a submitted PR name its issue (`Closes #n`) when it does not: Watch finds a PR's issue through the PR's
+ * closing references, so a PR matched only by branch at exit would otherwise never be watched (no merge, no
+ * stall). A failure is logged, not fatal: the submission stands.
+ *
+ * @param {{ github: import('../github.mjs').GitHub, log: (level: string, msg: string, where?: object) => void }} deps
+ * @param {string} slug @param {import('../github.mjs').PullRequest | null | undefined} pr @param {number} issue
+ */
+export async function linkIssue(deps, slug, pr, issue) {
+  if (!pr || pr.closes.includes(issue)) return
+  try {
+    await deps.github.linkIssue(slug, pr.number, issue)
+    pr.closes.push(issue)
+    deps.log('info', `PR #${pr.number} did not name its issue; added Closes #${issue}`, { repo: slug, issue })
+  } catch (err) {
+    deps.log(
+      'warn',
+      `could not add Closes #${issue} to PR #${pr.number}: ${/** @type {Error} */ (err)?.message ?? err}`,
+      {
+        repo: slug,
+        issue,
+      },
+    )
+  }
+}

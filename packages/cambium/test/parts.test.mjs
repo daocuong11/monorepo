@@ -452,3 +452,55 @@ test('launchd plist: KeepAlive, RunAtLoad, start --config, escaped', () => {
   assert.match(text, /cambium.launchd.err.log/)
   assert.ok(!existsSync('/h'))
 })
+
+test('snapshot: closing refs from the PR body count, for a PR into a non-default base', async () => {
+  const { normalize, bodyCloses, unreadCloses, addIssues } = await import('../src/github.mjs')
+  assert.deepEqual(bodyCloses('Closes #12\n\nalso fixes: #13, resolved #12; see #14 and acme/wiki#15'), [12, 13])
+  const snap = normalize({
+    repository: {
+      open: {
+        nodes: [
+          {
+            number: 50,
+            headRefName: 'agent/x',
+            state: 'OPEN',
+            body: 'Closes #12',
+            closingIssuesReferences: { nodes: [] },
+          },
+          {
+            number: 51,
+            headRefName: 'agent/y',
+            state: 'OPEN',
+            body: 'Fixes #51',
+            closingIssuesReferences: { nodes: [] },
+          },
+        ],
+      },
+    },
+  })
+  assert.deepEqual(
+    snap.prs.map((p) => p.closes),
+    [[12], [51]],
+  )
+  assert.deepEqual(unreadCloses(snap), [12, 51])
+  const answer = {
+    repository: {
+      i12: {
+        __typename: 'Issue',
+        number: 12,
+        title: 't',
+        state: 'OPEN',
+        labels: { nodes: [] },
+        comments: { nodes: [] },
+      },
+      i51: { __typename: 'PullRequest' },
+    },
+  }
+  addIssues(snap, answer, [12, 51])
+  assert.equal(snap.issues.get(12)?.number, 12)
+  assert.deepEqual(
+    snap.prs.map((p) => p.closes),
+    [[12], []],
+    'a number that is a PR, not an issue, is dropped',
+  )
+})

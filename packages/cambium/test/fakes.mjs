@@ -106,6 +106,11 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
       calls.push({ op: 'mergePull', args: [slug, number] })
       if (faults.mergeError) throw faults.mergeError
     },
+    async linkIssue(slug, pr, issue) {
+      calls.push({ op: 'linkIssue', args: [slug, pr, issue] })
+      const p = pulls.find((x) => x.number === pr)
+      if (p && !p.closes.includes(issue)) p.closes.push(issue)
+    },
   }
   return {
     github,
