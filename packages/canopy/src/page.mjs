@@ -123,8 +123,13 @@ h2.pane-title{font-size:17px;line-height:1.3;text-transform:none;letter-spacing:
 .btn{display:inline-block;padding:3px 10px;border-radius:5px;border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line));background:color-mix(in srgb,var(--accent) 8%,var(--panel));font-weight:500}
 .btn:hover{text-decoration:none;background:color-mix(in srgb,var(--accent) 15%,var(--panel))}
 .back{display:none;justify-self:start}
-.part{margin-top:var(--s4)}.part>h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 var(--s2);font-weight:600;display:flex;gap:var(--s2);align-items:baseline}
-.part>h3 span{text-transform:none;letter-spacing:0;font-weight:400;color:var(--faint)}
+.part{margin-top:var(--s4)}.part>h3,.part>summary>h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 var(--s2);font-weight:600;display:flex;gap:var(--s2);align-items:baseline}
+.part>h3 span,.part>summary>h3 span{text-transform:none;letter-spacing:0;font-weight:400;color:var(--faint)}
+/* A collapsible part (cambium's status log): the whole header toggles it, with a caret in place of the list marker. */
+.part>summary{list-style:none;cursor:pointer}.part>summary::-webkit-details-marker{display:none}
+.part>summary>h3::before{content:'▸';display:inline-block;width:1ch;transition:transform .15s}.part[open]>summary>h3::before{transform:rotate(90deg)}
+.part>summary:hover>h3{color:var(--text)}.part>summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+.part:not([open])>summary>h3{margin-bottom:0}
 .part .banner{margin-bottom:var(--s2)}
 .cmt{padding:var(--s3) 0;border-top:1px solid var(--line)}.cmt:first-of-type{border-top:0;padding-top:0}
 .cmt-head{display:flex;flex-wrap:wrap;gap:2px 8px;align-items:baseline;font-size:12px;margin-bottom:var(--s1)}.cmt-head b{font-size:13px}
@@ -569,7 +574,8 @@ function issuePane(sel, gone, d, multi, now, sig) {
   if (!data) {
     if (!d || d.loading || !d.error) parts.push(h('p', { class: 'faint part' }, 'Reading #' + base.number + ' from GitHub…'))
   } else {
-    if (data.status) parts.push(h('div', { class: 'part' }, h('h3', {}, 'cambium status', edited(data.status) || h('span', { title: data.status.createdAt || '' }, ago(data.status.createdAt, now))),
+    // Collapsed to start: the status log is long and the description is what a reader comes for. render() keeps it open across polls.
+    if (data.status) parts.push(h('details', { class: 'part' }, h('summary', {}, h('h3', {}, 'cambium status', edited(data.status) || h('span', { title: data.status.createdAt || '' }, ago(data.status.createdAt, now)))),
       h('div', { class: 'status' }, md(data.status.body))))
     parts.push(h('div', { class: 'part' }, h('h3', {}, 'Description'), data.body.trim() ? md(data.body) : h('p', { class: 'faint' }, 'No description.')))
     const n = data.comments.length
