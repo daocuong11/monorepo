@@ -5,4 +5,4 @@
 3. **Push:** `graft publish agent/<topic> "<conventional commit message>" --paths <a,b> --pr "<title>"`. Never `git commit`, `git push`, `git fetch` or `git pull`.
 4. **Done:** `graft ci wait agent/<topic>`, then the PR merges through the queue.
 
-Work in a worktree under `.claude/worktrees/<topic>` and remove it when finished.
+Work in a worktree under `.claude/worktrees/<topic>`. When finished, run `graft worktree done agent/<topic>`, then remove it (ExitWorktree `remove`, no `discard_changes`). If `done` exits 1, the worktree holds work GitHub lacks: publish it, don't discard it.
