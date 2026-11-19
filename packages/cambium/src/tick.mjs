@@ -229,7 +229,12 @@ export async function requeue(deps, ctx, slug, issue, what) {
 
 // ---- Reconcile
 
-/** @param {Deps} deps @param {Ctx} ctx */
+/**
+ * A triage worker (phase `dispatch`, started by the graph engine before a switch to `legacy`) is only held to its
+ * wall-clock cap: its row stays, so its `running` lease is not swept, and the graph engine reads its verdict once
+ * switched back. Legacy never finishes it as a Task.
+ * @param {Deps} deps @param {Ctx} ctx
+ */
 async function reconcile(deps, ctx) {
   const { config, store, procs } = deps
   await each(
@@ -238,6 +243,7 @@ async function reconcile(deps, ctx) {
     async (w) => {
       const caps = config.phases[/** @type {'task'} */ (w.phase)] ?? config.phases.task
       if (stopOverdue({ procs, store, log: deps.log }, w, caps.wallClockMinutes, ctx.now) !== 'gone') return
+      if (w.phase === 'dispatch') return
       const snap = ctx.snaps.get(w.repo)
       if (snap) await finish(deps, ctx, w, snap)
     },
@@ -387,12 +393,16 @@ export const watched = (deps, slug, issue) =>
 
 // ---- Sweep: stale leases (a `running` label on this host with no tracked worker)
 
-/** @param {Deps} deps @param {Ctx} ctx */
+/**
+ * A stale lease on a `q:intake` issue is a lost triage (the graph engine's): legacy leaves it to the dispatch
+ * graph's sweep rather than requeue it as a Task.
+ * @param {Deps} deps @param {Ctx} ctx
+ */
 async function sweep(deps, ctx) {
   for (const [slug, snap] of ctx.snaps)
     await each(
       deps,
-      staleLeases(deps, ctx, slug, snap),
+      staleLeases(deps, ctx, slug, snap).filter((issue) => !issue.labels.includes(Q.intake)),
       (issue) => requeue(deps, ctx, slug, issue, lostLease(deps)),
       (issue) => ({ repo: slug, issue: issue.number }),
     )

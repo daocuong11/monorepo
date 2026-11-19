@@ -66,7 +66,7 @@ import { isAbsolute, resolve } from 'node:path'
 import { contextForPath } from '../context.mjs'
 import { currentSession, grantAdvice } from '../maintainer.mjs'
 import { judge, keyDiffers, normalise } from '../protected.mjs'
-import { executedCommands, segments, tokens } from './shell-text.mjs'
+import { executedCommands, segments, statements, tokens } from './shell-text.mjs'
 
 /** Tools whose `file_path` (or `notebook_path`) input is a write. */
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit', 'MultiEdit'])
@@ -110,31 +110,89 @@ const REMOVER = verb('rm|unlink|truncate')
  * @returns {string[]}
  */
 export function writeTargets(command) {
-  return [...new Set(executedCommands(command).flatMap(targetsOf))]
+  return [...new Set(writeTargetsIn(command).map((t) => t.path))]
+}
+
+/**
+ * Like `writeTargets`, each with the directory a preceding `cd <dir>` in the
+ * same command moved to (`dir`, as typed: relative to the event's `cwd`, or
+ * absolute), or `null` for none. `cd packages/x && sed -i … package.json`
+ * writes `packages/x/package.json`, not the root `package.json`. A `cd` whose
+ * target cannot be read (`cd`, `cd -`, `cd "$D"`) leaves the paths after it
+ * judged from `cwd`, as before. Nested `sh -c` payloads start from `cwd`.
+ *
+ * @param {string} command
+ * @returns {{ path: string, dir: string | null }[]}
+ */
+export function writeTargetsIn(command) {
+  const seen = new Set()
+  const out = []
+  for (const t of executedCommands(command).flatMap(targetsOf)) {
+    const k = `${t.dir ?? ''}\0${t.path}`
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(t)
+  }
+  return out
+}
+
+/** A `cd` target that can be read as typed: no expansion, not `-`, not `~`. */
+const PLAIN_DIR = /^[\w./@+-]+$/
+
+/**
+ * Where each statement of ONE command runs, by offset: the `cd <dir>`
+ * statements before it, chained. A `cd` inside a pipeline runs in a subshell
+ * and moves nothing.
+ *
+ * @param {{ raw: string, masked: string }} one
+ * @returns {(offset: number) => string | null}
+ */
+function dirsOf({ raw, masked }) {
+  /** @type {{ start: number, dir: string | null }[]} */
+  const moves = []
+  let dir = /** @type {string | null} */ (null)
+  for (const st of statements(masked)) {
+    const toks = tokens(st, raw)
+    if (toks[0]?.masked !== 'cd') continue
+    if (segments(st.text).length > 1) continue
+    const arg = toks.length === 2 ? unquote(toks[1].raw) : null
+    const to = arg && PLAIN_DIR.test(arg) && arg !== '-' ? arg : null
+    dir = to === null ? null : isAbsolute(to) || dir === null ? to : `${dir}/${to}`
+    moves.push({ start: st.start + st.text.length, dir })
+  }
+  return (offset) => {
+    let at = null
+    for (const m of moves) if (m.start <= offset) at = m.dir
+    return at
+  }
 }
 
 /**
  * The write targets of ONE command, nested payloads not included.
  *
  * @param {{ raw: string, masked: string }} one
- * @returns {string[]}
+ * @returns {{ path: string, dir: string | null }[]}
  */
-function targetsOf({ raw: command, masked }) {
+function targetsOf(one) {
+  const { raw: command, masked } = one
+  const dirAt = dirsOf(one)
+  /** @type {{ path: string, dir: string | null }[]} */
   const out = []
-  const add = (t) => {
+  const add = (t, offset) => {
     const p = unquote(t ?? '')
-    if (pathish(p)) out.push(p)
+    if (pathish(p)) out.push({ path: p, dir: dirAt(offset) })
   }
   const rawAt = (m, group) => command.slice(m.index + m[0].length - m[group].length, m.index + m[0].length)
 
   // `> path`, `>> path`, `2> path`, `&> path`.
-  for (const m of masked.matchAll(/(?:^|[^0-9<>&])(?:[0-9]|&)?>>?\s*(['"]?[^\s;|&<>()]+['"]?)/g)) add(rawAt(m, 1))
+  for (const m of masked.matchAll(/(?:^|[^0-9<>&])(?:[0-9]|&)?>>?\s*(['"]?[^\s;|&<>()]+['"]?)/g))
+    add(rawAt(m, 1), m.index)
 
   // `dd of=path`
-  for (const m of masked.matchAll(/\bdd\b[^\n;|&]*?\bof=(['"]?[^\s;|&]+['"]?)/g)) add(rawAt(m, 1))
+  for (const m of masked.matchAll(/\bdd\b[^\n;|&]*?\bof=(['"]?[^\s;|&]+['"]?)/g)) add(rawAt(m, 1), m.index)
 
   // `tee path`, `tee -a path`
-  for (const m of masked.matchAll(/\btee\b\s+(?:-\S+\s+)*(['"]?[^\s;|&<>()]+['"]?)/g)) add(rawAt(m, 1))
+  for (const m of masked.matchAll(/\btee\b\s+(?:-\S+\s+)*(['"]?[^\s;|&<>()]+['"]?)/g)) add(rawAt(m, 1), m.index)
 
   for (const seg of segments(masked)) {
     const toks = tokens(seg, command)
@@ -145,7 +203,7 @@ function targetsOf({ raw: command, masked }) {
     if (editor >= 0) {
       const args = toks.slice(editor + 1)
       if (args.some((t) => isFlag(t.masked) && IN_PLACE_FLAG.test(t.masked))) {
-        for (const t of args) if (!isFlag(t.masked) && !SED_EXPRESSION.test(t.masked)) add(t.raw)
+        for (const t of args) if (!isFlag(t.masked) && !SED_EXPRESSION.test(t.masked)) add(t.raw, seg.start)
       }
     }
 
@@ -154,20 +212,20 @@ function targetsOf({ raw: command, masked }) {
     const mover = verbIndex(toks, MOVER)
     if (mover >= 0) {
       const args = toks.slice(mover + 1).filter((t) => !isFlag(t.masked))
-      if (toks[mover].masked.endsWith('mv')) for (const t of args) add(t.raw)
-      else if (args.length >= 2) add(args[args.length - 1].raw)
+      if (toks[mover].masked.endsWith('mv')) for (const t of args) add(t.raw, seg.start)
+      else if (args.length >= 2) add(args[args.length - 1].raw, seg.start)
     }
 
     // Removal is a write.
     const remover = verbIndex(toks, REMOVER)
-    if (remover >= 0) for (const t of toks.slice(remover + 1)) if (!isFlag(t.masked)) add(t.raw)
+    if (remover >= 0) for (const t of toks.slice(remover + 1)) if (!isFlag(t.masked)) add(t.raw, seg.start)
   }
 
   // Scripting one-liners that open a file for writing. Scanned RAW — the path
   // is the quoted string. A read (`open(path).read()`) is not matched.
-  for (const m of command.matchAll(/\bopen\(\s*(['"])([^'"\n]+)\1\s*,\s*(?:mode\s*=\s*)?['"][wax]/g)) add(m[2])
-  for (const m of command.matchAll(/\bPath\(\s*(['"])([^'"\n]+)\1\s*\)\.write_(?:text|bytes)\(/g)) add(m[2])
-  for (const m of command.matchAll(/\b(?:writeFile|appendFile)(?:Sync)?\(\s*(['"])([^'"\n]+)\1/g)) add(m[2])
+  for (const m of command.matchAll(/\bopen\(\s*(['"])([^'"\n]+)\1\s*,\s*(?:mode\s*=\s*)?['"][wax]/g)) add(m[2], m.index)
+  for (const m of command.matchAll(/\bPath\(\s*(['"])([^'"\n]+)\1\s*\)\.write_(?:text|bytes)\(/g)) add(m[2], m.index)
+  for (const m of command.matchAll(/\b(?:writeFile|appendFile)(?:Sync)?\(\s*(['"])([^'"\n]+)\1/g)) add(m[2], m.index)
 
   return out
 }
@@ -322,8 +380,9 @@ export function bashVerdict({ command, cwd, lookup }) {
       '    ! graft maintainer grant "<why this session needs it>" --scope <scope>\n\n' +
       'Say which scope you need (protected, no-verify, merge) and why.'
     )
-  for (const path of writeTargets(command)) {
-    const reason = judgePath({ path, cwd, lookup, how: ' (named by a shell write)', keyChanged: () => false })
+  for (const { path, dir } of writeTargetsIn(command)) {
+    const at = dir === null ? cwd : resolve(cwd, dir)
+    const reason = judgePath({ path, cwd: at, lookup, how: ' (named by a shell write)', keyChanged: () => false })
     if (reason) return reason
   }
   return null

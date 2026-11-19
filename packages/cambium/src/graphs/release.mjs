@@ -365,6 +365,7 @@ export const RELEASE_QUEUES = {
  *
  * @param {import('../graph/define.mjs').Graph} graph @param {ReleaseCtx} ctx
  * @param {{ node: string, input: unknown }} at
+ * @returns {Promise<import('../graph/advance.mjs').Transition[]>}
  */
 async function drive(graph, ctx, at) {
   const { pr } = ctx.subject
@@ -377,17 +378,20 @@ async function drive(graph, ctx, at) {
     issue: pr?.number,
     ...markerTrace(pr?.stateComment?.marker),
   })
+  /** @type {import('../graph/advance.mjs').Transition[]} */
+  const transitions = []
   let pos = at
   for (;;) {
     const r = await advance(graph, pos, ctx, { maxTransitions: 1, instrument: traced.instrument })
     if (r.error) throw r.error.cause instanceof Error ? r.error.cause : r.error
     traced.sync()
+    transitions.push(...r.transitions)
     const t = r.transitions[0]
     const next = /** @type {(import('../graph/define.mjs').GraphNode & Declared) | undefined} */ (
       graph.nodes.find((n) => n.name === r.node)
     )
     if (t && t.to !== END) await next?.enter?.(t.next, ctx)
-    if (r.reason !== 'limit' || next?.kind === 'wait') return
+    if (r.reason !== 'limit' || next?.kind === 'wait') return transitions
     pos = { node: r.node, input: r.input }
   }
 }
@@ -448,4 +452,55 @@ export async function releaseGraphs(deps, tick) {
       }
     }
   }
+}
+
+// ---- `cambium run release-prepare|release-promote --repo <slug> [--issue <pr>]`
+
+/** @param {import('../graph/advance.mjs').Transition[]} ts */
+const path = (ts) => ts.map((t) => (t.to === END ? 'end' : String(t.to))).join(' → ')
+
+/**
+ * One release graph in the foreground for one repo, whatever the clock: `release-prepare` runs once (and counts
+ * as the day's run); `release-promote` takes a turn for each `q:promote` PR (or only PR `pr`) that is ready, and
+ * reports the rest.
+ *
+ * @param {import('../tick.mjs').Deps} deps @param {import('../tick.mjs').Ctx} tick a fresh tick context
+ * @param {{ graph: string, slug: string, pr?: number, out: (line: string) => void }} opts
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+export async function runRelease(deps, tick, { graph, slug, pr: only, out }) {
+  const repo = deps.config.repos.find((r) => r.slug === slug)
+  if (!repo) return { ok: false, error: `${slug} is not in the config` }
+  const { from, to } = repo.release
+  if (from === to) return { ok: false, error: `${slug}: release.from = release.to (\`${from}\`); nothing to promote` }
+  const snap = await deps.github.read(slug)
+  tick.snaps.set(slug, snap)
+  const release = snap.release
+  if (!release) return { ok: false, error: `${slug}: no release state in the snapshot` }
+  /** @param {PromotionPr} [pr] @returns {ReleaseCtx} */
+  const ctxFor = (pr) => ({ ...deps, tick, subject: { slug, repo, release, pr } })
+  if (graph === releasePrepare.name) {
+    deps.store.set(lastRunKey(slug), String(tick.now))
+    const ts = await drive(releasePrepare, ctxFor(), { node: releasePrepare.entry.node, input: {} })
+    out(`${slug} release-prepare: ${path(ts)}`)
+    return { ok: true }
+  }
+  const prs = release.prs.filter((p) => only === undefined || p.number === only)
+  if (only !== undefined && !prs.length) return { ok: false, error: `${slug}: #${only} is not a promotion PR` }
+  if (!prs.length) out(`${slug} release-promote: no promotion PR`)
+  for (const pr of prs) {
+    const at = promoteStart(pr)
+    if (!at) {
+      const why = !pr.labels.includes(Q.promote)
+        ? `no ${Q.promote}`
+        : !pr.approved
+          ? 'not approved'
+          : 'merge refused on this head'
+      out(`PR #${pr.number}: not ready (${why}, ${pr.state.toLowerCase()})`)
+      continue
+    }
+    const ts = await drive(releasePromote, ctxFor(pr), at)
+    out(`PR #${pr.number}: ${path(ts) || at.node}`)
+  }
+  return { ok: true }
 }

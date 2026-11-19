@@ -25,7 +25,9 @@ import { effectivePosition, graphVersionDecision, withHistory } from './marker.m
 import { each, newCtx, staleLeases, taskCandidates, watchPairs } from './tick.mjs'
 import { move, Q, RUNNING } from './labels.mjs'
 import { markerTrace, turnTracer } from './tracing.mjs'
-import { DISPATCH_STEPS } from './dispatch-engine.mjs'
+import { DISPATCH_STEPS, driveDispatch } from './dispatch-engine.mjs'
+import { dispatch } from './graphs/dispatch.mjs'
+import { releasePrepare, releasePromote, runRelease } from './graphs/release.mjs'
 import { trackPromotion } from './promotion.mjs'
 import { trackBaseHealth } from './base-health.mjs'
 
@@ -262,10 +264,19 @@ export const GRAPH_ENGINE = {
   upkeep,
 }
 
-// ---- `cambium run <graph> --issue <n> [--follow]`
+// ---- `cambium run <graph> --issue <n> [--follow]`, `cambium run release-* --repo <slug> [--issue <pr>]`
 
 /** Graphs `cambium run` knows, by name. */
-export const GRAPHS = { [task.name]: task, [prGraph.name]: prGraph }
+export const GRAPHS = {
+  [task.name]: task,
+  [prGraph.name]: prGraph,
+  [dispatch.name]: dispatch,
+  [releasePrepare.name]: releasePrepare,
+  [releasePromote.name]: releasePromote,
+}
+
+/** The graphs whose subject is a repo (its promotion PR), not an issue: `--issue` is optional. */
+export const REPO_GRAPHS = new Set([releasePrepare.name, releasePromote.name])
 
 export { prGraph }
 
@@ -274,9 +285,12 @@ export { prGraph }
  * foreground worker, whose exit is awaited; anything else resumes where its marker rests. Stops at the first wait
  * that is not ready, unless `follow`, which re-reads and polls again every `tickSeconds` until the graph ends.
  *
+ * The dispatch graph runs the same way from `q:intake` ({@link runDispatch}); the release graphs take the repo,
+ * with `number` (optional) naming the promotion PR (graphs/release.mjs `runRelease`).
+ *
  * @param {Deps} deps
  * @param {{
- *   graph: string, slug: string, number: number, follow?: boolean,
+ *   graph: string, slug: string, number?: number, follow?: boolean,
  *   out: (line: string) => void, sleep?: (ms: number) => Promise<void>, signal?: AbortSignal,
  * }} opts
  * @returns {Promise<{ ok: boolean, error?: string }>}
@@ -284,7 +298,10 @@ export { prGraph }
 export async function runIssue(deps, { graph, slug, number, follow = false, out, sleep = delay, signal }) {
   if (!Object.hasOwn(GRAPHS, graph))
     return { ok: false, error: `unknown graph "${graph}"; known: ${Object.keys(GRAPHS).join(', ')}` }
+  if (REPO_GRAPHS.has(graph)) return runRelease(deps, newCtx(deps), { graph, slug, pr: number, out })
+  if (!Number.isInteger(number) || number <= 0) return { ok: false, error: `the ${graph} graph needs --issue <n>` }
   if (graph === prGraph.name) return runPr(deps, { slug, number, follow, out, sleep, signal })
+  if (graph === dispatch.name) return runDispatch(deps, { slug, number, follow, out, sleep, signal })
   /** @type {Set<number>} */
   const reaped = new Set()
   let first = true
@@ -362,6 +379,62 @@ async function runPr(deps, { slug, number, follow, out, sleep, signal }) {
       } else out(`PR #${pr.number}: not assessed (CI ${pr.checks ?? 'none'}, ${pr.state.toLowerCase()})`)
     }
     if (!follow || issue?.state !== 'OPEN' || signal?.aborted) return report(out, slug, number, issue)
+    await sleep(deps.config.tickSeconds * 1000)
+    if (signal?.aborted) return report(out, slug, number, issue)
+  }
+}
+
+/**
+ * `cambium run dispatch --issue N [--follow]`: triage in the foreground. A `q:intake` issue without a lease starts
+ * at `start-triage` with a foreground triage worker, whose exit is awaited; then `triaging` reads its verdict and
+ * the graph ends (to-task, to-human, closed, or deferred). A tracked triage worker resumes at `triaging`.
+ * `--follow` polls every `tickSeconds` until the graph ends (e.g. after a retried triage).
+ * @param {Deps} deps
+ * @param {{ slug: string, number: number, follow: boolean, out: (line: string) => void, sleep: (ms: number) => Promise<void>, signal?: AbortSignal }} o
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+async function runDispatch(deps, { slug, number, follow, out, sleep, signal }) {
+  /** @type {Set<number>} */
+  const reaped = new Set()
+  for (let first = true; ; first = false) {
+    const ctx = newCtx(deps)
+    const snap = await deps.github.read(slug)
+    ctx.snaps.set(slug, snap)
+    const issue = snap.issues.get(number)
+    if (issue?.state !== 'OPEN') {
+      if (first) return { ok: false, error: `${slug}#${number} is not an open issue` }
+      return report(out, slug, number, issue)
+    }
+    const worker = deps.store.worker(slug, number)
+    const fresh = issue.labels.includes(Q.intake) && !issue.labels.includes(RUNNING) && !worker
+    const at = fresh
+      ? { node: dispatch.entry.node, input: {} }
+      : worker?.phase === 'dispatch'
+        ? { node: 'triaging', input: { attempt: worker.attempt } }
+        : null
+    if (!at) {
+      if (first)
+        return {
+          ok: false,
+          error: `${slug}#${number} has nothing to run in the dispatch graph (not in ${Q.intake}, or its triage holds a lease with no worker here)`,
+        }
+      return report(out, slug, number, issue)
+    }
+    /** @type {Subject} */
+    const subject = { slug, number, snap, issue, foreground: true, reaped }
+    const turn = await driveDispatch(deps, ctx, subject, at)
+    if (subject.started) {
+      const s = subject.started
+      out(`triage worker pid ${s.pid} in ${s.worktree}\n  stdout ${s.stdout}\n  stderr ${s.stderr}`)
+      const code = await s.exited
+      out(`triage worker exited ${code}`)
+      reaped.add(s.pid)
+      continue
+    }
+    if (first && fresh && !follow)
+      return { ok: false, error: `${slug}#${number} was not started; see its state comment` }
+    const ended = turn.transitions.some((t) => t.to === END)
+    if (ended || !follow || signal?.aborted) return report(out, slug, number, issue)
     await sleep(deps.config.tickSeconds * 1000)
     if (signal?.aborted) return report(out, slug, number, issue)
   }

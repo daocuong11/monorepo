@@ -10,6 +10,7 @@ import { toMermaid, validateGraph } from '../src/graph/index.mjs'
 import { dispatch, nodeOf } from '../src/graphs/dispatch.mjs'
 import { readTriage, triagePrompt } from '../src/phases/dispatch.mjs'
 import { tick } from '../src/tick.mjs'
+import { runIssue } from '../src/graph-engine.mjs'
 import { harness, SLUG } from './fakes.mjs'
 
 const MIN = 60_000
@@ -332,6 +333,68 @@ test('the issue leaving q:intake while triage runs: the verdict is dropped', asy
   await tick(h.deps)
   assert.deepEqual(h.gh.issue(7).labels, ['q:task'])
   assert.equal(h.deps.store.worker(SLUG, 7), null)
+})
+
+test('run dispatch --issue N: a foreground triage worker, its verdict read on exit, then the graph ends', async () => {
+  const h = intake({ cap: 0 })
+  h.spawner.logs.set(
+    '/logs/o__r/issue-7/a1.out.log',
+    logWith(verdictMessage({ verdict: 'actionable', reason: 'Clear.', title: 'Faster tick' })),
+  )
+  /** @type {string[]} */
+  const out = []
+  const r = await runIssue(h.deps, { graph: 'dispatch', slug: SLUG, number: 7, out: (l) => out.push(l) })
+  assert.deepEqual(r, { ok: true })
+  assert.equal(h.spawner.started.length, 1, 'the cap does not apply to a run by hand')
+  assert.equal(h.spawner.started[0].foreground, true)
+  assert.equal(h.spawner.started[0].readOnly, true)
+  assert.deepEqual(h.gh.issue(7).labels, ['q:task'])
+  assert.equal(h.gh.marker(7)?.graph, 'task')
+  assert.equal(h.deps.store.worker(SLUG, 7), null, 'the triage worker row is released')
+  const text = out.join('\n')
+  assert.match(text, /triage worker pid \d+ in /)
+  assert.match(text, /triage worker exited 0/)
+  assert.match(out.at(-1) ?? '', /o\/r#7: start-worker · labels q:task/)
+
+  // Again: no longer in q:intake.
+  const again = await runIssue(h.deps, { graph: 'dispatch', slug: SLUG, number: 7, out: () => {} })
+  assert.equal(again.ok, false)
+  assert.match(again.error ?? '', /nothing to run in the dispatch graph/)
+})
+
+test('engine switched graph → legacy while a triage worker is live: legacy never treats it as a task', async () => {
+  const h = intake()
+  await tick(h.deps)
+  const w = h.deps.store.worker(SLUG, 7)
+  assert.ok(w)
+  h.spawner.logs.set(w.stdout, logWith(verdictMessage({ verdict: 'actionable', reason: 'Clear.' })))
+  const graph = h.deps.config
+  h.deps.config = { ...graph, engine: 'legacy', phases: { ...graph.phases, task: { ...graph.phases.task, cap: 1 } } }
+
+  // Live, then gone: legacy reconcile and sweep leave it, and schedules no task.
+  await tick(h.deps)
+  h.procs.live.delete(w.pid)
+  await tick(h.deps)
+  await tick(h.deps)
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:intake', 'running'])
+  assert.equal(h.gh.marker(7)?.node, 'triaging')
+  assert.ok(h.deps.store.worker(SLUG, 7), 'the triage worker row stays for the graph engine')
+  assert.deepEqual(
+    h.spawner.started.map((s) => s.phase),
+    ['dispatch'],
+    'no task worker started',
+  )
+
+  // A lost triage lease (no row) is not requeued into q:task either.
+  h.deps.store.removeWorker(SLUG, 7)
+  await tick(h.deps)
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:intake', 'running'])
+
+  // Back on the graph engine: the dispatch sweep retries triage.
+  h.deps.config = graph
+  await tick(h.deps)
+  assert.equal(h.gh.marker(7)?.graph, 'dispatch')
+  assert.equal(h.gh.marker(7)?.attempt, 2)
 })
 
 test('readTriage: the last fenced block, bare JSON, and every way it can be wrong', () => {

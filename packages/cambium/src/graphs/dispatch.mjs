@@ -172,6 +172,7 @@ const startTriage = declare(
           phase: 'dispatch',
           maxTurns: caps.maxTurns,
           readOnly: true,
+          foreground: ctx.subject.foreground ?? false,
           // This node's cambium.node span, so Claude Code's own spans (when worker.env turns them on) join the trace.
           env: ctx.traceparent ? { TRACEPARENT: ctx.traceparent } : undefined,
           buildPrompt: (agentsMd) =>
