@@ -21,8 +21,9 @@ export const DISPATCH_NOT_BUILT = 'dispatch phase is not built yet; q:intake iss
 /** The verdict a triage worker ends with, as the last JSON block of its final message. */
 export const TriageResult = z
   .object({
-    verdict: z.enum(['actionable', 'needs-human', 'duplicate']),
+    verdict: z.enum(['actionable', 'needs-human', 'duplicate', 'defer', 'obsolete']),
     duplicateOf: z.number().int().positive().optional(),
+    recheckHours: z.number().positive().max(168).optional(),
     reason: z.string().trim().min(1),
     title: z.string().trim().min(1).optional(),
     acceptance: z.array(z.string().trim().min(1)).optional(),
@@ -109,34 +110,37 @@ export function readTriage(log, issue) {
  * @param {{
  *   repo: string, baseBranch: string, issue: import('../github.mjs').Issue,
  *   queued: { number: number, title: string, labels: string[] }[], agentsMd: string | null,
+ *   deferred?: { count: number, reason: string } | null, deferHours?: number,
  * }} input
  */
-export function triagePrompt({ repo, baseBranch, issue, queued, agentsMd }) {
+export function triagePrompt({ repo, baseBranch, issue, queued, agentsMd, deferred = null, deferHours = 6 }) {
   const others = queued
     .filter((q) => q.number !== issue.number)
     .map((q) => `- #${q.number} ${q.title} (${q.labels.filter((l) => l.startsWith('q:')).join(', ') || 'no queue'})`)
     .join('\n')
   return `You are a triage worker started by cambium, the scheduler, in a read-only checkout of ${repo} at origin/${baseBranch}.
-Nobody is watching this session and nobody will answer a question: never ask one and wait. Where you would ask a human, that is your verdict (needs-human).
+Nobody is watching this session and nobody will answer a question: never ask one and wait. Where you would ask a human about a decision only a human can make, that is your verdict (needs-human). Where you would ask a human to check something, check it yourself, or defer until it can be checked: a human is never the way to verify what a machine can.
 
 Your one job: decide what happens to GitHub issue #${issue.number} (below), which is waiting in the intake queue. You do not do the work. You do not edit files, commit, publish, comment, label or close anything; cambium makes every move on your verdict.
 
 Verdicts:
 - actionable: a worker could do it unattended from what is written (plus what you add), and would know when it is done. It goes to the task queue. When the issue lacks a clear task or checkable acceptance criteria, give \`title\` (an imperative task title) and \`acceptance\` (checks a reviewer can verify; CI green is always required, so do not list only that). cambium posts them on the issue and hands them to the task worker.
-- needs-human: too foggy to ticket; a decision only a human can make (direction, priority, money, access, policy); information you cannot find; or work that is not a code change in this repository. \`reason\` says exactly what the human must decide or supply.
+- needs-human: too foggy to ticket; a decision only a human can make (direction, priority, money, access, policy); information no one but a human has; or work that is not a code change in this repository. \`reason\` says exactly what the human must decide or supply. Never for something a machine can check, now or later.
 - duplicate: the same work as another issue, open or closed. \`duplicateOf\` is that issue's number (never #${issue.number}); \`reason\` says why they are the same.
+- obsolete: the work no longer applies, and you verified it: the code path is gone, the bug is already fixed on ${baseBranch}, or its verification already passed. cambium closes it as not planned. \`reason\` gives the evidence (commit, file, run).
+- defer: the verdict hangs on something a machine can check later but not yet: a CI or CD run that has not happened, a release, a PR still merging, a deploy, an upstream fix. cambium triages it again after \`recheckHours\` (default ${deferHours}). \`reason\` says exactly what to check next time and what each answer means (e.g. "next main cd run green → obsolete; red → actionable").
 
 How to look:
 - Read the code here (Read, Glob, Grep) to judge what the change touches and whether it already exists.
 - Read an issue with \`graft issue read <n>\`; search with \`graft api GET '/search/issues?q=repo:${repo}+is:issue+<words>'\`. Never \`gh\`.
-- Be quick: a verdict, not an investigation. When in doubt between actionable and needs-human, choose needs-human.
+- Be quick: a verdict, not an investigation. When in doubt whether the work is clear enough to do, choose needs-human; when in doubt whether something is true, check it, or defer until it can be checked.
 
 End your final message with exactly one fenced JSON block, and nothing after it:
 \`\`\`json
-{ "verdict": "actionable" | "needs-human" | "duplicate", "duplicateOf": 123, "reason": "…", "title": "…", "acceptance": ["…"] }
+{ "verdict": "actionable" | "needs-human" | "duplicate" | "obsolete" | "defer", "duplicateOf": 123, "recheckHours": 6, "reason": "…", "title": "…", "acceptance": ["…"] }
 \`\`\`
-\`duplicateOf\` only for duplicate; \`title\` and \`acceptance\` only for actionable, and optional. A missing or malformed block sends the issue to a human with the error.
-${others ? `\nOther issues in cambium's queues right now:\n${others}\n` : ''}
+\`duplicateOf\` only for duplicate; \`recheckHours\` only for defer, and optional; \`title\` and \`acceptance\` only for actionable, and optional. A missing or malformed block sends the issue to a human with the error.
+${deferred ? `\nThis is re-triage ${deferred.count + 1}: an earlier triage deferred it to check this:\n${deferred.reason}\nCheck it now. If it still cannot be checked, defer again.\n` : ''}${others ? `\nOther issues in cambium's queues right now:\n${others}\n` : ''}
 --- Issue #${issue.number}: ${issue.title} (${issue.url})
 ${issue.body}
 ${agentsMd ? `\n--- AGENTS.md (the contract a task worker will follow)\n${agentsMd}` : ''}`

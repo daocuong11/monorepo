@@ -6,7 +6,7 @@
  * - Reconcile: every tracked triage worker's issue at `triaging`.
  * - Sweep: a stale `running` lease on a `q:intake` issue runs `retry-triage`.
  * - Schedule: `q:intake` issues without a lease, by priority then age, up to `phases.dispatch.cap` counted from
- *   live triage workers; each starts at `start-triage`.
+ *   live triage workers, skipping one deferred until later; each starts at `start-triage`.
  *
  * A turn advances one transition at a time and stops on entering a wait, at the entry node again (only Schedule
  * admits entries), at a wait that is not ready, or at the end.
@@ -119,12 +119,22 @@ export function intakeCandidates(deps, ctx) {
         issue.state === 'OPEN' &&
         issue.labels.includes(Q.intake) &&
         !issue.labels.includes(RUNNING) &&
-        !store.worker(slug, issue.number)
+        !store.worker(slug, issue.number) &&
+        !deferredPast(issue, ctx.now)
       )
         candidates.push({ slug, issue, snap })
   const order = byPriorityThenAge(config.priorityLabels)
   candidates.sort((a, b) => order(a.issue, b.issue))
   return candidates.slice(0, free)
+}
+
+/**
+ * Resting at `deferred` with its recheck time still ahead: triage waits for it.
+ * @param {import('./github.mjs').Issue} issue @param {number} now
+ */
+const deferredPast = (issue, now) => {
+  const m = issue.stateComment?.marker
+  return m?.graph === dispatch.name && m.node === 'deferred' && !!m.deferUntil && Date.parse(m.deferUntil) > now
 }
 
 /** @param {Deps} deps @param {Ctx} ctx */
