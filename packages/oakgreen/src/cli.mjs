@@ -16,7 +16,7 @@ const USAGE = `oakgreen ${PKG.version} — the oakgreen stack in one command
 
   oakgreen doctor [--json] [--repo owner/name] [--config <file>]
   oakgreen setup [--dry-run] [--repo owner/name] [--config <file>]
-  oakgreen services [--json]    the stack's launchd agents (otelcol, cambium, mycelium) and whether they run
+  oakgreen services [--json]    the stack's launchd agents (otelcol, cambium, mycelium, canopy) and whether they run
   oakgreen start [service...]   install (if needed), enable and start each (default: all that can be)
   oakgreen stop [service...]    stop each and keep it stopped across logins, until start
   oakgreen restart [service...] new process for each (default: all installed), e.g. after an npm update

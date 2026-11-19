@@ -33,6 +33,17 @@ npm install -g @oakgreencc/canopy @oakgreencc/graft
 canopy                       # http://127.0.0.1:4317/
 ```
 
+## As a service
+
+On macOS, canopy can run as a launchd agent beside cambium, so it is always up and restarts with the stack:
+
+```sh
+oakgreen start canopy        # writes the agent (canopy install) on first run, then loads it
+oakgreen restart canopy      # new process on new code, e.g. after npm i -g
+```
+
+`canopy install [flags]` writes `~/Library/LaunchAgents/com.oakgreencc.canopy.plist`, serving with the flags given (`--dry-run` prints it instead). KeepAlive restarts it whenever it exits; output goes to `~/.canopy/logs/canopy.log`. After changing the flags, run `canopy install …` again, then `oakgreen reload canopy`.
+
 ## Flags
 
 | Flag                  | Default                                                                                         |

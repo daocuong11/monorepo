@@ -134,6 +134,7 @@ test('services: running, loaded but down, installed but not loaded, not installe
       ['otelcol', false, true],
       ['cambium', true, true],
       ['mycelium', false, false],
+      ['canopy', false, false],
     ],
   )
 })
@@ -199,9 +200,9 @@ test('a process that never comes back is a failure, not a hang', async () => {
 
 test('unknown service, unknown option, and not macOS', async () => {
   const { ports } = fakeLaunchd({ cambium: {} })
-  const u = await run(['restart', 'canopy'], ports)
+  const u = await run(['restart', 'deadwood'], ports)
   assert.equal(u.code, 2)
-  assert.match(u.err, /unknown service canopy \(known: otelcol, cambium, mycelium\)/)
+  assert.match(u.err, /unknown service deadwood \(known: otelcol, cambium, mycelium, canopy\)/)
   assert.equal((await run(['reload', '--force'], ports)).code, 2)
   const linux = await run(['services'], { ...ports, platform: 'linux' })
   assert.equal(linux.code, 2)
@@ -223,6 +224,15 @@ function installer({ ports, state }, fail = {}) {
     const rest = cmd === process.execPath ? args.slice(1) : args
     ran.push([tool, ...rest])
     if (fail[tool]) return { code: 1, stdout: '', stderr: `${tool}: ${fail[tool]}\n` }
+    state[`com.oakgreencc.${tool}`] ??= {
+      installed: false,
+      loaded: false,
+      pid: null,
+      stopping: 0,
+      unloading: false,
+      stopTicks: 0,
+      disabled: false,
+    }
     state[`com.oakgreencc.${tool}`].installed = true
     return { code: 0, stdout: 'wrote it', stderr: '' }
   }
@@ -230,7 +240,12 @@ function installer({ ports, state }, fail = {}) {
 }
 
 test('start: installs a missing agent through its tool, enables and loads it; running ones are left alone', async () => {
-  const launchd = fakeLaunchd({ otelcol: {}, cambium: {}, mycelium: { installed: false, loaded: false } })
+  const launchd = fakeLaunchd({
+    otelcol: {},
+    cambium: {},
+    mycelium: { installed: false, loaded: false },
+    canopy: { installed: false, loaded: false },
+  })
   const { ports, state, calls } = launchd
   const before = state['com.oakgreencc.cambium'].pid
   const { exec, ran } = installer(launchd)
@@ -239,7 +254,11 @@ test('start: installs a missing agent through its tool, enables and loads it; ru
   assert.match(r.out, /✓ otelcol {2}already running/)
   assert.match(r.out, new RegExp(`✓ cambium {2}already running, pid ${before}`))
   assert.match(r.out, /✓ mycelium loaded, pid \d+/)
-  assert.deepEqual(ran, [['mycelium', 'install']])
+  assert.match(r.out, /✓ canopy {3}loaded, pid \d+/)
+  assert.deepEqual(ran, [
+    ['mycelium', 'install'],
+    ['canopy', 'install'],
+  ])
   const subs = calls.filter((c) => c.at(-1)?.includes('mycelium')).map((c) => c[1])
   assert.ok(subs.indexOf('enable') < subs.indexOf('bootstrap'))
 })
@@ -259,12 +278,12 @@ test('start with no names skips a service its tool cannot install; named, it fai
 })
 
 test('stop: disables and unloads in reverse order; start brings it back; a loaded idle agent is kickstarted', async () => {
-  const { ports, state, calls } = fakeLaunchd({ otelcol: {}, cambium: { stopTicks: 3 }, mycelium: {} })
+  const { ports, state, calls } = fakeLaunchd({ otelcol: {}, cambium: { stopTicks: 3 }, mycelium: {}, canopy: {} })
   const r = await run(['stop'], ports)
   assert.equal(r.code, 0, r.out)
   assert.deepEqual(
     calls.filter((c) => c[1] === 'bootout').map((c) => c.at(-1)?.split('.').at(-1)),
-    ['mycelium', 'cambium', 'otelcol'],
+    ['canopy', 'mycelium', 'cambium', 'otelcol'],
   )
   assert.ok(Object.values(state).every((s) => !s.loaded && s.disabled))
   assert.match((await run(['restart', 'cambium'], ports)).out, /✓ cambium {2}loaded/, 'restart re-enables too')
