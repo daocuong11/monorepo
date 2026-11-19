@@ -429,18 +429,36 @@ const merge = declare(
   defineNode({
     name: 'merge',
     input: MergeIn,
-    output: z.object({ pr: z.number().int(), branch: z.string(), refused: z.string().nullable() }),
+    output: z.object({
+      pr: z.number().int(),
+      branch: z.string(),
+      refused: z.string().nullable(),
+      updated: z.string().nullable().optional(),
+    }),
     /**
      * Green: merge through `graft pr merge --auto` (a merge now when the PR is clean, else auto-merge), so graft's
      * merge policy decides. A refusal is not a failure of the work: `merging` holds and asks again later.
+     *
+     * Behind its base (read live, so a merge earlier in this tick counts): update the branch instead. Its green
+     * was earned against an older base, and two PRs green on the same base can be red together (no merge queue,
+     * and the base does not require up-to-date branches). `merging` holds on the old head and merges once the
+     * updated head is green; red goes back to a worker like any red CI.
      * @param {z.infer<typeof MergeIn>} input @param {TaskCtx} ctx
      */
     run: async (input, ctx) => {
+      const { slug } = ctx.subject
       try {
-        await ctx.github.mergePull(ctx.subject.slug, input.pr)
-        return { ...input, refused: null }
+        const { behind, base } = await ctx.github.behindBase(slug, input.pr)
+        if (behind > 0) {
+          await ctx.github.updatePull(slug, input.pr)
+          const commits = `${behind} commit${behind === 1 ? '' : 's'}`
+          const updated = `PR #${input.pr} was ${commits} behind ${base}; updated it, merging once CI is green on the new head`
+          return { ...input, refused: null, updated }
+        }
+        await ctx.github.mergePull(slug, input.pr)
+        return { ...input, refused: null, updated: null }
       } catch (err) {
-        return { ...input, refused: `merge refused: ${/** @type {Error} */ (err)?.message ?? err}` }
+        return { ...input, refused: `merge refused: ${/** @type {Error} */ (err)?.message ?? err}`, updated: null }
       }
     },
   }),
@@ -477,7 +495,7 @@ const merging = declare(
   {
     queue: null,
     running: false,
-    /** @param {z.infer<typeof MergeIn> & { refused: string | null }} input @param {TaskCtx} ctx */
+    /** @param {z.infer<typeof MergeIn> & { refused: string | null, updated?: string | null }} input @param {TaskCtx} ctx */
     enter: async (input, ctx) => {
       const { slug } = ctx.subject
       const issue = issueOf(ctx)
@@ -485,19 +503,23 @@ const merging = declare(
       const pr = prOf(ctx, input)
       const at = iso(ctx.tick.now)
       const { refused } = input
+      const updated = input.updated ?? null
+      // An update holds like a refusal on the head it replaced: the new head is due as soon as it is green.
+      const hold = refused ?? updated
       await land(ctx, 'merging', {
         ...withHistory(m, {
           at,
           attempt: m.attempt,
-          outcome: refused ? 'merge-refused' : 'merge-armed',
+          outcome: refused ? 'merge-refused' : updated ? 'branch-updated' : 'merge-armed',
           pr: input.pr,
-          ...(refused ? { reason: refused } : {}),
+          ...(hold ? { reason: hold } : {}),
         }),
-        mergeRefusal: refused ? { sha: pr?.headSha ?? null, at, reason: refused } : null,
+        mergeRefusal: hold ? { sha: pr?.headSha ?? null, at, reason: hold } : null,
         lastFailure: refused ?? m.lastFailure ?? null,
         input: { pr: input.pr, branch: input.branch },
       })
       if (refused) ctx.log('warn', refused.split('\n')[0], { repo: slug, issue: issue.number })
+      else if (updated) ctx.log('info', updated, { repo: slug, issue: issue.number })
       else ctx.log('info', `merging PR #${input.pr}`, { repo: slug, issue: issue.number })
     },
   },
