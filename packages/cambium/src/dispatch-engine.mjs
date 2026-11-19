@@ -129,13 +129,26 @@ export function intakeCandidates(deps, ctx) {
 }
 
 /**
- * Resting at `deferred` with its recheck time still ahead: triage waits for it.
+ * Resting at `deferred` with its recheck time still ahead: triage waits for it. Unless it was unblocked meanwhile:
+ * every GitHub "blocked by" issue is closed and one closed after the defer, so it is triaged again at once rather
+ * than at `deferUntil`. A blocker closed before the defer did not cause it, so it wakes nothing.
  * @param {import('./github.mjs').Issue} issue @param {number} now
  */
 const deferredPast = (issue, now) => {
   const m = issue.stateComment?.marker
-  return m?.graph === dispatch.name && m.node === 'deferred' && !!m.deferUntil && Date.parse(m.deferUntil) > now
+  if (!(m?.graph === dispatch.name && m.node === 'deferred' && !!m.deferUntil && Date.parse(m.deferUntil) > now))
+    return false
+  return !unblockedSince(issue.blockedBy ?? [], m.enteredAt)
 }
+
+/**
+ * All blockers closed, at least one after `since`.
+ * @param {import('./github.mjs').Blocker[]} blockers @param {string | null} since
+ */
+const unblockedSince = (blockers, since) =>
+  blockers.length > 0 &&
+  blockers.every((b) => b.state === 'CLOSED') &&
+  blockers.some((b) => !since || (!!b.closedAt && Date.parse(b.closedAt) > Date.parse(since)))
 
 /** @param {Deps} deps @param {Ctx} ctx */
 async function schedule(deps, ctx) {

@@ -14,7 +14,8 @@ export const T0 = Date.parse('2026-11-16T12:00:00Z')
 
 /**
  * @typedef {{ number: number, title?: string, state?: 'OPEN' | 'CLOSED', createdAt?: string, body?: string,
- *   labels?: string[], comment?: { id: number, body: string } | null }} FakeIssue
+ *   labels?: string[], comment?: { id: number, body: string } | null,
+ *   blockedBy?: import('../src/github.mjs').Blocker[] }} FakeIssue
  * @typedef {Partial<import('../src/github.mjs').PullRequest> & { number: number, closes: number[], behind?: number }} FakePr
  *   `behind`: commits of its base the head lacks (`behindBase`); `updatePull` zeroes it and moves the head.
  */
@@ -31,6 +32,7 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
       body: `Body of ${i.number}`,
       labels: [],
       comment: null,
+      blockedBy: [],
       ...i,
     })
   /** @type {import('../src/github.mjs').PullRequest[]} */
@@ -71,6 +73,7 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
     body: i.body,
     labels: [...i.labels],
     stateComment: i.comment ? { id: i.comment.id, marker: /** @type {any} */ (parseMarker(i.comment.body)) } : null,
+    blockedBy: i.blockedBy.map((b) => ({ ...b })),
   })
 
   /** @type {import('../src/github.mjs').GitHub} */
@@ -124,6 +127,7 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
         body,
         labels: [...labels],
         comment: null,
+        blockedBy: [],
       })
       return { number, url: `https://github.com/${slug}/issues/${number}` }
     },

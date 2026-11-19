@@ -14,7 +14,10 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
  * @typedef {{
  *   number: number, title: string, url: string, state: 'OPEN' | 'CLOSED', createdAt: string, body: string,
  *   labels: string[], stateComment: { id: number, marker: import('./marker.mjs').Marker } | null,
+ *   blockedBy: Blocker[],
  * }} Issue
+ * @typedef {{ number: number, state: 'OPEN' | 'CLOSED', closedAt: string | null }} Blocker
+ *   An issue GitHub records as blocking this one (the "blocked by" relationship).
  * @typedef {{ name: string, url: string | null, summary: string }} FailingCheck
  * @typedef {{
  *   number: number, url: string, branch: string, state: 'OPEN' | 'MERGED' | 'CLOSED', headSha: string | null,
@@ -101,6 +104,7 @@ export const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $labels: [
 fragment I on Issue {
   number title url state createdAt body
   labels(first: 30) { nodes { name } }
+  blockedBy(first: 20) { nodes { number state closedAt } }
   comments(first: 100) { nodes { databaseId body author { login } } }
 }
 fragment P on PullRequest {
@@ -214,6 +218,11 @@ function toIssue(n, botLogin) {
     body: n.body ?? '',
     labels: labelsOf(n),
     stateComment: stateCommentOf(n, botLogin),
+    blockedBy: (n.blockedBy?.nodes ?? []).filter(Boolean).map((/** @type {any} */ b) => ({
+      number: b.number,
+      state: b.state,
+      closedAt: b.closedAt ?? null,
+    })),
   }
 }
 
