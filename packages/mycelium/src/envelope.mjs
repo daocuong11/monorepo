@@ -47,6 +47,8 @@ export function envelope(fields) {
  * - testflight: feedback `<appId>/<submissionId>`; a crash
  *   `<appId>/crash/<signature>`, so repeats of one crash land as comments
  *   (a crash whose log yields no signature is keyed on its submission id).
+ * - vitals: `<packageName>/<issueId>`; Google groups crashes and ANRs into
+ *   issues, so a rise in an issue's count lands as a comment.
  * - device-logs: `<stage>/<logId>`; a crash (opt-in) is `<stage>/<signature>`,
  *   so repeats of one crash land on one intent.
  *
@@ -60,6 +62,7 @@ export const IDENTITY = {
     e.meta.kind === 'crash'
       ? `${e.meta.appId}/crash/${e.meta.signature ?? `submission-${e.externalId}`}`
       : `${e.meta.appId}/${e.externalId}`,
+  vitals: (e) => `${e.meta.packageName}/${e.externalId}`,
   'device-logs': (e) => `${e.meta.stage}/${e.meta.signature ?? e.externalId}`,
 }
 

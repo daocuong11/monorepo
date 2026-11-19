@@ -4,8 +4,9 @@ import { DEVICELOG_ENV, deviceLogConfig, deviceLogsSource } from './sources/devi
 import { DISCORD_ENV, discordChannel, discordConfig, discordSource } from './sources/discord.mjs'
 import { PLAY_ENV, playConfig, playSource } from './sources/play.mjs'
 import { testflightSource } from './sources/testflight.mjs'
+import { vitalsSource } from './sources/vitals.mjs'
 
-export const SOURCES = /** @type {const} */ (['discord', 'asc', 'testflight', 'play', 'device-logs'])
+export const SOURCES = /** @type {const} */ (['discord', 'asc', 'testflight', 'play', 'vitals', 'device-logs'])
 export const BACKFILL_HOURS = 24
 
 /**
@@ -22,11 +23,12 @@ const NEEDS = {
   asc: ASC_ENV,
   testflight: ASC_ENV,
   play: [PLAY_ENV[0], `${PLAY_ENV[1]} or ${PLAY_ENV[2]}`],
+  vitals: [PLAY_ENV[0], `${PLAY_ENV[1]} or ${PLAY_ENV[2]}`],
   'device-logs': DEVICELOG_ENV,
 }
 
 /** The settings prefix of each source: `MYCELIUM_<PREFIX>_INTERVAL_S`. */
-const PREFIX = { discord: 'DISCORD', asc: 'ASC', play: 'PLAY', 'device-logs': 'DEVICELOG' }
+const PREFIX = { discord: 'DISCORD', asc: 'ASC', play: 'PLAY', vitals: 'VITALS', 'device-logs': 'DEVICELOG' }
 
 /**
  * One source from the environment, or an error naming what it needs.
@@ -55,6 +57,10 @@ export function sourceFromEnv(name, { env, fetch, sleep }) {
     play: () => {
       const config = playConfig(env)
       return config && playSource({ fetch, sleep, config, intervalMs })
+    },
+    vitals: () => {
+      const config = playConfig(env)
+      return config && vitalsSource({ fetch, sleep, config, intervalMs })
     },
     'device-logs': () => {
       const config = deviceLogConfig(env)

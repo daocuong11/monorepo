@@ -37,17 +37,20 @@ export function ascJwt(creds, nowMs) {
 }
 
 export const PLAY_SCOPE = 'https://www.googleapis.com/auth/androidpublisher'
+/** Play Developer Reporting API (Android vitals). */
+export const REPORTING_SCOPE = 'https://www.googleapis.com/auth/playdeveloperreporting'
 
 /**
  * @param {{ client_email: string, private_key: string, token_uri: string }} account
  * @param {number} nowMs
+ * @param {string} [scope]
  */
-export function playAssertion(account, nowMs) {
+export function playAssertion(account, nowMs, scope = PLAY_SCOPE) {
   const iat = Math.floor(nowMs / 1000)
   return signJwt(
     'RS256',
     {},
-    { iss: account.client_email, scope: PLAY_SCOPE, aud: account.token_uri, iat, exp: iat + 3600 },
+    { iss: account.client_email, scope, aud: account.token_uri, iat, exp: iat + 3600 },
     account.private_key,
   )
 }
