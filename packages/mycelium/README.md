@@ -58,8 +58,8 @@ Each pass reads `GET /repos/<repo>/issues?state=all&since=<cursor>` (any label: 
 
 Channels are opt-in per source:
 
-| source  | setting                      | posts                                                                                                                                                          |
-| ------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| source  | setting                        | posts                                                                                                                                                           |
+| ------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | discord | `MYCELIUM_DISCORD_NOTIFY=true` | in the forum post's thread, or as a reply to the channel message; mentions never parsed. The bot needs Send Messages (and Send Messages in Threads for forums). |
 
 asc and play have no channel: their reviews are answered (or not) in the store consoles.
