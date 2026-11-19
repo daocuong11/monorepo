@@ -10,7 +10,7 @@ import { byPriorityThenAge, move, Q, queueOf, RUNNING, WHY } from './labels.mjs'
 import { withHistory } from './marker.mjs'
 import { failureSummary, iso, key, markerOf, MIN, setLabels, setMarker } from './issue-state.mjs'
 import { GRAPH_ENGINE } from './graph-engine.mjs'
-import { prFor, taskExit, taskPrompt } from './phases/task.mjs'
+import { linkIssue, prFor, taskExit, taskPrompt } from './phases/task.mjs'
 import { branchName } from './convention.mjs'
 import { PREPARE_FAILED_LINE } from './prepare.mjs'
 import { releaseDue, releaseNotBuilt } from './phases/release.mjs'
@@ -289,6 +289,7 @@ export async function finish(deps, ctx, w, snap) {
     await setLabels(deps, w.repo, issue, move(issue.labels, null))
     ctx.touched.add(key(w.repo, w.issue))
     deps.log('info', `submitted PR #${pr.number}; watching CI`, { repo: w.repo, issue: w.issue })
+    await linkIssue(deps, w.repo, pr, w.issue)
   } else {
     const tail = deps.spawner.tail(w.stderr, 15)
     const reason = `${'reason' in verdict ? verdict.reason : 'worker failed'}${tail ? `\n--- stderr (last lines, ${w.stderr})\n${tail}` : ''}`
