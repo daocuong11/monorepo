@@ -307,14 +307,21 @@ export function traceList(f, { limit = 200 } = {}) {
   return { ...describe(f), total: all.length, traces: all.slice(0, limit) }
 }
 
+/** The window the Queue tab's throughput figures cover. */
+export const RECENT_MS = 24 * 3_600_000
+
 /**
  * What `/api/state` carries: counts and, per `owner/name#n`, that issue's
  * newest trace id, so other tabs can link to it, and where that run has got to
- * (`progress`), so the Queue tab can show how far live work has come.
+ * (`progress`), so the Queue tab can show how far live work has come. `recent`
+ * is the last `RECENT_MS`: traces with a span ending in it, which cambium node
+ * each last reached (most common first; `null` when it reached none), failures
+ * and spend.
  *
  * @param {TraceFile} f
+ * @param {number} [now]
  */
-export function traceIndex(f) {
+export function traceIndex(f, now = Date.now()) {
   const all = summaries(f)
   /** @type {Record<string, string>} */
   const byIssue = {}
@@ -328,7 +335,27 @@ export function traceIndex(f) {
     const { id, graph, node, outcome, costUsd, errors, end, trail } = t
     progress[key] = { id, graph, node, outcome, costUsd, errors, end, trail }
   }
-  return { ...describe(f), total: all.length, errored: all.filter((t) => t.errors).length, byIssue, progress }
+  const recent = all.filter((t) => t.end >= now - RECENT_MS)
+  /** @type {Map<string | null, number>} */
+  const nodes = new Map()
+  for (const t of recent) nodes.set(t.node, (nodes.get(t.node) || 0) + 1)
+  const costs = recent.map((t) => t.costUsd).filter((c) => c != null)
+  return {
+    ...describe(f),
+    total: all.length,
+    errored: all.filter((t) => t.errors).length,
+    byIssue,
+    progress,
+    recent: {
+      sinceMs: RECENT_MS,
+      runs: recent.length,
+      errored: recent.filter((t) => t.errors).length,
+      costUsd: costs.length ? costs.reduce((a, b) => a + /** @type {number} */ (b), 0) : null,
+      byNode: [...nodes]
+        .map(([node, n]) => ({ node, n }))
+        .sort((a, b) => b.n - a.n || String(a.node).localeCompare(String(b.node))),
+    },
+  }
 }
 
 /**

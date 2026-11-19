@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { cachedIssues } from '../src/github.mjs'
-import { facetsOf, inboxItems, priorityRank, viewOf } from '../src/inbox.mjs'
+import { facetsOf, inboxItems, inboxStats, priorityRank, viewOf } from '../src/inbox.mjs'
 import { issueDetail } from '../src/issue.mjs'
 import { markdown } from '../src/markdown.mjs'
 import { iso, T0 } from './fixtures.mjs'
@@ -66,6 +66,25 @@ test('viewOf: tags in one facet widen, across facets narrow', () => {
   assert.deepEqual(v(['why:budget', 'priority:high']), [3])
   assert.deepEqual(v(['kind:stranded']), [9])
   assert.deepEqual(v(['label:nope']), [])
+})
+
+test('inboxStats: reasons and priorities in a fixed order, ages by creation, oldest', () => {
+  const xs = inboxItems(gh())
+  const born = [0.5, 3, 20, 40, 1]
+  xs.forEach((x, i) => {
+    x.createdAt = iso(T0 - born[i] * 86_400_000)
+  })
+  xs[3].why = null
+  const st = inboxStats(xs, T0)
+  const parts = (/** @type {{ label: string, n: number, tag: string | null }[]} */ ps) =>
+    ps.map((p) => `${p.label}:${p.n}${p.tag ? '' : '-'}`)
+  assert.equal(st.total, 5)
+  assert.deepEqual(parts(st.reasons), ['budget:2', 'triage:1', 'no why::1-', 'PR closed:1'])
+  assert.deepEqual(parts(st.priorities), ['critical:1', 'high:2', 'low:1', 'none:1-'])
+  assert.deepEqual(parts(st.opened), ['under 1d:1-', '1–7d:2-', '1–4w:1-', 'over 4w:1-'])
+  assert.equal(st.oldest, xs[3].createdAt)
+  assert.deepEqual(parts(st.repos), [`${REPO}:5`])
+  assert.deepEqual(parts(inboxStats([], T0).opened), ['under 1d:0-', '1–7d:0-', '1–4w:0-', 'over 4w:0-'])
 })
 
 test('facetsOf offers only tags that narrow, keeps selected ones at zero, orders priorities by urgency', () => {

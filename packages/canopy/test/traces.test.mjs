@@ -13,6 +13,7 @@ import {
   spansOf,
   summarize,
   traceDetail,
+  RECENT_MS,
   traceIndex,
   traceList,
   traceStore,
@@ -206,6 +207,26 @@ test('traceDetail orders parents before children, siblings by start', () => {
     errors: 1,
     end: summarize(TRACE, /** @type {any} */ (f.traces.get(TRACE))).end,
     trail: ['start-worker', 'ci-running'],
+  })
+  const ends = [TRACE, OTHER].map((id) => summarize(id, /** @type {any} */ (f.traces.get(id))).end)
+  const latest = Math.max(...ends)
+  // Both traces end within a day of the later one; a day past it, neither does.
+  const day = traceIndex(f, latest).recent
+  assert.equal(day.runs, 2)
+  assert.equal(day.errored, 1)
+  assert.equal(day.costUsd, 1.25)
+  assert.equal(day.sinceMs, RECENT_MS)
+  assert.deepEqual(
+    day.byNode.map((x) => x.n),
+    [1, 1],
+  )
+  assert.ok(day.byNode.some((x) => x.node === 'ci-running'))
+  assert.deepEqual(traceIndex(f, latest + RECENT_MS + 1).recent, {
+    sinceMs: RECENT_MS,
+    runs: 0,
+    errored: 0,
+    costUsd: null,
+    byNode: [],
   })
 })
 
