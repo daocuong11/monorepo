@@ -44,6 +44,8 @@ export function envelope(fields) {
  *   message a reply points at, or else the message itself.
  * - asc: `<appId>/<reviewId>`.
  * - play: `<packageName>/<reviewId>`; an edited review keeps its id.
+ * - vitals: `<packageName>/<issueId>`; Google groups crashes and ANRs into
+ *   issues, so a rise in an issue's count lands as a comment.
  *
  * @type {Record<string, (e: Envelope) => string>}
  */
@@ -51,6 +53,7 @@ export const IDENTITY = {
   discord: (e) => `${e.meta.channelId}/${e.meta.rootId ?? e.externalId}`,
   asc: (e) => `${e.meta.appId}/${e.externalId}`,
   play: (e) => `${e.meta.packageName}/${e.externalId}`,
+  vitals: (e) => `${e.meta.packageName}/${e.externalId}`,
 }
 
 /** @param {Envelope} e */

@@ -2,8 +2,9 @@
 import { ASC_ENV, ascConfig, ascSource } from './sources/asc.mjs'
 import { DISCORD_ENV, discordChannel, discordConfig, discordSource } from './sources/discord.mjs'
 import { PLAY_ENV, playConfig, playSource } from './sources/play.mjs'
+import { vitalsSource } from './sources/vitals.mjs'
 
-export const SOURCES = /** @type {const} */ (['discord', 'asc', 'play'])
+export const SOURCES = /** @type {const} */ (['discord', 'asc', 'play', 'vitals'])
 export const BACKFILL_HOURS = 24
 
 /**
@@ -19,6 +20,7 @@ const NEEDS = {
   discord: DISCORD_ENV.slice(0, 2),
   asc: ASC_ENV,
   play: [PLAY_ENV[0], `${PLAY_ENV[1]} or ${PLAY_ENV[2]}`],
+  vitals: [PLAY_ENV[0], `${PLAY_ENV[1]} or ${PLAY_ENV[2]}`],
 }
 
 /**
@@ -43,6 +45,10 @@ export function sourceFromEnv(name, { env, fetch, sleep }) {
     play: () => {
       const config = playConfig(env)
       return config && playSource({ fetch, sleep, config, intervalMs })
+    },
+    vitals: () => {
+      const config = playConfig(env)
+      return config && vitalsSource({ fetch, sleep, config, intervalMs })
     },
   }[name]
   if (!make) throw new Error(`unknown source '${name}'; the sources are ${SOURCES.join(', ')}`)

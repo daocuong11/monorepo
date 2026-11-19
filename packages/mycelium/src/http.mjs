@@ -10,9 +10,9 @@ const defaultSleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout
 
 /**
  * One JSON request. A 429 waits out `Retry-After` (header, else a JSON
- * `retry_after`) and repeats; any other status ≥ 400 throws with the first
- * 200 chars of the body, which is where every one of these APIs names the
- * reason.
+ * `retry_after`) and repeats; any other status ≥ 400 throws (with `status`
+ * set) and the first 200 chars of the body, which is where every one of these
+ * APIs names the reason.
  *
  * @param {{ fetch: Fetch, sleep?: (ms: number) => Promise<void>, label: string }} ports
  * @param {string} url
@@ -32,7 +32,8 @@ export async function requestJson({ fetch, sleep = defaultSleep, label }, url, i
       await sleep(Math.max(0, secs) * 1000)
       continue
     }
-    if (res.status >= 400) throw new Error(`${label}: ${res.status} ${text.slice(0, 200)}`)
+    if (res.status >= 400)
+      throw Object.assign(new Error(`${label}: ${res.status} ${text.slice(0, 200)}`), { status: res.status })
     return text ? JSON.parse(text) : null
   }
 }
