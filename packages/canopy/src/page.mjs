@@ -149,15 +149,16 @@ a.row-link{color:inherit}a.row-link:hover{text-decoration:none}tr.run:hover td{b
 .legend i{width:10px;height:8px;border-radius:2px;background:var(--fam,var(--muted))}.legend i.wait{background:repeating-linear-gradient(135deg,var(--bar) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px var(--bar)}.legend i.err{background:var(--err)}
 .sp .d{text-align:right;color:var(--muted)}
 .sp .nm .pill{margin-left:6px}
-.trace-split{display:grid;grid-template-columns:minmax(0,3fr) minmax(300px,2fr);gap:var(--s4);align-items:start;margin-top:var(--s3)}.trace-split .wf{margin-top:0}
+main:has(.flame){max-width:none}
 .quiet-note{display:flex;flex-wrap:wrap;gap:2px var(--s2);margin-bottom:var(--s2);font-size:12px;color:var(--faint)}
-.flame{position:sticky;top:calc(var(--top-h,90px) + var(--s4));max-height:calc(100vh - var(--top-h,90px) - var(--s4) * 2);overflow:auto;scrollbar-width:thin;scrollbar-color:var(--bar) transparent;border-left:1px solid var(--line);padding-left:var(--s4)}
+.flame{margin-top:var(--s3);padding-bottom:var(--s3);border-bottom:1px solid var(--line);max-height:60vh;overflow:hidden auto;scrollbar-width:thin;scrollbar-color:var(--bar) transparent}
 .flame h2{margin-bottom:var(--s1)}.crumbs{display:flex;flex-wrap:wrap;gap:2px 6px;font-size:12px;color:var(--faint);margin-bottom:var(--s2);overflow-wrap:anywhere}
 .fl{position:relative}
-.fr{appearance:none;position:absolute;height:18px;padding:0 4px;border:0;border-radius:2px;box-shadow:inset 0 0 0 1px var(--panel);font:11px/18px ui-monospace,SFMono-Regular,Menlo,monospace;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;
+.fr{appearance:none;position:absolute;height:18px;min-width:0;padding:0;border:0;border-radius:2px;box-shadow:inset 0 0 0 1px var(--panel);font:11px/18px ui-monospace,SFMono-Regular,Menlo,monospace;text-align:left;overflow:hidden;cursor:pointer;
 color:var(--text);background:color-mix(in srgb,var(--fam,var(--muted)) 32%,var(--panel))}
 .fr:hover{background:color-mix(in srgb,var(--fam,var(--muted)) 55%,var(--panel))}.fr:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .fr.err{box-shadow:inset 0 -2px 0 var(--err),inset 0 0 0 1px var(--panel)}
+.fr>span{display:block;padding:0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fl-note{font-size:12px;color:var(--faint);margin-top:var(--s2)}
 .attrs{margin:0;padding:var(--s2) 0 var(--s3) var(--s4);display:grid;grid-template-columns:max-content minmax(0,1fr);gap:2px var(--s3);font-size:12px}
 .attrs dt{color:var(--muted)}.attrs dd{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
@@ -165,7 +166,6 @@ color:var(--text);background:color-mix(in srgb,var(--fam,var(--muted)) 32%,var(-
 .ib-pane{position:static;max-height:none;padding:var(--s3) var(--s4) var(--s4)}.back{display:inline-block}
 .facets{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding:2px 0}.chip{flex:none}}
 @media (max-width:1100px){.cols{grid-template-columns:repeat(4,minmax(0,1fr))}.detail{grid-template-columns:1fr}
-.trace-split{grid-template-columns:minmax(0,1fr)}.flame{order:-1;position:static;max-height:none;border-left:0;padding-left:0;border-bottom:1px solid var(--line);padding-bottom:var(--s3)}
 .col.prs{grid-column:1/-1;border-left:0;padding-left:0;border-top:1px solid var(--line);padding-top:var(--s3)}}
 @media (max-width:760px){.cols{grid-template-columns:repeat(2,minmax(0,1fr))}
 .sp,.wf-axis{grid-template-columns:minmax(0,1fr) 56px}.sp .track,.wf-axis .ticks{grid-column:1/-1;order:3}.wf-axis>span:not(.ticks){display:none}}
@@ -616,8 +616,7 @@ function traceView(d) {
   const note = quiet.length ? h('div', { class: 'quiet-note' },
     h('span', {}, plural(quiet.length, 'permission check', 'permission checks'), ' approved by config or a hook, with nobody asked, ', showQuiet ? 'shown' : 'hidden', '.'),
     h('button', { type: 'button', class: 'linkish', 'data-quiet': '' }, showQuiet ? 'hide them' : 'show them')) : null
-  return h('section', {}, head, h('div', { class: 'trace-split' },
-    h('div', { class: 'wf' }, legend(d.spans), note, axis, rows), flameView(d.spans)), traceFileNote(d))
+  return h('section', {}, head, flameView(d.spans), h('div', { class: 'wf' }, legend(d.spans), note, axis, rows), traceFileNote(d))
 }
 
 // A permission check a person answered, or one that was refused, is the one worth seeing.
@@ -648,7 +647,7 @@ function flameView(spans) {
       style: 'left:' + (f.left * 100).toFixed(3) + '%;width:' + (f.width * 100).toFixed(3) + '%;top:' + f.level * ROW + 'px',
       title: f.label + '\\n' + dur(f.ms) + ' · ' + share(f) + ' · ' + plural(f.count, 'span', 'spans') + (f.errors ? ' · ' + f.errors + ' failed' : '') +
         (f === frames[0] && top !== tree ? '\\nclick to zoom out' : '') },
-      f.label + ' · ' + dur(f.ms))
+      h('span', {}, f.label + ' · ' + dur(f.ms)))
   })
   return h('aside', { class: 'flame', 'aria-label': 'Flame graph' }, h('h2', {}, 'Where time went'),
     h('div', { class: 'crumbs' }, crumbs),
