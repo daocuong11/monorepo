@@ -84,10 +84,10 @@
       }
     },
     "git": {
-      "commit": false,
+      "commit": true,
+      "commitMessage": "chore(release): publish [skip ci]",
       "tag": true,
-      "push": true,
-      "pushArgs": "origin refs/tags/*:refs/tags/*"
+      "push": true
     },
     "releaseTag": {
       "pattern": "{projectName}@{version}"
