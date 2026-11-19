@@ -135,6 +135,98 @@ test('red CI while merging → requeue', async () => {
   assert.equal(h.gh.marker(50)?.history.at(-1)?.outcome, 'ci-red')
 })
 
+test('behind its base: update the branch instead of merging, then merge once the new head is green', async () => {
+  const h = submitted({ pr: { checks: 'SUCCESS', headSha: 'head1', behind: 2 } })
+  const updates = () => h.gh.calls.filter((c) => c.op === 'updatePull').map((c) => c.args)
+  await tick(h.deps)
+  assert.deepEqual(h.merges(), [], 'green on an old base is not merged')
+  assert.deepEqual(updates(), [[SLUG, 500]])
+  const m = h.gh.marker(50)
+  assert.equal(m?.node, 'merging')
+  assert.equal(m?.history.at(-1)?.outcome, 'branch-updated')
+  assert.match(String(m?.history.at(-1)?.reason), /2 commits behind develop/)
+  assert.equal(m?.mergeRefusal?.sha, 'head1', 'held on the head it replaced')
+  assert.deepEqual(h.gh.issue(50).labels, [], 'an update is not a requeue')
+
+  await tick(h.deps)
+  assert.deepEqual(h.merges(), [], 'CI pending on the updated head')
+  assert.equal(updates().length, 1)
+
+  h.gh.pr(500).checks = 'SUCCESS'
+  await tick(h.deps)
+  assert.deepEqual(h.merges(), [[SLUG, 500]])
+  assert.equal(h.gh.marker(50)?.history.at(-1)?.outcome, 'merge-armed')
+  assert.equal(h.gh.marker(50)?.mergeRefusal, null)
+})
+
+test('two PRs green on the same base in one tick: the first merges, the second is updated, not merged', async () => {
+  // sektorapp/monorepo#4624 and #4625: each green on the same base, merged 8 s apart, red together.
+  const h = harness({
+    issues: [
+      { number: 50, labels: [] },
+      { number: 51, labels: [] },
+    ],
+    prs: [
+      { number: 500, closes: [50], checks: 'SUCCESS', headSha: 'a1', autoMerge: false },
+      { number: 501, closes: [51], checks: 'SUCCESS', headSha: 'b1', autoMerge: false },
+    ],
+    config: { engine: 'graph', repos: [{ slug: SLUG, path: '/repo', merge: 'green' }], phases: { task: { cap: 0 } } },
+  })
+  for (const [n, pr] of [
+    [50, 500],
+    [51, 501],
+  ]) {
+    h.gh.issue(n).comment = {
+      id: n,
+      body: renderMarker(
+        newMarker({
+          node: 'ci-running',
+          graphVersion: 1,
+          pr,
+          branch: `agent/issue-${n}`,
+          submittedAt: new Date(h.clock.now()).toISOString(),
+          queued: false,
+        }),
+      ),
+    }
+  }
+  // A merge moves the base: every other open PR is now behind it.
+  const merge = h.gh.github.mergePull
+  h.gh.github.mergePull = async (slug, n) => {
+    await merge(slug, n)
+    for (const p of /** @type {any[]} */ (h.gh.pulls)) if (p.number !== n) p.behind = (p.behind ?? 0) + 1
+  }
+
+  await tick(h.deps)
+  const ops = h.gh.calls.filter((c) => c.op === 'mergePull' || c.op === 'updatePull').map((c) => [c.op, c.args[1]])
+  assert.deepEqual(ops, [
+    ['mergePull', 500],
+    ['updatePull', 501],
+  ])
+  assert.equal(h.gh.marker(51)?.history.at(-1)?.outcome, 'branch-updated')
+})
+
+test('red CI on the updated head goes back to a worker', async () => {
+  const h = submitted({ pr: { checks: 'SUCCESS', headSha: 'head1', behind: 1 } })
+  await tick(h.deps)
+  assert.equal(h.gh.marker(50)?.history.at(-1)?.outcome, 'branch-updated')
+  h.gh.pr(500).checks = 'FAILURE'
+  await tick(h.deps)
+  assert.deepEqual(h.gh.issue(50).labels, ['q:task'])
+  assert.equal(h.gh.marker(50)?.history.at(-1)?.outcome, 'ci-red')
+  assert.deepEqual(h.merges(), [])
+})
+
+test('an update GitHub refuses (a conflict) is a refused merge: held, retried after the window', async () => {
+  const h = submitted({ pr: { checks: 'SUCCESS', headSha: 'head1', behind: 1 } })
+  h.gh.faults.updateError = new Error('merge conflict between base and head')
+  await tick(h.deps)
+  const m = h.gh.marker(50)
+  assert.equal(m?.history.at(-1)?.outcome, 'merge-refused')
+  assert.match(String(m?.lastFailure), /merge conflict/)
+  assert.deepEqual(h.merges(), [])
+})
+
 test('the worker prompt says who merges', () => {
   const issue = /** @type {any} */ ({ number: 1, title: 't', url: 'u', body: 'b' })
   const base = { repo: SLUG, issue, marker: newMarker(), branch: 'b', pr: null, agentsMd: null, maxAttempts: 3 }

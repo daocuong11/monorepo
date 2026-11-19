@@ -47,8 +47,12 @@ import { Q, QUEUE_LABELS } from './labels.mjs'
  *   editPull(slug: string, number: number, change: { title: string, body: string }): Promise<void>,
  *   closePull(slug: string, number: number, comment: string): Promise<void>,
  *   mergePull(slug: string, number: number): Promise<void>,
+ *   behindBase(slug: string, number: number): Promise<{ behind: number, base: string }>,
+ *   updatePull(slug: string, number: number): Promise<void>,
  *   linkIssue(slug: string, pr: number, issue: number): Promise<void>,
  * }} GitHub
+ *   `behindBase`: how many commits of its base the PR's head lacks, read live (not from the tick's snapshot), so a
+ *   merge earlier in the same tick counts. `updatePull`: merge the base into the PR (`graft pr update`).
  *   `linkIssue`: put `Closes #<issue>` at the top of the PR's body, so the PR names the issue it closes.
  */
 
@@ -367,6 +371,17 @@ export function graftGitHub({ config, exec: run = exec }) {
     // Through graft's merge policy, as an agent's merge would: auto-merge, or a merge now when the PR is clean.
     async mergePull(slug, number) {
       await graft(slug, ['pr', 'merge', String(number), '--auto'])
+    },
+    async behindBase(slug, number) {
+      const pr = await json(graft(slug, ['api', 'GET', `/repos/${slug}/pulls/${number}`]))
+      const base = pr.base.ref
+      const cmp = await json(
+        graft(slug, ['api', 'GET', `/repos/${slug}/compare/${encodeURIComponent(base)}...${pr.head.sha}`]),
+      )
+      return { behind: Number(cmp.behind_by ?? 0), base }
+    },
+    async updatePull(slug, number) {
+      await graft(slug, ['pr', 'update', String(number)])
     },
     async linkIssue(slug, pr, issue) {
       const path = `/repos/${slug}/pulls/${pr}`

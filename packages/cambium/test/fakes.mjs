@@ -15,7 +15,8 @@ export const T0 = Date.parse('2026-11-16T12:00:00Z')
 /**
  * @typedef {{ number: number, title?: string, state?: 'OPEN' | 'CLOSED', createdAt?: string, body?: string,
  *   labels?: string[], comment?: { id: number, body: string } | null }} FakeIssue
- * @typedef {Partial<import('../src/github.mjs').PullRequest> & { number: number, closes: number[] }} FakePr
+ * @typedef {Partial<import('../src/github.mjs').PullRequest> & { number: number, closes: number[], behind?: number }} FakePr
+ *   `behind`: commits of its base the head lacks (`behindBase`); `updatePull` zeroes it and moves the head.
  */
 
 /** @param {{ issues?: FakeIssue[], prs?: FakePr[] }} [seed] */
@@ -48,8 +49,8 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
   /** @type {{ op: string, args: any[] }[]} */
   const calls = []
   let nextComment = 1000
-  /** @type {{ readError: Error | null, labelError: Error | null, hang: boolean, mergeError: Error | null }} */
-  const faults = { readError: null, labelError: null, hang: false, mergeError: null }
+  /** @type {{ readError: Error | null, labelError: Error | null, hang: boolean, mergeError: Error | null, updateError: Error | null }} */
+  const faults = { readError: null, labelError: null, hang: false, mergeError: null, updateError: null }
 
   const toIssue = (/** @type {Required<FakeIssue>} */ i) => ({
     number: i.number,
@@ -105,6 +106,17 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
     async mergePull(slug, number) {
       calls.push({ op: 'mergePull', args: [slug, number] })
       if (faults.mergeError) throw faults.mergeError
+    },
+    async behindBase(slug, number) {
+      calls.push({ op: 'behindBase', args: [slug, number] })
+      const p = /** @type {any} */ (pulls.find((x) => x.number === number))
+      return { behind: p?.behind ?? 0, base: 'develop' }
+    },
+    async updatePull(slug, number) {
+      calls.push({ op: 'updatePull', args: [slug, number] })
+      if (faults.updateError) throw faults.updateError
+      const p = /** @type {any} */ (pulls.find((x) => x.number === number))
+      Object.assign(p, { behind: 0, headSha: `${p.headSha}+base`, checks: 'PENDING' })
     },
     async linkIssue(slug, pr, issue) {
       calls.push({ op: 'linkIssue', args: [slug, pr, issue] })

@@ -504,3 +504,28 @@ test('snapshot: closing refs from the PR body count, for a PR into a non-default
     'a number that is a PR, not an issue, is dropped',
   )
 })
+
+test('graft client: behindBase compares the base branch to the PR head, live; updatePull is graft pr update', async () => {
+  /** @type {string[][]} */
+  const calls = []
+  const answers = [
+    JSON.stringify({ base: { ref: 'release/next' }, head: { sha: 'abc123' } }),
+    JSON.stringify({ behind_by: 3, ahead_by: 1 }),
+    '',
+  ]
+  const config = resolveConfig({ repos: [{ slug: 'o/r', path: '/src/r' }] })
+  const gh = graftGitHub({
+    config,
+    exec: async (_cmd, args) => {
+      calls.push(args)
+      return /** @type {string} */ (answers.shift())
+    },
+  })
+  assert.deepEqual(await gh.behindBase('o/r', 9), { behind: 3, base: 'release/next' })
+  await gh.updatePull('o/r', 9)
+  assert.deepEqual(calls, [
+    ['api', 'GET', '/repos/o/r/pulls/9', '--repo', 'o/r'],
+    ['api', 'GET', '/repos/o/r/compare/release%2Fnext...abc123', '--repo', 'o/r'],
+    ['pr', 'update', '9', '--repo', 'o/r'],
+  ])
+})
