@@ -273,6 +273,55 @@ test('workerSpans: a killed worker (no result, unpaired tool) ends at the last t
   await t.shutdown()
 })
 
+test('workerSpans: a turn span per assistant message that thinks or says something', async () => {
+  const { t, spans } = await recording()
+  const at = (/** @type {number} */ s) => `2026-11-18T10:00:${String(s).padStart(2, '0')}.000Z`
+  const said = (/** @type {number} */ s, /** @type {string} */ id, /** @type {any[]} */ content, parent = null) => ({
+    type: 'assistant',
+    timestamp: at(s),
+    parent_tool_use_id: parent,
+    message: { id, content },
+  })
+  const result = (/** @type {number} */ s, /** @type {string} */ id) => ({
+    type: 'user',
+    timestamp: at(s),
+    message: { content: [{ type: 'tool_result', tool_use_id: id }] },
+  })
+  const s = workerSpans(
+    [
+      { type: 'system', subtype: 'init', session_id: 's', timestamp: at(0) },
+      said(2, 'm1', [{ type: 'thinking', thinking: 'Read the issue first.', signature: 'x' }]),
+      said(3, 'm1', [{ type: 'text', text: 'Reading it.' }]),
+      said(4, 'm1', [{ type: 'tool_use', id: 'tu1', name: 'Agent', input: {} }]),
+      said(6, 'm2', [{ type: 'thinking', thinking: 'Sub: grep it.' }], 'tu1'),
+      said(7, 'm2', [{ type: 'tool_use', id: 'tu2', name: 'Grep', input: {} }], 'tu1'),
+      result(8, 'tu2'),
+      result(9, 'tu1'),
+      said(10, 'm3', [{ type: 'thinking', thinking: '', signature: 'redacted' }]),
+      said(11, 'm3', [{ type: 'tool_use', id: 'tu3', name: 'Bash', input: { command: 'ls' } }]),
+      result(12, 'tu3'),
+      { type: 'result', timestamp: at(13), subtype: 'success', is_error: false, session_id: 's' },
+    ],
+    { tracer: t.tracer, parent: TP },
+  )
+  assert.equal(s.turns, 2, 'a message with only redacted thinking and a tool call is no turn')
+  const all = await spans()
+  const turns = all.filter((x) => x.name === 'claude.turn')
+  assert.equal(turns.length, 2)
+  const [top, sub] = turns.sort((a, b) => a.startTime[0] - b.startTime[0])
+  assert.equal(top.attributes['claude.thinking'], 'Read the issue first.')
+  assert.equal(top.attributes['claude.text'], 'Reading it.')
+  assert.equal(top.attributes['claude.turn.tools'], 'Agent')
+  assert.equal(top.startTime[0] * 1000, Date.parse(at(0)), 'from the event before the message')
+  assert.equal(top.endTime[0] * 1000, Date.parse(at(4)), 'to its last event')
+  const session = all.find((x) => x.name === 'claude.session')
+  assert.equal(top.parentSpanContext?.spanId, session?.spanContext().spanId)
+  const agent = all.find((x) => x.attributes['claude.tool.name'] === 'Agent')
+  assert.equal(sub.parentSpanContext?.spanId, agent?.spanContext().spanId, "a subagent's turn nests under its tool")
+  assert.equal(sub.attributes['claude.text'], undefined)
+  await t.shutdown()
+})
+
 test('workerSpans: garbage and empty logs emit nothing', async () => {
   const { t, spans } = await recording()
   assert.equal(workerSpans('', { tracer: t.tracer }).complete, false)

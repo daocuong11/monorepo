@@ -78,7 +78,7 @@ Set `graft.botLogin` to the Clock App's login and only markers written by it are
 
 ## Workers
 
-A worker is `claude -p --output-format stream-json --verbose --max-turns <maxTurns> --allowedTools Read,Edit,Write,Glob,Grep,Bash --disallowedTools "Bash(graft issue label:*),Bash(graft issue edit:*),Bash(gh:*)" <worker.args>`:
+A worker is `claude -p --output-format stream-json --verbose --thinking-display summarized --max-turns <maxTurns> --allowedTools Read,Edit,Write,Glob,Grep,Bash --disallowedTools "Bash(graft issue label:*),Bash(graft issue edit:*),Bash(gh:*)" <worker.args>`:
 
 - in its own worktree, by the target repo's [worktree convention](#target-repo-convention);
 - behind the prepare step: `node src/prepare.mjs -- claude …` runs install-fresh, hydrate and the repo's `prepare` commands in the worktree, writing to the worker's stderr log, then becomes the worker. It runs in the detached process so a long install never blocks a tick;
@@ -499,13 +499,13 @@ if (polled.ready) out = await app.invoke(new Command({ resume: polled.output }),
 
 Why not a shared package: cambium is published to npm, so it can only depend on published packages; a new publishable `@oakgreencc/telemetry` needs a protected `nx.json` release change. mycelium already publishes `createTracing`, so it gained a `serviceName` option and cambium depends on `@oakgreencc/mycelium` (which also gives it `parseTraceparent` for the intake trace).
 
-| Span / metric                        | When                                                                                                     | Parent                                                         |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `cambium.issue`                      | Once per issue, when the marker has no `traceparent`. Ended at once; its traceparent goes in the marker. | mycelium's intake span from the issue body, else none (a root) |
-| `cambium.node`                       | Each step-node run                                                                                       | The marker's `traceparent`                                     |
-| `cambium.wait`                       | When a wait ends; `startTime` = the marker's `enteredAt`. No span stays open across ticks.               | The marker's `traceparent`                                     |
-| `cambium.wait.not_ready`             | Counter, +1 per not-ready poll (attributes graph, node, repo)                                            |                                                                |
-| `claude.session` / `.tool` / `.task` | From the worker's stream-json log, see below                                                             | The start-worker `cambium.node` span                           |
+| Span / metric                                  | When                                                                                                     | Parent                                                         |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `cambium.issue`                                | Once per issue, when the marker has no `traceparent`. Ended at once; its traceparent goes in the marker. | mycelium's intake span from the issue body, else none (a root) |
+| `cambium.node`                                 | Each step-node run                                                                                       | The marker's `traceparent`                                     |
+| `cambium.wait`                                 | When a wait ends; `startTime` = the marker's `enteredAt`. No span stays open across ticks.               | The marker's `traceparent`                                     |
+| `cambium.wait.not_ready`                       | Counter, +1 per not-ready poll (attributes graph, node, repo)                                            |                                                                |
+| `claude.session` / `.tool` / `.turn` / `.task` | From the worker's stream-json log, see below                                                             | The start-worker `cambium.node` span                           |
 
 Node and wait spans carry `cambium.graph`, `cambium.graph.version`, `cambium.node`, `cambium.attempt`, `cambium.repo`, `cambium.issue.number`, `cambium.edge`, `cambium.outcome`.
 
@@ -559,6 +559,7 @@ telemetry.workerSpans(stream, parent)   // same, with cambium's tracer
 
 - `claude.session`: first to last `timestamp`. Attributes from `result` and `system/init`: `claude.session_id`, `claude.model`, `claude_code.version`, `claude.cost_usd`, `claude.tokens.{input,output,cache_read,cache_creation}`, `claude.turns`, `claude.duration_ms`, `claude.terminal_reason`, `claude.result`, `claude.permission_denials`. No `result` (killed, truncated) or an error result → ERROR.
 - `claude.tool`: each `tool_use` → `tool_result` by id (a subagent's tools nest under its Agent tool span); `claude.tool.name`, `claude.tool.outcome` (`ok` / `error` / `unfinished`), `claude.tool.command` (Bash, clipped to 200 chars). Unpaired → ends at the last timestamp, ERROR.
+- `claude.turn`: each assistant message (stream events grouped by `message.id`) with thinking or text; `claude.thinking` (the thinking summary), `claude.text`, each clipped to 4000 chars, and `claude.turn.tools` (tools it called). Runs from the event before the message to its last; a subagent's turns nest under its Agent tool span. Workers run with `--thinking-display summarized`, since stream-json otherwise carries thinking blocks with empty text; canopy shows a one-line preview in the span row and the full text in its detail.
 - `claude.task`: each background task, `task_started` → `task_notification` (or `task_updated.patch.end_time`), under the tool that started it. These events have no timestamp, so their times are those of the latest timestamped event.
 - Malformed lines are counted (`malformed`) and skipped; `system/thinking_tokens`, `tool_progress`, hooks and rate-limit events are ignored.
 

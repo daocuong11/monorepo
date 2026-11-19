@@ -78,6 +78,9 @@ export const workerArgs = (config, maxTurns, { readOnly = false } = {}) => [
   '--output-format',
   'stream-json',
   '--verbose',
+  // Thinking is redacted in stream-json without this; summaries become `claude.turn` spans (tracing.mjs).
+  '--thinking-display',
+  'summarized',
   '--max-turns',
   String(maxTurns),
   '--allowedTools',

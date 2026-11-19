@@ -353,6 +353,13 @@ const outcomeOf = (output) => {
 }
 
 const COMMAND_MAX = 200
+const TURN_TEXT_MAX = 4000
+
+/** @param {string} a @param {string} b */
+const join = (a, b) => (a && b ? `${a}\n\n${b}` : a || b)
+
+/** A turn worth a span: it thought or said something. @param {Turn} u */
+const said = (u) => Boolean(u.thinking.trim() || u.text.trim())
 
 /** @param {unknown} s @param {number} [max] */
 const clip = (s, max = COMMAND_MAX) => {
@@ -387,9 +394,10 @@ function* events(stream) {
 /**
  * @typedef {{ id: string, name: string, input: any, start: number, end: number | null, error: boolean, parentToolId: string | null }} ToolUse
  * @typedef {{ id: string, toolUseId: string | null, type?: string, description?: string, start: number, end: number | null, status?: string }} BgTask
+ * @typedef {{ id: string, start: number, end: number, thinking: string, text: string, tools: string[], parentToolId: string | null }} Turn
  * @typedef {{
  *   sessionId: string | null, complete: boolean, ok: boolean, start: number | null, end: number | null,
- *   tools: number, tasks: number, malformed: number, costUsd: number | null,
+ *   tools: number, tasks: number, turns: number, malformed: number, costUsd: number | null,
  * }} WorkerSummary
  */
 
@@ -403,6 +411,10 @@ function* events(stream) {
  * - `claude.tool` per `tool_use` → matching `tool_result` (a subagent's tools nest under its Agent/Task tool span),
  *   with the tool name, ok/error and, for Bash, the command clipped to 200 chars. Unpaired → ends at the last
  *   timestamp, ERROR.
+ * - `claude.turn` per assistant message (its stream events grouped by `message.id`) that says or thinks anything:
+ *   the thinking summary and text, each clipped to 4000 chars, and the tools it called. It runs from the event before
+ *   the message (the model's input was ready) to its last event, under the subagent's tool span when it has one.
+ *   Thinking is empty unless the worker runs with `--thinking-display summarized`.
  * - `claude.task` per background task, `task_started` → `task_notification` (or `task_updated`'s `end_time`). These
  *   system events carry no timestamp, so their times are those of the latest timestamped event before them.
  *
@@ -427,6 +439,8 @@ export function workerSpans(stream, { tracer, parent }) {
   const tools = new Map()
   /** @type {Map<string, BgTask>} */
   const tasks = new Map()
+  /** @type {Map<string, Turn>} */
+  const turns = new Map()
 
   for (const e of events(stream)) {
     if (e.type === '__malformed') {
@@ -434,6 +448,7 @@ export function workerSpans(stream, { tracer, parent }) {
       continue
     }
     const ts = typeof e.timestamp === 'string' ? Date.parse(e.timestamp) : Number.NaN
+    const before = last
     if (!Number.isNaN(ts)) {
       first ??= ts
       last = Math.max(last ?? ts, ts)
@@ -443,6 +458,28 @@ export function workerSpans(stream, { tracer, parent }) {
     if (e.type === 'system' && e.subtype === 'init') init ??= e
     else if (e.type === 'result') result = e
     else if (e.type === 'assistant' && at !== null) {
+      const id = typeof e.message?.id === 'string' ? e.message.id : typeof e.uuid === 'string' ? e.uuid : null
+      let turn = id ? turns.get(id) : undefined
+      if (id && !turn) {
+        turn = {
+          id,
+          start: Math.min(before ?? at, at),
+          end: at,
+          thinking: '',
+          text: '',
+          tools: [],
+          parentToolId: typeof e.parent_tool_use_id === 'string' ? e.parent_tool_use_id : null,
+        }
+        turns.set(id, turn)
+      }
+      if (turn) {
+        turn.end = Math.max(turn.end, at)
+        for (const c of content) {
+          if (c?.type === 'thinking' && typeof c.thinking === 'string') turn.thinking = join(turn.thinking, c.thinking)
+          else if (c?.type === 'text' && typeof c.text === 'string') turn.text = join(turn.text, c.text)
+          else if (c?.type === 'tool_use') turn.tools.push(String(c.name ?? 'unknown'))
+        }
+      }
       for (const c of content)
         if (c?.type === 'tool_use' && typeof c.id === 'string' && !tools.has(c.id))
           tools.set(c.id, {
@@ -495,6 +532,7 @@ export function workerSpans(stream, { tracer, parent }) {
     end: last,
     tools: tools.size,
     tasks: tasks.size,
+    turns: [...turns.values()].filter(said).length,
     malformed,
     costUsd: typeof result?.total_cost_usd === 'number' ? result.total_cost_usd : null,
   }
@@ -554,6 +592,24 @@ export function workerSpans(stream, { tracer, parent }) {
     else if (t.error) span.setStatus({ code: SpanStatusCode.ERROR })
     span.end(t.end ?? end)
     toolCtx.set(t.id, trace.setSpan(sessionCtx, span))
+  }
+  for (const u of turns.values()) {
+    if (!said(u)) continue
+    tracer
+      .startSpan(
+        'claude.turn',
+        {
+          startTime: u.start,
+          attributes: defined({
+            'claude.message_id': u.id,
+            'claude.thinking': clip(u.thinking, TURN_TEXT_MAX) || undefined,
+            'claude.text': clip(u.text, TURN_TEXT_MAX) || undefined,
+            'claude.turn.tools': u.tools.length ? u.tools.join(',') : undefined,
+          }),
+        },
+        (u.parentToolId && toolCtx.get(u.parentToolId)) || sessionCtx,
+      )
+      .end(u.end)
   }
   for (const k of tasks.values()) {
     const span = tracer.startSpan(
