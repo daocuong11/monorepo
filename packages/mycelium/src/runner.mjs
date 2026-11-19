@@ -2,8 +2,9 @@
 import { ASC_ENV, ascConfig, ascSource } from './sources/asc.mjs'
 import { DISCORD_ENV, discordChannel, discordConfig, discordSource } from './sources/discord.mjs'
 import { PLAY_ENV, playConfig, playSource } from './sources/play.mjs'
+import { testflightSource } from './sources/testflight.mjs'
 
-export const SOURCES = /** @type {const} */ (['discord', 'asc', 'play'])
+export const SOURCES = /** @type {const} */ (['discord', 'asc', 'testflight', 'play'])
 export const BACKFILL_HOURS = 24
 
 /**
@@ -18,6 +19,7 @@ export const BACKFILL_HOURS = 24
 const NEEDS = {
   discord: DISCORD_ENV.slice(0, 2),
   asc: ASC_ENV,
+  testflight: ASC_ENV,
   play: [PLAY_ENV[0], `${PLAY_ENV[1]} or ${PLAY_ENV[2]}`],
 }
 
@@ -39,6 +41,10 @@ export function sourceFromEnv(name, { env, fetch, sleep }) {
     asc: () => {
       const config = ascConfig(env)
       return config && ascSource({ fetch, sleep, config, intervalMs })
+    },
+    testflight: () => {
+      const config = ascConfig(env)
+      return config && testflightSource({ fetch, sleep, config, intervalMs })
     },
     play: () => {
       const config = playConfig(env)

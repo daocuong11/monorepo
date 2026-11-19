@@ -44,6 +44,9 @@ export function envelope(fields) {
  *   message a reply points at, or else the message itself.
  * - asc: `<appId>/<reviewId>`.
  * - play: `<packageName>/<reviewId>`; an edited review keeps its id.
+ * - testflight: feedback `<appId>/<submissionId>`; a crash
+ *   `<appId>/crash/<signature>`, so repeats of one crash land as comments
+ *   (a crash whose log yields no signature is keyed on its submission id).
  *
  * @type {Record<string, (e: Envelope) => string>}
  */
@@ -51,6 +54,10 @@ export const IDENTITY = {
   discord: (e) => `${e.meta.channelId}/${e.meta.rootId ?? e.externalId}`,
   asc: (e) => `${e.meta.appId}/${e.externalId}`,
   play: (e) => `${e.meta.packageName}/${e.externalId}`,
+  testflight: (e) =>
+    e.meta.kind === 'crash'
+      ? `${e.meta.appId}/crash/${e.meta.signature ?? `submission-${e.externalId}`}`
+      : `${e.meta.appId}/${e.externalId}`,
 }
 
 /** @param {Envelope} e */

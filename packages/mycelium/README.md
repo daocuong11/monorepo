@@ -1,13 +1,13 @@
 # mycelium
 
-Intake connectors. An external event (a Discord post, an App Store review, a Google Play review) is normalized into an **envelope**, fingerprinted, and either opens one `q:intake` intent issue or, when an open intent already has that fingerprint, becomes a comment on it.
+Intake connectors. An external event (a Discord post, an App Store review, a TestFlight tester's feedback or crash, a Google Play review) is normalized into an **envelope**, fingerprinted, and either opens one `q:intake` intent issue or, when an open intent already has that fingerprint, becomes a comment on it.
 
 Node ≥ 22; the only dependencies are OpenTelemetry's (see [Tracing](#tracing)). GitHub access goes through [`graft api`](../graft), so `graft` must be on `PATH` and set up for the target repository.
 
 ## Usage
 
 ```sh
-mycelium poll <discord|asc|play> [--dry-run]   # one pass over one source
+mycelium poll <discord|asc|testflight|play> [--dry-run]   # one pass over one source
 mycelium run [--dry-run]                       # every configured source, each on its own interval, then the notifier
 mycelium notify [--dry-run]                    # one notifier pass (see Notify)
 mycelium install [--dry-run]                   # write the launchd agent for `run`
@@ -27,11 +27,25 @@ As a service: write the settings to `~/.mycelium/env` (see [Configuration](#conf
 
 The fingerprint is the first 24 hex chars of `sha256("<source>:<identity>")`, lowercased and trimmed. Only the identity counts; text, author and time do not.
 
-| source  | identity                                                                                     |
-| ------- | -------------------------------------------------------------------------------------------- |
-| discord | `<channelId>/<rootId>`: the forum thread, the message a reply answers, or the message itself |
-| asc     | `<appId>/<reviewId>`                                                                         |
-| play    | `<packageName>/<reviewId>`; an edited review keeps its id, so the edit lands as a comment    |
+| source     | identity                                                                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| discord    | `<channelId>/<rootId>`: the forum thread, the message a reply answers, or the message itself                                   |
+| asc        | `<appId>/<reviewId>`                                                                                                           |
+| play       | `<packageName>/<reviewId>`; an edited review keeps its id, so the edit lands as a comment                                      |
+| testflight | feedback: `<appId>/<submissionId>`; crash: `<appId>/crash/<signature>`, so repeats of one crash land as comments on one intent |
+
+## Sources
+
+| source     | reads (GET only)                                                                                                                                                                                     | credentials          |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| discord    | channel messages and forum threads                                                                                                                                                                   | `MYCELIUM_DISCORD_*` |
+| asc        | `/v1/apps/{appId}/customerReviews`                                                                                                                                                                   | `MYCELIUM_ASC_*`     |
+| testflight | `/v1/apps/{appId}/betaFeedbackScreenshotSubmissions` and `/v1/apps/{appId}/betaFeedbackCrashSubmissions` (`include=build`), plus `/v1/betaFeedbackCrashSubmissions/{id}/crashLog` for each new crash | `MYCELIUM_ASC_*`     |
+| play       | Play Developer API reviews                                                                                                                                                                           | `MYCELIUM_PLAY_*`    |
+
+**testflight** files tester comments with screenshots, and the crashes testers chose to send. Both feeds page through `links.next` and keep their own time cursor (`{ feedback, crash }` in the state file). The `## Intake` table carries `meta.build` (build version), `meta.deviceModel`, `meta.osVersion`, `meta.devicePlatform` and `meta.locale`; the tester's email is never read. Screenshot links are Apple's signed URLs: they expire (the body says when), after which the screenshots are only in App Store Connect. A crash body has the tester's comment, the top frames, and the `logText` clipped to 8,000 characters, fenced like all report text.
+
+The crash **signature** is 16 hex chars of sha256 over the exception type, the exception reason (else the termination reason) and the top 3 frames of the last exception backtrace (else the crashed thread), each lowercased with addresses, `+ offset`s, source locations and numbers stripped. A log with none of these is keyed on its submission id instead.
 
 ## Issues
 
@@ -62,7 +76,7 @@ Channels are opt-in per source:
 | ------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | discord | `MYCELIUM_DISCORD_NOTIFY=true` | in the forum post's thread, or as a reply to the channel message; mentions never parsed. The bot needs Send Messages (and Send Messages in Threads for forums). |
 
-asc and play have no channel: their reviews are answered (or not) in the store consoles.
+asc, testflight and play have no channel: their reviews and feedback are answered (or not) in the store consoles.
 
 ## State
 
@@ -72,22 +86,22 @@ One cursor per source in `$MYCELIUM_STATE`, else `$XDG_STATE_HOME/mycelium/state
 
 From the environment, over the settings file `$MYCELIUM_ENV` (default `~/.mycelium/env`): `KEY=value` lines with the same keys, `#` comments, values bare or quoted. A variable set in the environment wins. Keep the file `0600`. A source with missing settings is skipped by `run` and refused by `poll`.
 
-| variable                                            | meaning                                                                                        |
-| --------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `MYCELIUM_ENV`                                      | the settings file; environment only, default `~/.mycelium/env`                                 |
-| `MYCELIUM_REPO`                                     | `owner/name` that receives intents (or `--repo`)                                               |
-| `MYCELIUM_STATE`                                    | cursor file (or `--state`)                                                                     |
-| `MYCELIUM_BACKFILL_HOURS`                           | first-run window, default 24                                                                   |
-| `MYCELIUM_<SOURCE>_INTERVAL_S`                      | `run` interval; defaults discord 60, asc 900, play 1800                                        |
-| `MYCELIUM_DISCORD_TOKEN`                            | bot token (needs View Channel + Read Message History)                                          |
-| `MYCELIUM_DISCORD_CHANNELS`                         | comma list of channel ids; `forum:<id>` for a forum channel                                    |
-| `MYCELIUM_DISCORD_GUILD`                            | guild id; required for forum channels, used for message links                                  |
-| `MYCELIUM_DISCORD_NOTIFY`                           | `true` answers Discord reporters ([Notify](#notify)); the token then needs Send Messages       |
-| `MYCELIUM_NOTIFY_INTERVAL_S`                        | notifier interval in `run`, default 60                                                         |
-| `MYCELIUM_ASC_KEY_ID`, `MYCELIUM_ASC_ISSUER_ID`     | App Store Connect API key                                                                      |
-| `MYCELIUM_ASC_KEY_P8`                               | the `.p8` PEM, or its base64                                                                   |
-| `MYCELIUM_ASC_APP_ID`                               | the app's numeric App Store Connect id                                                         |
-| `MYCELIUM_PLAY_PACKAGE`                             | Android package name                                                                           |
-| `MYCELIUM_PLAY_KEY_JSON` / `MYCELIUM_PLAY_KEY_PATH` | service-account key JSON, inline or as a path (Play Console: reply to reviews / view app info) |
+| variable                                            | meaning                                                                                                                     |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `MYCELIUM_ENV`                                      | the settings file; environment only, default `~/.mycelium/env`                                                              |
+| `MYCELIUM_REPO`                                     | `owner/name` that receives intents (or `--repo`)                                                                            |
+| `MYCELIUM_STATE`                                    | cursor file (or `--state`)                                                                                                  |
+| `MYCELIUM_BACKFILL_HOURS`                           | first-run window, default 24                                                                                                |
+| `MYCELIUM_<SOURCE>_INTERVAL_S`                      | `run` interval; defaults discord 60, asc 900, testflight 900, play 1800                                                     |
+| `MYCELIUM_DISCORD_TOKEN`                            | bot token (needs View Channel + Read Message History)                                                                       |
+| `MYCELIUM_DISCORD_CHANNELS`                         | comma list of channel ids; `forum:<id>` for a forum channel                                                                 |
+| `MYCELIUM_DISCORD_GUILD`                            | guild id; required for forum channels, used for message links                                                               |
+| `MYCELIUM_DISCORD_NOTIFY`                           | `true` answers Discord reporters ([Notify](#notify)); the token then needs Send Messages                                    |
+| `MYCELIUM_NOTIFY_INTERVAL_S`                        | notifier interval in `run`, default 60                                                                                      |
+| `MYCELIUM_ASC_KEY_ID`, `MYCELIUM_ASC_ISSUER_ID`     | App Store Connect API key, shared by `asc` and `testflight` (read access to reviews and beta feedback; no other credential) |
+| `MYCELIUM_ASC_KEY_P8`                               | the `.p8` PEM, or its base64                                                                                                |
+| `MYCELIUM_ASC_APP_ID`                               | the app's numeric App Store Connect id                                                                                      |
+| `MYCELIUM_PLAY_PACKAGE`                             | Android package name                                                                                                        |
+| `MYCELIUM_PLAY_KEY_JSON` / `MYCELIUM_PLAY_KEY_PATH` | service-account key JSON, inline or as a path (Play Console: reply to reviews / view app info)                              |
 
-The connectors only read: Discord, App Store Connect and Play are sent GETs (plus Google's OAuth token exchange). The only writes outside GitHub are the [notifier](#notify)'s, and only for channels turned on. Play's reviews API returns only reviews created or edited in the last week.
+The connectors only read: Discord, App Store Connect (reviews and TestFlight) and Play are sent GETs (plus Google's OAuth token exchange). The only writes outside GitHub are the [notifier](#notify)'s, and only for channels turned on. Play's reviews API returns only reviews created or edited in the last week.
