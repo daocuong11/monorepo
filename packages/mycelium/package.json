@@ -1,7 +1,7 @@
 {
   "name": "@oakgreencc/mycelium",
-  "version": "0.0.8",
-  "description": "Intake connectors, run as a launchd agent: Discord posts and App Store / Google Play reviews become deduplicated q:intake intent issues on GitHub.",
+  "version": "0.0.9",
+  "description": "Intake connectors, run as a launchd agent: Discord posts, App Store / Google Play reviews and in-app bug reports become deduplicated q:intake intent issues on GitHub.",
   "license": "AGPL-3.0-only",
   "type": "module",
   "repository": {

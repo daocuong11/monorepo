@@ -1,0 +1,135 @@
+{
+  "bugReports": {
+    "page1": {
+      "items": [
+        {
+          "logId": "01LOGREPORT0003",
+          "userId": "us-east-1:0000aaaa-0000-4000-8000-000000000003",
+          "receivedAt": "2026-11-01T19:00:00.000Z",
+          "sizeBytes": 900,
+          "platform": "android",
+          "deviceModel": "Pixel 9",
+          "appVersion": "1.5.0",
+          "sessionLocalId": "sess-3",
+          "gapCount": 0,
+          "kind": "bug-report"
+        }
+      ],
+      "nextCursor": "PAGE2"
+    },
+    "page2": {
+      "items": [
+        {
+          "logId": "01LOGREPORT0002",
+          "userId": "us-east-1:0000aaaa-0000-4000-8000-000000000002",
+          "receivedAt": "2026-11-01T18:00:00.000Z",
+          "sizeBytes": 800,
+          "platform": "ios",
+          "deviceModel": "iPhone16,1",
+          "appVersion": "1.5.0",
+          "sessionLocalId": "sess-2",
+          "gapCount": 0,
+          "kind": "bug-report"
+        }
+      ],
+      "nextCursor": null
+    }
+  },
+  "unmarked": {
+    "items": [
+      {
+        "logId": "01LOGREPORT0003",
+        "userId": "us-east-1:0000aaaa-0000-4000-8000-000000000003",
+        "receivedAt": "2026-11-01T19:00:00.000Z",
+        "sizeBytes": 900,
+        "platform": "android",
+        "deviceModel": "Pixel 9",
+        "appVersion": "1.5.0",
+        "sessionLocalId": "sess-3",
+        "gapCount": 0,
+        "kind": "bug-report"
+      },
+      {
+        "logId": "01LOGLEGACY0005",
+        "userId": "us-east-1:0000aaaa-0000-4000-8000-000000000005",
+        "receivedAt": "2026-11-01T17:30:00.000Z",
+        "sizeBytes": 400,
+        "platform": "ios",
+        "deviceModel": "iPhone14,2",
+        "appVersion": "1.3.0",
+        "sessionLocalId": "sess-5",
+        "gapCount": 0,
+        "kind": null
+      },
+      {
+        "logId": "01LOGDIAGNOS06",
+        "userId": "us-east-1:0000aaaa-0000-4000-8000-000000000006",
+        "receivedAt": "2026-11-01T17:00:00.000Z",
+        "sizeBytes": 400,
+        "platform": "ios",
+        "deviceModel": "iPhone14,2",
+        "appVersion": "1.3.0",
+        "sessionLocalId": "sess-6",
+        "gapCount": 0,
+        "kind": null
+      },
+      {
+        "logId": "01LOGDIAGKIND7",
+        "userId": "us-east-1:0000aaaa-0000-4000-8000-000000000007",
+        "receivedAt": "2026-11-01T16:00:00.000Z",
+        "sizeBytes": 400,
+        "platform": "ios",
+        "deviceModel": "iPhone14,2",
+        "appVersion": "1.5.0",
+        "sessionLocalId": "sess-7",
+        "gapCount": 0,
+        "kind": "diagnostic"
+      }
+    ],
+    "nextCursor": null
+  },
+  "crashes": {
+    "items": [
+      {
+        "logId": "01LOGCRASH0008",
+        "userId": "us-east-1:0000aaaa-0000-4000-8000-000000000008",
+        "receivedAt": "2026-11-01T18:30:00.000Z",
+        "sizeBytes": 700,
+        "platform": "android",
+        "deviceModel": "Pixel 8",
+        "appVersion": "1.5.0",
+        "sessionLocalId": "sess-8",
+        "gapCount": 0,
+        "kind": "crash"
+      },
+      {
+        "logId": "01LOGCRASH0009",
+        "userId": "us-east-1:0000aaaa-0000-4000-8000-000000000009",
+        "receivedAt": "2026-11-01T18:45:00.000Z",
+        "sizeBytes": 700,
+        "platform": "android",
+        "deviceModel": "Pixel 7",
+        "appVersion": "1.5.0",
+        "sessionLocalId": "sess-9",
+        "gapCount": 0,
+        "kind": "crash"
+      }
+    ],
+    "nextCursor": null
+  },
+  "bodies": {
+    "01LOGREPORT0003": "=== USER BUG REPORT ===\nnote: Lap timer froze at turn 3.\nEmail me at rider.three@example.com\nplatform: android\nappVersion: 1.5.0\nroute: /race/recording\ntrail: / (60s) → /race/recording (10s)\n=== recent logs ===\n2026-11-01T18:59:00Z INFO auth signed in as rider.three@example.com\n2026-11-01T18:59:30Z WARN gps fix lost\n2026-11-01T18:59:59Z ERROR timer stalled",
+    "01LOGREPORT0002": "=== USER BUG REPORT ===\nnote: Map tiles are blank\nplatform: ios\nappVersion: 1.5.0\nroute: /you\ntrail: /you (5s)\n=== recent logs ===\nINFO tiles requested",
+    "01LOGLEGACY0005": "=== USER BUG REPORT ===\nnote: Old app, settings page crashes\nplatform: ios\nappVersion: 1.3.0\nroute: /settings\ntrail: /settings (2s)\n=== recent logs ===\nINFO opened settings",
+    "01LOGDIAGNOS06": "2026-11-01T17:00:00Z INFO diagnostic upload\n=== USER BUG REPORT ===\nnote: not a report: the header is not the first line",
+    "01LOGDIAGKIND7": "INFO diagnostic",
+    "01LOGCRASH0008": "=== SEKTOR CRASH ===\n--- crash 1 ---\norigin: js-fatal\nmessage: TypeError: undefined is not an object (evaluating 'lap.split')\nstack:\nat lapTimer (index.bundle:1234:56)\nat tick (index.bundle:2234:10)\nat flush (index.bundle:99:1)\n=== recent logs ===\nINFO tick",
+    "01LOGCRASH0009": "=== SEKTOR CRASH ===\n--- crash 1 ---\norigin: js-fatal\nmessage: TypeError: undefined is not an object (evaluating 'lap.split')\nstack:\nat lapTimer (index.bundle:1250:12)\nat tick (index.bundle:2240:3)\nat flush (index.bundle:101:9)\n=== recent logs ===\nINFO tick"
+  },
+  "attachments": {
+    "01LOGREPORT0003": [
+      { "attachmentId": "att-1", "contentType": "image/png" },
+      { "attachmentId": "att-2", "contentType": "image/jpeg" }
+    ]
+  }
+}
