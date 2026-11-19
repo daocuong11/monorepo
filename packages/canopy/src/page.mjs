@@ -199,6 +199,8 @@ section.lanes{background:none;border-color:transparent}
 .col .t{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
 .meta{font-size:12px;color:var(--muted);display:flex;flex-wrap:wrap;gap:2px 8px}
 .empty{color:var(--faint);font-size:12px}
+.col>h3.sub{display:flex;align-items:baseline;gap:6px;margin:var(--s2) 0 0;padding-top:var(--s1);border-top:1px dashed var(--line);font-size:12px;font-weight:600;color:var(--muted)}
+.col li .why-wait{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
 table{border-collapse:collapse;width:100%}th{text-align:left;font-weight:500;color:var(--muted);font-size:12px}
 td,th{padding:4px 10px 4px 0;border-top:1px solid var(--line);vertical-align:top;white-space:nowrap}tr.logs td{border-top:0;padding-top:0;white-space:normal;overflow-wrap:anywhere}td.br{white-space:normal;overflow-wrap:anywhere;min-width:16ch}.scroll{overflow-x:auto}thead th{border-top:0}
 .bar{display:inline-block;width:80px;height:6px;background:var(--bar);border-radius:3px;vertical-align:middle;overflow:hidden;margin-right:6px}
@@ -337,6 +339,24 @@ function item(i, multi, now) {
       i.priority ? h('span', {}, 'priority:' + i.priority) : null,
       h('span', { class: 'faint' }, ago(i.updatedAt || i.createdAt, now)),
       traceLink(i.repo, i.number)))
+}
+
+// A parked intake issue: why it waits (the defer reason and when it is due, or its open blockers).
+const due = (until, now) => { const t = Date.parse(until || ''); return !isFinite(t) ? null : t <= now ? 'due now' : 'due in ' + dur(t - now) }
+function waitItem(i, multi, now) {
+  const w = i.wait || { kind: 'deferred', reason: null, until: null, blockers: [] }
+  const when = w.kind === 'deferred' ? due(w.until, now) : null
+  return h('li', {},
+    link(i.url, h('span', { class: 't', title: i.title }, h('span', { class: 'faint' }, '#' + i.number + ' '), i.title)),
+    h('div', { class: 'meta' },
+      h('span', { class: 'pill' }, w.kind),
+      w.kind === 'blocked'
+        ? h('span', {}, 'by', w.blockers.length ? w.blockers.map((b) => [' ', link(b.url, h('span', { title: b.title }, '#' + b.number))]) : h('span', { class: 'faint' }, ' (blockers closed; triage next tick)'))
+        : when ? h('span', { title: w.until }, when) : null,
+      multi ? h('span', {}, i.repo) : null,
+      prio(i.priority),
+      traceLink(i.repo, i.number)),
+    w.reason ? h('div', { class: 'why-wait', title: w.reason }, w.reason.length > 200 ? w.reason.slice(0, 200) + '…' : w.reason) : null)
 }
 
 const isMulti = (gh) => new Set(gh.repos.map((r) => r.slug)).size > 1
@@ -584,7 +604,8 @@ function issuePane(sel, gone, d, multi, now, sig) {
 // the row under it is the three queues waiting on it. Both rows share one grid so Triage sits over Intake,
 // Running over Task and PRs over Promote: each piece of live work is above the queue it came from.
 const LANES = [['intake', 'Intake', 'q:intake'], ['task', 'Task', 'q:task'], ['running', 'Running', 'running'], ['promote', 'Promote', 'q:promote']]
-const inFlight = (gh) => LANES.reduce((n, [k]) => n + gh.columns[k].length, 0)
+const inFlight = (gh) => LANES.reduce((n, [k]) => n + gh.columns[k].length, 0) + waitingOf(gh).length
+const waitingOf = (gh) => gh.columns.waiting || []
 const issueKey = (repo, n) => repo + '#' + n
 let traceProg = {}
 const SHEEN_MS = 2400
@@ -689,7 +710,7 @@ function prCard(p, multi, now) {
 
 // Queue figures. Every issue in the loop by where it sits now, q:human included, since that is often where
 // work piles up; then what the loop did over the last day, from the traces: where each active issue ended up.
-const STAGES = [['intake', 'Intake', 'var(--flow-1)'], ['task', 'Task', 'var(--flow-2)'], ['running', 'Running', 'var(--flow-3)'],
+const STAGES = [['intake', 'Intake', 'var(--flow-1)'], ['waiting', 'Deferred / Blocked', 'var(--bar)'], ['task', 'Task', 'var(--flow-2)'], ['running', 'Running', 'var(--flow-3)'],
   ['human', 'Human', 'var(--warn)'], ['promote', 'Promote', 'var(--flow-4)']]
 const oldestOpened = (xs) => xs.reduce((m, i) => { const t = Date.parse(i.createdAt || ''); return isFinite(t) && (m == null || t < m) ? t : m }, null)
 const DAY_SHOWN = 5
@@ -697,7 +718,7 @@ const DAY_SHOWN = 5
 function queueFigures(s, a, liveTask, now) {
   const gh = s.github
   const cells = STAGES.map(([k, label, c]) => {
-    const xs = k === 'running' ? [...a.triage, ...a.running] : gh.columns[k]
+    const xs = k === 'running' ? [...a.triage, ...a.running] : gh.columns[k] || []
     const old = oldestOpened(xs)
     const sub = k === 'running' && a.caps.task ? liveTask + ' of ' + a.caps.task + ' slots' : old != null ? 'oldest ' + dur(now - old) : '–'
     return { k, label, c, n: xs.length, sub, title: old != null ? 'Oldest issue here was opened ' + new Date(old).toISOString() : null }
@@ -755,8 +776,12 @@ function queues(s, now) {
       cards(a.running, waiting ? 'No worker running; ' + plural(waiting, 'issue waits', 'issues wait') + ' in q:task.' : 'No worker running.')),
     h('div', { class: 'col l-prs' }, heading('Pull requests', gh.prs.length, h('span', { class: 'lane-label mono' }, 'agent/*'), h('span', { class: 'lane-label' }, prSum[0], prSum[0] && prSum[1] ? ' · ' : null, prSum[1])),
       gh.prs.length ? h('ul', {}, gh.prs.map((p) => prCard(p, multi, now))) : h('div', { class: 'empty' }, 'No open agent PRs.')))
+  // Intake is what awaits triage; under it, what triage parked (wait:deferred / wait:blocked), apart.
+  const parked = waitingOf(gh)
   const lane = ([k, title, label]) => h('div', { class: 'col l-' + k },
-    heading(title, gh.columns[k].length, h('span', { class: 'lane-label mono' }, label)), list(gh.columns[k], item, multi, now))
+    heading(title, gh.columns[k].length, h('span', { class: 'lane-label mono' }, label)), list(gh.columns[k], item, multi, now),
+    k === 'intake' && parked.length ? [h('h3', { class: 'sub' }, 'Deferred / Blocked', h('span', { class: 'n' }, parked.length), h('span', { class: 'lane-label mono' }, 'wait:*')),
+      list(parked, waitItem, multi, now)] : null)
   const queued = h('section', { class: 'grid lanes', 'aria-label': 'Queues' }, LANES.filter(([k]) => k !== 'running').map(lane))
   return [queueFigures(s, a, live(a.running, 'task'), now), active, queued]
 }

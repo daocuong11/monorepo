@@ -64,10 +64,12 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
  *   behindBase(slug: string, number: number): Promise<{ behind: number, base: string }>,
  *   updatePull(slug: string, number: number): Promise<void>,
  *   linkIssue(slug: string, pr: number, issue: number): Promise<void>,
+ *   addBlockedBy(slug: string, number: number, blocker: number): Promise<{ state: 'OPEN' | 'CLOSED' }>,
  * }} GitHub
  *   `behindBase`: how many commits of its base the PR's head lacks, read live (not from the tick's snapshot), so a
  *   merge earlier in the same tick counts. `updatePull`: merge the base into the PR (`graft pr update`).
  *   `linkIssue`: put `Closes #<issue>` at the top of the PR's body, so the PR names the issue it closes.
+ *   `addBlockedBy`: record GitHub's "blocked by" dependency of issue `number` on `blocker`; resolves the blocker's state.
  */
 
 const PR_FIELDS = `number url headRefName state headRefOid isInMergeQueue body mergeable reviewDecision createdAt updatedAt
@@ -220,7 +222,7 @@ function toIssue(n, botLogin) {
     stateComment: stateCommentOf(n, botLogin),
     blockedBy: (n.blockedBy?.nodes ?? []).filter(Boolean).map((/** @type {any} */ b) => ({
       number: b.number,
-      state: b.state,
+      state: b.state === 'OPEN' ? 'OPEN' : 'CLOSED',
       closedAt: b.closedAt ?? null,
     })),
   }
@@ -474,6 +476,13 @@ export function graftGitHub({ config, exec: run = exec }) {
       if (bodyCloses(body).includes(issue)) return
       const linked = `Closes #${issue}${body ? `\n\n${body}` : ''}`
       await graft(slug, ['api', 'PATCH', path, '--body', JSON.stringify({ body: linked })])
+    },
+    async addBlockedBy(slug, number, blocker) {
+      // The dependencies API takes the blocker's database id, not its number.
+      const b = await json(graft(slug, ['api', 'GET', `/repos/${slug}/issues/${blocker}`]))
+      const path = `/repos/${slug}/issues/${number}/dependencies/blocked_by`
+      await graft(slug, ['api', 'POST', path, '--body', JSON.stringify({ issue_id: b.id })])
+      return { state: b.state === 'open' ? 'OPEN' : 'CLOSED' }
     },
   }
 }

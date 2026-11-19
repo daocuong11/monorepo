@@ -16,6 +16,7 @@ export const T0 = Date.parse('2026-11-16T12:00:00Z')
  * @typedef {{ number: number, title?: string, state?: 'OPEN' | 'CLOSED', createdAt?: string, body?: string,
  *   labels?: string[], comment?: { id: number, body: string } | null,
  *   blockedBy?: import('../src/github.mjs').Blocker[] }} FakeIssue
+ *   `blockedBy`: a blocker that is also an issue here reads with that issue's state.
  * @typedef {Partial<import('../src/github.mjs').PullRequest> & { number: number, closes: number[], behind?: number }} FakePr
  *   `behind`: commits of its base the head lacks (`behindBase`); `updatePull` zeroes it and moves the head.
  */
@@ -73,7 +74,10 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
     body: i.body,
     labels: [...i.labels],
     stateComment: i.comment ? { id: i.comment.id, marker: /** @type {any} */ (parseMarker(i.comment.body)) } : null,
-    blockedBy: i.blockedBy.map((b) => ({ ...b })),
+    blockedBy: i.blockedBy.map((b) => {
+      const s = store.get(b.number)
+      return s ? { ...b, state: s.state, closedAt: s.state === 'CLOSED' ? b.closedAt : null } : { ...b }
+    }),
   })
 
   /** @type {import('../src/github.mjs').GitHub} */
@@ -157,6 +161,15 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
       if (faults.updateError) throw faults.updateError
       const p = /** @type {any} */ (pulls.find((x) => x.number === number))
       Object.assign(p, { behind: 0, headSha: `${p.headSha}+base`, checks: 'PENDING' })
+    },
+    async addBlockedBy(slug, number, blocker) {
+      calls.push({ op: 'addBlockedBy', args: [slug, number, blocker] })
+      const b = store.get(blocker)
+      if (!b) throw new Error(`no issue #${blocker}`)
+      const i = /** @type {Required<FakeIssue>} */ (store.get(number))
+      if (!i.blockedBy.some((x) => x.number === blocker))
+        i.blockedBy.push({ number: blocker, state: b.state, closedAt: null })
+      return { state: b.state }
     },
     async linkIssue(slug, pr, issue) {
       calls.push({ op: 'linkIssue', args: [slug, pr, issue] })

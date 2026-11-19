@@ -21,8 +21,9 @@ export const DISPATCH_NOT_BUILT = 'dispatch phase is not built yet; q:intake iss
 /** The verdict a triage worker ends with, as the last JSON block of its final message. */
 export const TriageResult = z
   .object({
-    verdict: z.enum(['actionable', 'needs-human', 'duplicate', 'defer', 'obsolete']),
+    verdict: z.enum(['actionable', 'needs-human', 'duplicate', 'defer', 'blocked', 'obsolete']),
     duplicateOf: z.number().int().positive().optional(),
+    blockedBy: z.array(z.number().int().positive()).min(1).optional(),
     recheckHours: z.number().positive().max(168).optional(),
     reason: z.string().trim().min(1),
     title: z.string().trim().min(1).optional(),
@@ -31,6 +32,10 @@ export const TriageResult = z
   .refine((r) => r.verdict !== 'duplicate' || r.duplicateOf !== undefined, {
     message: 'a duplicate verdict needs duplicateOf',
     path: ['duplicateOf'],
+  })
+  .refine((r) => r.verdict !== 'blocked' || r.blockedBy !== undefined, {
+    message: 'a blocked verdict needs blockedBy',
+    path: ['blockedBy'],
   })
 
 /** @typedef {z.infer<typeof TriageResult>} Triage */
@@ -100,6 +105,8 @@ export function readTriage(log, issue) {
     return { ok: false, error: `invalid triage result: ${parsed.error.issues.map(formatIssue).join('; ')}` }
   if (parsed.data.verdict === 'duplicate' && parsed.data.duplicateOf === issue)
     return { ok: false, error: `invalid triage result: duplicateOf: #${issue} cannot duplicate itself` }
+  if (parsed.data.verdict === 'blocked' && parsed.data.blockedBy?.includes(issue))
+    return { ok: false, error: `invalid triage result: blockedBy: #${issue} cannot block itself` }
   return { ok: true, result: parsed.data }
 }
 
@@ -111,9 +118,20 @@ export function readTriage(log, issue) {
  *   repo: string, baseBranch: string, issue: import('../github.mjs').Issue,
  *   queued: { number: number, title: string, labels: string[] }[], agentsMd: string | null,
  *   deferred?: { count: number, reason: string } | null, deferHours?: number,
+ *   blocked?: { by: number[], reason: string } | null,
  * }} input
+ *   `blocked`: an earlier triage parked it on these issues, all closed now.
  */
-export function triagePrompt({ repo, baseBranch, issue, queued, agentsMd, deferred = null, deferHours = 6 }) {
+export function triagePrompt({
+  repo,
+  baseBranch,
+  issue,
+  queued,
+  agentsMd,
+  deferred = null,
+  deferHours = 6,
+  blocked = null,
+}) {
   const others = queued
     .filter((q) => q.number !== issue.number)
     .map((q) => `- #${q.number} ${q.title} (${q.labels.filter((l) => l.startsWith('q:')).join(', ') || 'no queue'})`)
@@ -128,20 +146,22 @@ Verdicts:
 - needs-human: too foggy to ticket; a decision only a human can make (direction, priority, money, access, policy); information no one but a human has; or work that is not a code change in this repository. \`reason\` says exactly what the human must decide or supply. Never for something a machine can check, now or later.
 - duplicate: the same work as another issue, open or closed. \`duplicateOf\` is that issue's number (never #${issue.number}); \`reason\` says why they are the same.
 - obsolete: the work no longer applies, and you verified it: the code path is gone, the bug is already fixed on ${baseBranch}, or its verification already passed. cambium closes it as not planned. \`reason\` gives the evidence (commit, file, run).
-- defer: the verdict hangs on something a machine can check later but not yet: a CI or CD run that has not happened, a release, a PR still merging, a deploy, an upstream fix. cambium triages it again after \`recheckHours\` (default ${deferHours}). \`reason\` says exactly what to check next time and what each answer means (e.g. "next main cd run green → obsolete; red → actionable").
+- defer: the verdict hangs on something a machine can check later but not yet: a CI or CD run that has not happened, a release, a PR still merging, a deploy, an upstream fix. cambium triages it again after \`recheckHours\` (default ${deferHours}). \`reason\` says exactly what to check next time and what each answer means (e.g. "next main cd run green → obsolete; red → actionable"). Not for waiting on another issue: that is blocked.
+- blocked: it cannot start until other issues in ${repo} are done. \`blockedBy\` lists their numbers (never #${issue.number}); cambium records each as a GitHub "blocked by" link on this issue and triages it again as soon as the last of them closes, not on a timer. \`reason\` says what each blocker must deliver.
 
 How to look:
 - Read the code here (Read, Glob, Grep) to judge what the change touches and whether it already exists.
 - First, has it already been done? Its comments (\`graft api GET /repos/${repo}/issues/${issue.number}/comments\`) and its timeline (\`graft api GET '/repos/${repo}/issues/${issue.number}/timeline?per_page=100'\`: cross-referenced PRs, and whether they merged) often say so. A merged PR whose change is on ${baseBranch}, and nothing left of the issue, is obsolete; a PR still open or in CI is defer.
+- Does it already wait on other issues? Its GitHub "blocked by" links: \`graft api GET /repos/${repo}/issues/${issue.number}/dependencies/blocked_by\`. An open one, or prose naming an open issue it needs first, is blocked.
 - Read an issue with \`graft issue read <n>\`; search with \`graft api GET '/search/issues?q=repo:${repo}+is:issue+<words>'\`. Never \`gh\`.
 - Be quick: a verdict, not an investigation. When in doubt whether the work is clear enough to do, choose needs-human; when in doubt whether something is true, check it, or defer until it can be checked.
 
 End your final message with exactly one fenced JSON block, and nothing after it:
 \`\`\`json
-{ "verdict": "actionable" | "needs-human" | "duplicate" | "obsolete" | "defer", "duplicateOf": 123, "recheckHours": 6, "reason": "…", "title": "…", "acceptance": ["…"] }
+{ "verdict": "actionable" | "needs-human" | "duplicate" | "obsolete" | "defer" | "blocked", "duplicateOf": 123, "blockedBy": [124], "recheckHours": 6, "reason": "…", "title": "…", "acceptance": ["…"] }
 \`\`\`
-\`duplicateOf\` only for duplicate; \`recheckHours\` only for defer, and optional; \`title\` and \`acceptance\` only for actionable, and optional. A missing or malformed block sends the issue to a human with the error.
-${deferred ? `\nThis is re-triage ${deferred.count + 1}: an earlier triage deferred it to check this:\n${deferred.reason}\nCheck it now. If it still cannot be checked, defer again.\n` : ''}${others ? `\nOther issues in cambium's queues right now:\n${others}\n` : ''}
+\`duplicateOf\` only for duplicate; \`blockedBy\` only for blocked; \`recheckHours\` only for defer, and optional; \`title\` and \`acceptance\` only for actionable, and optional. A missing or malformed block sends the issue to a human with the error.
+${deferred ? `\nThis is re-triage ${deferred.count + 1}: an earlier triage deferred it to check this:\n${deferred.reason}\nCheck it now. If it still cannot be checked, defer again.\n` : ''}${blocked ? `\nAn earlier triage found it blocked by ${blocked.by.map((n) => `#${n}`).join(', ')}, now closed:\n${blocked.reason}\nJudge it again now that they are done.\n` : ''}${others ? `\nOther issues in cambium's queues right now:\n${others}\n` : ''}
 --- Issue #${issue.number}: ${issue.title} (${issue.url})
 ${issue.body}
 ${agentsMd ? `\n--- AGENTS.md (the contract a task worker will follow)\n${agentsMd}` : ''}`

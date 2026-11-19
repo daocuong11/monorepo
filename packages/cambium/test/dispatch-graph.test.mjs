@@ -14,6 +14,8 @@ import { runIssue } from '../src/graph-engine.mjs'
 import { harness, SLUG, T0 } from './fakes.mjs'
 
 const MIN = 60_000
+/** A GitHub "blocked by" link to #n; the fake reads its state from #n. @param {number} n */
+const blocker = (n) => ({ number: n, state: /** @type {const} */ ('OPEN'), closedAt: null })
 
 /** A stream-json stdout log whose final message is `text`. @param {string} text */
 const logWith = (text) =>
@@ -54,7 +56,7 @@ async function triage(h, log, n = 7) {
   return w
 }
 
-test('dispatch graph: eight nodes, one wait, valid; entry q:intake at start-triage', () => {
+test('dispatch graph: nine nodes, one wait, valid; entry q:intake at start-triage', () => {
   assert.deepEqual(validateGraph(dispatch), [])
   assert.deepEqual(
     dispatch.nodes.map((n) => n.name),
@@ -66,6 +68,7 @@ test('dispatch graph: eight nodes, one wait, valid; entry q:intake at start-tria
       'to-human',
       'close-duplicate',
       'deferred',
+      'blocked',
       'close-obsolete',
     ],
   )
@@ -83,6 +86,7 @@ test('dispatch graph: eight nodes, one wait, valid; entry q:intake at start-tria
     'to-human': ['q:human', false],
     'close-duplicate': [null, false],
     deferred: ['q:intake', false],
+    blocked: ['q:intake', false],
     'close-obsolete': [null, false],
   })
 })
@@ -212,7 +216,7 @@ test('defer → rests in q:intake until recheck time, then re-triage sees the re
   const h = intake()
   const check = 'Next main cd run green → obsolete; red → actionable.'
   await triage(h, logWith(verdictMessage({ verdict: 'defer', reason: check, recheckHours: 2 })))
-  assert.deepEqual(h.gh.issue(7).labels, ['q:intake'], 'never q:human')
+  assert.deepEqual(h.gh.issue(7).labels, ['q:intake', 'wait:deferred'], 'never q:human; parked, not untriaged')
   let m = h.gh.marker(7)
   assert.equal(m?.node, 'deferred')
   assert.equal(m?.defers, 1)
@@ -236,6 +240,7 @@ test('defer → rests in q:intake until recheck time, then re-triage sees the re
   m = h.gh.marker(7)
   assert.equal(m?.node, 'triaging')
   assert.equal(m?.deferUntil, null)
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:intake', 'running'], 'wait:deferred comes off once triaged')
   const w = h.deps.store.worker(SLUG, 7)
   assert.ok(w)
   h.spawner.logs.set(w.stdout, logWith(verdictMessage({ verdict: 'obsolete', reason: 'cd run 123 on main is green.' })))
@@ -262,23 +267,29 @@ test('defer → a blocker closing after the defer wakes it before deferUntil; on
         number: 7,
         labels: ['q:intake'],
         body: 'Blocked by #3 and #4.',
-        blockedBy: [
-          { number: 3, state: 'OPEN', closedAt: null },
-          { number: 4, state: 'CLOSED', closedAt: new Date(T0 - 60 * MIN).toISOString() },
-        ],
+        blockedBy: [{ number: 4, state: 'CLOSED', closedAt: new Date(T0 - 60 * MIN).toISOString() }],
       },
     ],
   })
   await triage(h, logWith(verdictMessage({ verdict: 'defer', reason: 'Blocked by #3.', recheckHours: 24 })))
   assert.equal(h.gh.marker(7)?.node, 'deferred')
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:intake', 'wait:deferred'])
 
-  // #3 still open: left alone.
+  // #4 closed before the defer: it wakes nothing.
   h.clock.advance(5 * MIN)
   await tick(h.deps)
   assert.equal(h.spawner.started.length, 1)
 
+  // GitHub links #3, open: Schedule parks it as blocked at once (its defer reason kept), off the timer.
+  h.gh.issue(7).blockedBy.push({ number: 3, state: 'OPEN', closedAt: null })
+  await tick(h.deps)
+  assert.equal(h.spawner.started.length, 1)
+  assert.equal(h.gh.marker(7)?.node, 'blocked')
+  assert.equal(h.gh.marker(7)?.deferReason, 'Blocked by #3.')
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:intake', 'wait:blocked'])
+
   // #3 closes: the next tick triages it again, a day early.
-  h.gh.issue(7).blockedBy[0] = { number: 3, state: 'CLOSED', closedAt: new Date(h.clock.now()).toISOString() }
+  h.gh.issue(7).blockedBy[1] = { number: 3, state: 'CLOSED', closedAt: new Date(h.clock.now()).toISOString() }
   h.clock.advance(1 * MIN)
   await tick(h.deps)
   assert.equal(h.spawner.started.length, 2)
@@ -297,6 +308,12 @@ test('defer → a blocker closing after the defer wakes it before deferUntil; on
   h.clock.advance(5 * MIN)
   await tick(h.deps)
   assert.equal(h.spawner.started.length, 2)
+
+  // A blocker linked while deferred that closes after the defer: woken at the next tick, before deferUntil.
+  h.gh.issue(7).blockedBy.push({ number: 5, state: 'CLOSED', closedAt: new Date(h.clock.now()).toISOString() })
+  h.clock.advance(1 * MIN)
+  await tick(h.deps)
+  assert.equal(h.spawner.started.length, 3)
 })
 
 test('defer without recheckHours uses phases.dispatch.deferHours; past maxDefers it goes to a human', async () => {
@@ -476,6 +493,13 @@ test('readTriage: the last fenced block, bare JSON, and every way it can be wron
     result: { verdict: 'defer', recheckHours: 12, reason: 'next cd' },
   })
   assert.match(fail(logWith('{"verdict":"defer","recheckHours":500,"reason":"r"}')), /recheckHours/)
+  assert.deepEqual(readTriage(logWith('{"verdict":"blocked","blockedBy":[3,4],"reason":"needs both"}'), 7), {
+    ok: true,
+    result: { verdict: 'blocked', blockedBy: [3, 4], reason: 'needs both' },
+  })
+  assert.match(fail(logWith('{"verdict":"blocked","reason":"r"}')), /blocked verdict needs blockedBy/)
+  assert.match(fail(logWith('{"verdict":"blocked","blockedBy":[],"reason":"r"}')), /blockedBy/)
+  assert.match(fail(logWith('{"verdict":"blocked","blockedBy":[7],"reason":"r"}')), /cannot block itself/)
   assert.deepEqual(readTriage(logWith('{"verdict":"obsolete","reason":"gone"}'), 7), {
     ok: true,
     result: { verdict: 'obsolete', reason: 'gone' },
@@ -499,9 +523,135 @@ test('triagePrompt: no OpenRig vocabulary; the issue, the queue and AGENTS.md', 
   assert.ok(!p.includes('- #9 T'), 'the issue itself is not in the list')
   assert.match(p, /--- AGENTS\.md/)
   assert.match(p, /- defer: .*default 6/)
+  assert.match(p, /- blocked: .*`blockedBy` lists their numbers \(never #9\)/)
+  assert.match(p, /\/repos\/o\/r\/issues\/9\/dependencies\/blocked_by/)
   assert.match(p, /never the way to verify what a machine can/)
   assert.match(p, /\/repos\/o\/r\/issues\/9\/timeline/, 'checks linked PRs before judging')
   assert.match(p, /\/repos\/o\/r\/issues\/9\/comments/)
   assert.ok(!p.includes('When in doubt between actionable and needs-human, choose needs-human'))
   assert.ok(!p.includes('re-triage'), 'no defer note on a first triage')
+})
+
+test('blocked verdict: links the missing blockedBy, parks with wait:blocked (no timer, no defer), wakes the tick the last blocker closes', async () => {
+  const h = intake({
+    issues: [
+      { number: 7, labels: ['q:intake'], body: 'Needs #3 and #4 first.' },
+      { number: 3, labels: [], state: 'CLOSED' },
+      { number: 4, labels: [] },
+    ],
+  })
+  h.gh.issue(7).blockedBy = [blocker(3)]
+  // GitHub already links #3 (closed); triage names #4 only in prose, so cambium adds that link and waits on #4.
+  await triage(
+    h,
+    logWith(verdictMessage({ verdict: 'blocked', blockedBy: [3, 4], reason: 'The API from #3, the UI from #4.' })),
+  )
+  assert.deepEqual(
+    h.gh.calls.filter((c) => c.op === 'addBlockedBy').map((c) => c.args),
+    [[SLUG, 7, 4]],
+  )
+  assert.deepEqual(
+    h.gh.issue(7).blockedBy.map((b) => b.number),
+    [3, 4],
+  )
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:intake', 'wait:blocked'])
+  let m = h.gh.marker(7)
+  assert.equal(m?.node, 'blocked')
+  assert.deepEqual(m?.blockedBy, [4])
+  assert.equal(m?.deferUntil, null)
+  assert.equal(m?.defers ?? 0, 0, 'a blocked wait is not a defer')
+  assert.equal(m?.history.at(-1)?.outcome, 'blocked')
+  assert.match(h.gh.issue(7).comment?.body ?? '', /re-triage once #4 close/)
+
+  // However long it waits, it is not triaged while a blocker is open.
+  const writes = h.gh.calls.length
+  h.clock.advance(48 * 60 * MIN)
+  await tick(h.deps)
+  assert.equal(h.spawner.started.length, 1)
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:intake', 'wait:blocked'])
+  assert.deepEqual(
+    h.gh.calls.slice(writes).map((c) => c.op),
+    ['read'],
+    'still parked: nothing written',
+  )
+
+  // The last one closes: the next tick triages it, the earlier reason in the prompt.
+  h.gh.issue(4).state = 'CLOSED'
+  await tick(h.deps)
+  assert.equal(h.spawner.started.length, 2)
+  assert.match(h.spawner.started[1].prompt, /found it blocked by #4, now closed:\nThe API from #3, the UI from #4\./)
+  assert.ok(!h.spawner.started[1].prompt.includes('re-triage 1'), 'not a deferred re-triage')
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:intake', 'running'])
+  m = h.gh.marker(7)
+  assert.equal(m?.node, 'triaging')
+})
+
+test('schedule: an intake issue with an open blockedBy is never triaged; it is parked wait:blocked, whatever its deferUntil', async () => {
+  const h = intake({
+    cap: 2,
+    issues: [
+      { number: 7, labels: ['q:intake'] },
+      { number: 8, labels: ['q:intake'] },
+      { number: 3, labels: [] },
+    ],
+  })
+  h.gh.issue(7).blockedBy = [blocker(3)]
+  await tick(h.deps)
+  assert.deepEqual(
+    h.spawner.started.map((x) => x.issue),
+    [8],
+    'only the unblocked one is handed to a worker',
+  )
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:intake', 'wait:blocked'])
+  assert.equal(h.gh.marker(7)?.node, 'blocked')
+  assert.deepEqual(h.gh.marker(7)?.blockedBy, [3])
+  assert.equal(h.gh.calls.filter((c) => c.op === 'addBlockedBy').length, 0, 'GitHub already links it')
+
+  // #8 defers for a day; then GitHub links it to #3 too: parked as blocked, its defer reason kept.
+  const w = /** @type {any} */ (h.deps.store.worker(SLUG, 8))
+  h.spawner.logs.set(w.stdout, logWith(verdictMessage({ verdict: 'defer', reason: 'blocked by #3', recheckHours: 24 })))
+  h.procs.live.delete(w.pid)
+  await tick(h.deps)
+  assert.deepEqual(h.gh.issue(8).labels.sort(), ['q:intake', 'wait:deferred'])
+  h.gh.issue(8).blockedBy = [blocker(3)]
+  await tick(h.deps)
+  assert.deepEqual(h.gh.issue(8).labels.sort(), ['q:intake', 'wait:blocked'])
+  assert.equal(h.gh.marker(8)?.node, 'blocked')
+  assert.equal(h.gh.marker(8)?.deferReason, 'blocked by #3')
+  assert.equal(h.gh.marker(8)?.deferUntil, null)
+
+  // #3 closes an hour later: both are triaged on the next tick, 23 hours before #8's old deferUntil.
+  h.clock.advance(60 * MIN)
+  h.gh.issue(3).state = 'CLOSED'
+  await tick(h.deps)
+  assert.deepEqual(
+    h.spawner.started.map((x) => x.issue),
+    [8, 7, 8],
+  )
+})
+
+test('blocked waits do not count toward maxDefers; a blocked verdict on closed issues is a defer', async () => {
+  const h = intake({
+    config: { phases: { dispatch: { cap: 1, maxDefers: 1 }, task: { cap: 0 } } },
+    issues: [
+      { number: 7, labels: ['q:intake'] },
+      { number: 3, labels: [] },
+      { number: 4, labels: [], state: 'CLOSED' },
+    ],
+  })
+  await triage(h, logWith(verdictMessage({ verdict: 'defer', reason: 'next cd run' })))
+  assert.equal(h.gh.marker(7)?.defers, 1)
+  h.clock.advance(7 * 60 * MIN)
+  for (let n = 0; n < 3; n++) {
+    await triage(h, logWith(verdictMessage({ verdict: 'blocked', blockedBy: [3], reason: 'needs #3' })))
+    assert.equal(h.gh.marker(7)?.node, 'blocked')
+    assert.equal(h.gh.marker(7)?.defers, 1)
+    assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:intake', 'wait:blocked'])
+    h.gh.issue(7).blockedBy = [] // unblocked: the link is gone
+  }
+
+  // Blocked only on a closed issue: nothing to wait for, so it is a defer, and this one is past maxDefers.
+  await triage(h, logWith(verdictMessage({ verdict: 'blocked', blockedBy: [4], reason: 'needs #4' })))
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:human', 'why:triage'])
+  assert.match(h.gh.marker(7)?.lastFailure ?? '', /blocked by #4, but none is open\. needs #4/)
 })
