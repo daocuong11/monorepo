@@ -8,6 +8,7 @@ import { graftGithub } from './github.mjs'
 import { runServices } from './services.mjs'
 import { runSetup } from './setup.mjs'
 import { TOOLS, defaultExec, defaultSpawn, isTool, toolCommand, toolRunner, which } from './tools.mjs'
+import { realUpdater, runUpdate } from './update.mjs'
 
 const PKG = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
@@ -20,6 +21,7 @@ const USAGE = `oakgreen ${PKG.version} — the oakgreen stack in one command
   oakgreen stop [service...]    stop each and keep it stopped across logins, until start
   oakgreen restart [service...] new process for each (default: all installed), e.g. after an npm update
   oakgreen reload [service...]  also re-read each agent's plist (its env), waiting for the old one to stop
+  oakgreen update [--check]     install the latest oakgreen (and its tools), then restart running services
   oakgreen <tool> [args...]     run ${Object.keys(TOOLS).join(', ')}
 
 --config is cambium's config (default $CAMBIUM_CONFIG, then ~/.cambium/config.json).
@@ -43,6 +45,7 @@ const USAGE = `oakgreen ${PKG.version} — the oakgreen stack in one command
  *   platform?: string,
  *   exists?: (path: string) => boolean,
  *   sleep?: (ms: number) => Promise<unknown>,
+ *   updater?: import('./update.mjs').Updater,
  * }} Ports
  */
 
@@ -119,6 +122,36 @@ export async function main(argv, ports = {}) {
       stdout,
       stderr,
     )
+  }
+  if (verb === 'update') {
+    const bad = rest.filter((a) => a !== '--check')
+    if (bad.length) {
+      stderr(`oakgreen update: unknown argument ${bad.join(' ')}\n`)
+      return 2
+    }
+    try {
+      const r = await runUpdate(
+        { check: rest.includes('--check') },
+        {
+          updater: ports.updater ?? realUpdater({ exec, current: PKG.version }),
+          services: {
+            exec,
+            home,
+            uid: ports.uid ?? process.getuid?.() ?? 0,
+            exists: ports.exists,
+            sleep: ports.sleep,
+            now,
+          },
+          platform: ports.platform,
+          out: stdout,
+        },
+      )
+      if (!r.ok) stderr(`oakgreen update: ${r.error}\n`)
+      return r.ok ? 0 : 1
+    } catch (err) {
+      stderr(`oakgreen update: ${/** @type {Error} */ (err)?.message ?? err}\n`)
+      return 1
+    }
   }
   if (verb !== 'doctor' && verb !== 'setup') {
     stderr(`oakgreen: unknown command '${verb}'\n\n${USAGE}`)
