@@ -112,12 +112,34 @@ h2 .n{color:var(--faint);margin-left:4px}
 .detail{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:var(--s4);align-items:start}
 .stats{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s4);margin-top:var(--s3);padding-top:var(--s3);border-top:1px solid var(--line)}.stat b{font-size:16px;font-weight:600;margin-right:var(--s1)}
 .steps{display:flex;flex-wrap:wrap;gap:var(--s1)}.steps+.err{margin-top:var(--s1)}
-.cols{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) minmax(0,1.35fr);gap:var(--s4)}
-.col.prs{border-left:1px solid var(--line);padding-left:var(--s4)}
+/* Queue tab: work in hand over the queues it came from. One column template for both rows, so Triage sits over Intake,
+   Running over Task and Pull requests over Promote. The queues sit on the page, the active row is lifted onto a panel. */
+.grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr) minmax(0,1.3fr);gap:var(--s4) var(--s5)}
+.active:not(.has-triage)>.l-running{grid-column:span 2}
+section.lanes{background:none;border-color:transparent}
 .col{min-width:0}.col ul{list-style:none;margin:0;padding:0}
-.col>h2{padding-top:var(--s2);border-top:3px solid var(--line)}.col.prs>h2{border-top-color:transparent}
-.col.l-intake>h2{border-top-color:var(--flow-1)}.col.l-task>h2{border-top-color:var(--flow-2)}.col.l-running>h2{border-top-color:var(--flow-3)}.col.l-promote>h2{border-top-color:var(--flow-4)}
-.col li>a{color:var(--text)}.col li>a:hover{color:var(--accent);text-decoration:none}.col li>a:hover .t{text-decoration:underline}
+.col>h2{display:flex;flex-wrap:wrap;align-items:baseline;padding-top:var(--s2);border-top:3px solid var(--line)}.col>h2 .lane-label:first-of-type{margin-left:auto}
+.col.l-intake>h2,.col.l-triage>h2{border-top-color:var(--flow-1)}.col.l-task>h2{border-top-color:var(--flow-2)}.col.l-running>h2{border-top-color:var(--flow-3)}
+.col.l-prs>h2{border-top-color:color-mix(in oklch,var(--flow-3),var(--flow-4))}.col.l-promote>h2{border-top-color:var(--flow-4)}
+.col li.work{display:grid;gap:5px;padding:10px 0}.col li.work:first-child{padding-top:var(--s1)}
+.work-head{display:flex;align-items:baseline;gap:var(--s3)}.work-head>a{min-width:0;flex:1}
+.closes{flex:none;font-size:12px}
+.trail{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px;font-size:12px;overflow-wrap:anywhere}.trail b{font-weight:600;color:var(--text)}.trail .sep{color:var(--faint)}
+.prog{display:flex;align-items:center;gap:6px;font-size:12px}.prog .muted{margin-left:auto;padding-left:var(--s2)}
+.prog .bar{flex:1;width:auto;min-width:48px;margin:0}
+.stages{list-style:none;margin:3px 0 1px;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px}
+.col li.stg{padding:0;border-top:0;display:grid;gap:3px;min-width:0;font-size:11px;color:var(--faint)}
+.stg span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stg i{display:block;height:4px;border-radius:2px;background:var(--bar)}
+.stg.done{color:var(--muted)}.stg.done i{background:var(--ok)}
+.stg.now{color:var(--text);font-weight:600}.stg.fail{color:var(--err);font-weight:600}.stg.fail i{background:var(--err)}
+.work.draft .stg i{opacity:.5}
+/* In flight: a slow sheen runs along a stage in progress and a running worker's clock. The page re-renders on every poll,
+   so each one is started at the shared clock's phase (inline animation-delay) and the motion never jumps. */
+.stg.now i,.prog .bar i.moving{background:linear-gradient(90deg,var(--flow-3) 0 35%,color-mix(in oklch,var(--flow-3) 40%,var(--panel)) 50%,var(--flow-3) 65% 100%) 0 0/300% 100%;animation:sheen 2.4s linear infinite}
+@keyframes sheen{from{background-position:100% 0}to{background-position:0 0}}
+@media (prefers-reduced-motion:reduce){.stg.now i,.prog .bar i.moving{animation:none;background:var(--flow-3)}}
+.col li>a,.work-head>a{color:var(--text)}.col li>a:hover,.work-head>a:hover{color:var(--accent);text-decoration:none}.col li>a:hover .t,.work-head>a:hover .t{text-decoration:underline}
 .col li{padding:6px 0;border-top:1px solid var(--line)}.col li:first-child{border-top:0}
 .t{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .col .t{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
@@ -165,11 +187,10 @@ color:var(--text);background:color-mix(in srgb,var(--fam,var(--muted)) 32%,var(-
 @media (max-width:900px){.ib{grid-template-columns:minmax(0,1fr)}.ib.open>.ib-tools,.ib.open>.ib-side,.ib:not(.open)>.ib-pane{display:none}
 .ib-pane{position:static;max-height:none;padding:var(--s3) var(--s4) var(--s4)}.back{display:inline-block}
 .facets{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding:2px 0}.chip{flex:none}}
-@media (max-width:1100px){.cols{grid-template-columns:repeat(4,minmax(0,1fr))}.detail{grid-template-columns:1fr}
-.col.prs{grid-column:1/-1;border-left:0;padding-left:0;border-top:1px solid var(--line);padding-top:var(--s3)}}
-@media (max-width:760px){.cols{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:1100px){.active{grid-template-columns:repeat(2,minmax(0,1fr))}.active>.col{grid-column:auto}.active.has-triage>.l-prs{grid-column:1/-1}.detail{grid-template-columns:1fr}}
+@media (max-width:760px){.grid,.active{grid-template-columns:minmax(0,1fr)}.active>.col,.active.has-triage>.l-prs{grid-column:auto}
 .sp,.wf-axis{grid-template-columns:minmax(0,1fr) 56px}.sp .track,.wf-axis .ticks{grid-column:1/-1;order:3}.wf-axis>span:not(.ticks){display:none}}
-@media (max-width:480px){main{padding:var(--s3) var(--s3) var(--s5);gap:var(--s3)}section{padding:var(--s3)}.cols{grid-template-columns:1fr}
+@media (max-width:480px){main{padding:var(--s3) var(--s3) var(--s5);gap:var(--s3)}section{padding:var(--s3)}
 .tabs{padding:0 var(--s3);gap:var(--s4)}}
 `
 
@@ -260,24 +281,9 @@ function item(i, multi, now) {
       traceLink(i.repo, i.number)))
 }
 
-function pr(p, multi, now) {
-  const [cls, word] = CHECK[p.checks] || ['', 'no checks']
-  return h('li', {},
-    link(p.url, h('span', { class: 't', title: p.title }, h('span', { class: 'faint' }, '#' + p.number + ' '), p.title)),
-    h('div', { class: 'meta' },
-      h('span', {}, h('span', { class: 'dot ' + cls }), word),
-      p.inMergeQueue ? h('span', { class: 'ok' }, 'in merge queue') : p.autoMerge ? h('span', {}, 'auto-merge') : null,
-      p.draft ? h('span', { class: 'faint' }, 'draft') : null,
-      p.closes.length ? h('span', {}, 'closes ' + p.closes.map((n) => '#' + n).join(' ')) : null,
-      multi ? h('span', {}, p.repo) : null,
-      h('span', { class: 'faint mono' }, p.branch)))
-}
-
 const isMulti = (gh) => new Set(gh.repos.map((r) => r.slug)).size > 1
 const list = (xs, render, multi, now) => xs.length ? h('ul', {}, xs.map((x) => render(x, multi, now))) : h('div', { class: 'empty' }, 'empty')
 
-const LANES = [['intake', 'Intake', 'q:intake'], ['task', 'Task', 'q:task'], ['running', 'Running', 'running'], ['promote', 'Promote', 'q:promote']]
-const inFlight = (gh) => LANES.reduce((n, [k]) => n + gh.columns[k].length, 0)
 
 const strandedOf = (gh) => gh.stranded || []
 const needsYou = (gh) => gh.columns.human.length + strandedOf(gh).length
@@ -467,12 +473,132 @@ function issuePane(sel, gone, d, multi, now, sig) {
   return h('section', { class: 'ib-pane', id: 'ib-pane', tabindex: -1, 'aria-labelledby': 'pane-title', 'data-sig': sig, 'data-key': base.repo + '#' + base.number }, head, parts)
 }
 
+// Queue tab. The top row is work cambium has in hand (triage, task workers, agent PRs) with how far each has got;
+// the row under it is the three queues waiting on it. Both rows share one grid so Triage sits over Intake,
+// Running over Task and PRs over Promote: each piece of live work is above the queue it came from.
+const LANES = [['intake', 'Intake', 'q:intake'], ['task', 'Task', 'q:task'], ['running', 'Running', 'running'], ['promote', 'Promote', 'q:promote']]
+const inFlight = (gh) => LANES.reduce((n, [k]) => n + gh.columns[k].length, 0)
+const issueKey = (repo, n) => repo + '#' + n
+let traceProg = {}
+const SHEEN_MS = 2400
+const sheenPhase = () => 'animation-delay:-' + (Date.now() % SHEEN_MS) + 'ms'
+
+function activeWork(s) {
+  const gh = s.github, d = s.heartbeat.data
+  const workers = new Map((d ? d.workers : []).map((w) => [issueKey(w.repo, w.issue), w]))
+  const triage = [], running = []
+  for (const i of gh.columns.running) (i.labels.includes('q:intake') ? triage : running).push(i)
+  // A worker this host runs whose issue GitHub doesn't show as running (yet, or any more) still shows: truth over comfort.
+  const listed = new Set(gh.columns.running.map((i) => issueKey(i.repo, i.number)))
+  for (const w of workers.values()) {
+    if (listed.has(issueKey(w.repo, w.issue))) continue
+    const orphan = { repo: w.repo, number: w.issue, title: 'not labelled running on GitHub', url: 'https://github.com/' + w.repo + '/issues/' + w.issue, labels: [], orphan: true }
+    ;(w.phase === 'dispatch' ? triage : running).push(orphan)
+  }
+  return { triage, running, workers, caps: (d && d.caps) || {} }
+}
+
+function trail(p) {
+  if (!p || !p.trail || !p.trail.length) return null
+  const last = p.trail.length - 1
+  return h('div', { class: 'trail mono', title: (p.graph ? p.graph + ' graph: ' : '') + p.trail.join(' › ') },
+    p.trail.map((n, i) => [i ? h('span', { class: 'sep', 'aria-hidden': 'true' }, '›') : null, i === last ? h('b', {}, n) : h('span', { class: 'faint' }, n)]))
+}
+
+function clock(w, ageMs) {
+  if (!w) return h('div', { class: 'prog faint' }, 'no worker on this host')
+  const elapsed = (w.elapsedMs || 0) + (w.alive && ageMs ? ageMs : 0)
+  const frac = w.wallClockMs ? Math.min(1, elapsed / w.wallClockMs) : 0
+  const tone = frac >= 1 ? 'err' : frac > 0.8 ? 'warn' : ''
+  return h('div', { class: 'prog', title: 'Wall clock: ' + dur(elapsed) + ' of the ' + dur(w.wallClockMs) + ' a worker may run' },
+    h('span', { class: 'bar', role: 'meter', 'aria-label': 'wall clock used', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': Math.round(frac * 100) },
+      h('i', { class: tone || (w.alive ? 'moving' : null), style: 'width:' + Math.round(frac * 100) + '%;' + sheenPhase() })),
+    h('span', { class: tone || null }, dur(elapsed)), h('span', { class: 'faint' }, '/ ' + dur(w.wallClockMs)),
+    h('span', { class: 'muted' }, 'attempt ' + (w.attempt ?? '–')))
+}
+
+function workCard(i, multi, now, w, ageMs) {
+  const p = traceProg[issueKey(i.repo, i.number)]
+  return h('li', { class: 'work' },
+    link(i.url, h('span', { class: 't', title: i.title }, h('span', { class: 'faint' }, '#' + i.number + ' '), i.orphan ? h('span', { class: 'warn' }, i.title) : i.title)),
+    trail(p) || h('div', { class: 'trail faint' }, 'no trace for this run yet'),
+    clock(w, ageMs),
+    w && w.killedReason ? h('div', { class: 'err' }, 'killed: ' + w.killedReason) : w && !w.alive ? h('div', { class: 'err' }, 'worker exited; cambium reconciles it next tick') : null,
+    h('div', { class: 'meta' },
+      p && p.errors ? h('span', { class: 'err' }, plural(p.errors, 'failed span', 'failed spans')) : null,
+      p && p.costUsd != null ? h('span', {}, usd(p.costUsd)) : null,
+      p ? h('span', { class: 'faint', title: new Date(p.end).toISOString() }, 'active ' + ago(new Date(p.end).toISOString(), now)) : null,
+      prio(i.priority),
+      multi ? h('span', {}, i.repo) : null,
+      traceLink(i.repo, i.number)))
+}
+
+// Where an agent PR is on its way in: checks, auto-merge, the merge queue, merged. A merged PR leaves this list,
+// so the last stage only ever shows as next.
+const RED = { FAILURE: 1, ERROR: 1 }
+function stages(p) {
+  const passed = p.checks === 'SUCCESS'
+  const reported = p.checks || (p.tally && p.tally.passed + p.tally.failed + p.tally.pending)
+  const checks = RED[p.checks] ? 'fail' : passed ? 'done' : reported || !p.draft ? 'now' : 'todo'
+  const auto = p.inMergeQueue || p.autoMerge ? 'done' : p.mergeState === 'DIRTY' ? 'fail' : passed ? 'now' : 'todo'
+  const pos = p.inMergeQueue && p.queue && p.queue.position != null ? ' #' + p.queue.position : ''
+  return [['checks', checks], ['auto-merge', auto], ['queue' + pos, p.inMergeQueue ? 'now' : 'todo'], ['merged', 'todo']]
+}
+const STAGE_WORD = { done: 'done', now: 'in progress', fail: 'stuck', todo: 'not yet' }
+const MERGE_STATE = { DIRTY: ['err', 'merge conflicts'], BEHIND: ['warn', 'behind base'] }
+
+function tallyText(p) {
+  const t = p.tally, total = t ? t.passed + t.failed + t.pending : 0
+  if (!total) { const [cls, word] = CHECK[p.checks] || ['faint', 'no checks reported']; return h('span', { class: cls }, word) }
+  return [h('span', { class: t.failed ? null : t.pending ? null : 'ok' }, t.passed + ' of ' + total + ' checks pass'),
+    t.pending ? h('span', { class: 'muted' }, t.pending + ' running') : null,
+    t.failed ? h('span', { class: 'err' }, t.failed + ' failing') : null]
+}
+
+function prCard(p, multi, now) {
+  const issue = p.closes[0], prog = issue ? traceProg[issueKey(p.repo, issue)] : null
+  const [msCls, msWord] = MERGE_STATE[p.mergeState] || []
+  return h('li', { class: 'work' + (p.draft ? ' draft' : '') },
+    h('div', { class: 'work-head' },
+      link(p.url, h('span', { class: 't', title: p.title }, h('span', { class: 'faint' }, '#' + p.number + ' '), p.title)),
+      p.closes.length ? h('span', { class: 'closes faint' }, 'closes', p.closes.map((n) => [' ', link('https://github.com/' + p.repo + '/issues/' + n, '#' + n)])) : null),
+    h('ol', { class: 'stages', 'aria-label': 'Progress to merge' },
+      stages(p).map(([label, state]) => h('li', { class: 'stg ' + state, title: label + ': ' + STAGE_WORD[state] }, h('i', { style: state === 'now' ? sheenPhase() : null }), h('span', {}, label)))),
+    h('div', { class: 'meta' },
+      p.draft ? h('span', { class: 'pill' }, 'draft') : null,
+      tallyText(p),
+      msWord ? h('span', { class: msCls }, msWord) : null,
+      prog && prog.node ? h('span', { class: 'muted', title: 'Last node cambium recorded' + (prog.graph ? ' in the ' + prog.graph + ' graph' : '') }, 'cambium at ', h('span', { class: 'mono' }, prog.node)) : null),
+    h('div', { class: 'meta' },
+      p.additions != null ? [h('span', { class: 'ok' }, '+' + p.additions), h('span', { class: 'err' }, '−' + p.deletions)] : null,
+      p.files != null ? h('span', { class: 'faint' }, plural(p.files, 'file', 'files')) : null,
+      h('span', { class: 'faint', title: p.createdAt || '' }, 'opened ' + ago(p.createdAt || p.updatedAt, now)),
+      multi ? h('span', {}, p.repo) : null,
+      h('span', { class: 'faint mono' }, p.branch),
+      issue ? traceLink(p.repo, issue) : null))
+}
+
+const slots = (n, cap) => (cap ? h('span', { class: 'lane-label' }, n + ' of ' + cap + ' slots') : null)
+const heading = (title, n, extra) => h('h2', {}, title, h('span', { class: 'n' }, n), extra)
+
 function queues(s, now) {
-  const gh = s.github, multi = isMulti(gh)
-  const col = (title, label, xs, render, cls) => h('div', { class: 'col' + (cls ? ' ' + cls : '') },
-    h('h2', {}, title, h('span', { class: 'n' }, xs.length), label ? h('span', { class: 'lane-label mono' }, label) : null), list(xs, render, multi, now))
-  return h('section', {}, h('div', { class: 'cols' },
-    LANES.map(([k, title, label]) => col(title, label, gh.columns[k], item, 'l-' + k)), col('Agent PRs', 'agent/*', gh.prs, pr, 'prs')))
+  const gh = s.github, multi = isMulti(gh), ageMs = s.heartbeat.ageMs
+  traceProg = (s.traces && s.traces.progress) || {}
+  const a = activeWork(s)
+  const workerOf = (i) => a.workers.get(issueKey(i.repo, i.number))
+  const live = (xs, phase) => xs.filter((i) => { const w = workerOf(i); return w && w.alive && w.phase === phase }).length
+  const cards = (xs, empty) => (xs.length ? h('ul', {}, xs.map((i) => workCard(i, multi, now, workerOf(i), ageMs))) : h('div', { class: 'empty' }, empty))
+  const waiting = gh.columns.task.length
+  const active = h('section', { class: 'grid active' + (a.triage.length ? ' has-triage' : ''), 'aria-label': 'Work in progress' },
+    a.triage.length ? h('div', { class: 'col l-triage' }, heading('Triage', a.triage.length, slots(live(a.triage, 'dispatch'), a.caps.dispatch)), cards(a.triage)) : null,
+    h('div', { class: 'col l-running' }, heading('Running', a.running.length, slots(live(a.running, 'task'), a.caps.task)),
+      cards(a.running, waiting ? 'No worker running; ' + plural(waiting, 'issue waits', 'issues wait') + ' in q:task.' : 'No worker running.')),
+    h('div', { class: 'col l-prs' }, heading('Pull requests', gh.prs.length, h('span', { class: 'lane-label mono' }, 'agent/*')),
+      gh.prs.length ? h('ul', {}, gh.prs.map((p) => prCard(p, multi, now))) : h('div', { class: 'empty' }, 'No open agent PRs.')))
+  const lane = ([k, title, label]) => h('div', { class: 'col l-' + k },
+    heading(title, gh.columns[k].length, h('span', { class: 'lane-label mono' }, label)), list(gh.columns[k], item, multi, now))
+  const queued = h('section', { class: 'grid lanes', 'aria-label': 'Queues' }, LANES.filter(([k]) => k !== 'running').map(lane))
+  return [active, queued]
 }
 
 function healthOf(s) {
@@ -829,7 +955,7 @@ function render(s) {
   const body = [...banners(s, now)]
   let split = null
   if (tab === 'inbox') for (const x of inbox(s, now)) if (x instanceof Node) body.push(x); else body.push((split = x).ib)
-  if (tab === 'queue') body.push(queues(s, now))
+  if (tab === 'queue') body.push(...queues(s, now))
   if (tab === 'traces') body.push(tracesTab(now))
   if (tab === 'health') {
     if (d) body.push(summary(d), h('div', { class: 'detail' }, workers(d, s.heartbeat.ageMs), events(d)))

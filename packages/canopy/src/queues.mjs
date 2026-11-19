@@ -19,10 +19,24 @@ export const QUEUES_QUERY = `query($owner: String!, $name: String!, $labels: [St
     }
     pullRequests(states: OPEN, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) {
       nodes {
-        number title url headRefName isDraft isInMergeQueue updatedAt
+        number title url headRefName isDraft isInMergeQueue createdAt updatedAt mergeStateStatus
+        additions deletions changedFiles
         autoMergeRequest { enabledAt }
+        mergeQueueEntry { position state }
         closingIssuesReferences(first: 5) { nodes { number } }
-        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                state
+                contexts(first: 0) {
+                  checkRunCountsByState { state count }
+                  statusContextCountsByState { state count }
+                }
+              }
+            }
+          }
+        }
       }
     }
     closed: pullRequests(states: CLOSED, first: 50, orderBy: { field: UPDATED_AT, direction: DESC }) {
@@ -44,8 +58,13 @@ export const queryVars = (/** @type {string} */ slug) => {
 /**
  * @typedef {{ repo: string, number: number, title: string, url: string, createdAt: string | null,
  *   updatedAt: string | null, labels: string[], why: string | null, priority: string | null }} Item
+ * @typedef {{ passed: number, failed: number, pending: number }} CheckCounts
+ *   Checks on the PR's head commit, check runs and commit statuses together; skipped and neutral count as passed.
  * @typedef {{ repo: string, number: number, title: string, url: string, branch: string, draft: boolean,
- *   checks: string | null, inMergeQueue: boolean, autoMerge: boolean, closes: number[], updatedAt: string | null }} Pr
+ *   checks: string | null, tally: CheckCounts | null, inMergeQueue: boolean, autoMerge: boolean,
+ *   queue: { position: number | null, state: string | null } | null, mergeState: string | null,
+ *   additions: number | null, deletions: number | null, files: number | null,
+ *   closes: number[], createdAt: string | null, updatedAt: string | null }} Pr
  * @typedef {{ intake: Item[], task: Item[], running: Item[], human: Item[], promote: Item[] }} Columns
  * @typedef {Item & { pr: { number: number, title: string, url: string, branch: string, closedAt: string | null } }} Stranded
  *   An open issue with no queue label whose `agent/*` PR was closed unmerged and nothing open replaces it:
@@ -105,12 +124,44 @@ export function group(answer, repo) {
       branch: p.headRefName,
       draft: Boolean(p.isDraft),
       checks: p.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state ?? null,
+      tally: tallyOf(p.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts),
       inMergeQueue: Boolean(p.isInMergeQueue),
       autoMerge: Boolean(p.autoMergeRequest),
+      queue: p.mergeQueueEntry
+        ? { position: p.mergeQueueEntry.position ?? null, state: p.mergeQueueEntry.state ?? null }
+        : null,
+      mergeState: p.mergeStateStatus ?? null,
+      additions: p.additions ?? null,
+      deletions: p.deletions ?? null,
+      files: p.changedFiles ?? null,
       closes: (p.closingIssuesReferences?.nodes ?? []).map((/** @type {any} */ i) => i.number),
+      createdAt: p.createdAt ?? null,
       updatedAt: p.updatedAt ?? null,
     }))
   return { columns, prs, stranded: strandedOf(r.closed?.nodes ?? [], prs, repo) }
+}
+
+const PASSED = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED'])
+const PENDING = new Set(['PENDING', 'QUEUED', 'IN_PROGRESS', 'WAITING', 'REQUESTED', 'EXPECTED'])
+
+/**
+ * A rollup's per-state counts → passed, failed and still pending; null when GitHub sent no counts.
+ * A completed check run with no conclusion yet (`COMPLETED`) is left out rather than guessed at.
+ *
+ * @param {any} contexts
+ * @returns {CheckCounts | null}
+ */
+export function tallyOf(contexts) {
+  const rows = [...(contexts?.checkRunCountsByState ?? []), ...(contexts?.statusContextCountsByState ?? [])]
+  if (!rows.length) return null
+  const t = { passed: 0, failed: 0, pending: 0 }
+  for (const { state, count } of rows) {
+    if (!count || state === 'COMPLETED') continue
+    if (PASSED.has(state)) t.passed += count
+    else if (PENDING.has(state)) t.pending += count
+    else t.failed += count
+  }
+  return t
 }
 
 /**

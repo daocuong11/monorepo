@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { cachedQueues, graftClient } from '../src/github.mjs'
-import { columnOf, group, QUEUES_QUERY } from '../src/queues.mjs'
+import { columnOf, group, QUEUES_QUERY, tallyOf } from '../src/queues.mjs'
 import { graphqlAnswer, T0 } from './fixtures.mjs'
 
 const REPO = 'oakgreencc/monorepo'
@@ -31,6 +31,48 @@ test('group: issues into columns, why and priority read, agent PRs only', () => 
     { checks: 'SUCCESS', q: true, auto: true, closes: [3] },
   )
   assert.deepEqual({ checks: prs[1].checks, draft: prs[1].draft }, { checks: null, draft: true })
+  assert.deepEqual(
+    {
+      tally: prs[0].tally,
+      queue: prs[0].queue,
+      mergeState: prs[0].mergeState,
+      size: [prs[0].additions, prs[0].deletions, prs[0].files],
+    },
+    {
+      tally: { passed: 8, failed: 0, pending: 0 },
+      queue: { position: 2, state: 'AWAITING_CHECKS' },
+      mergeState: 'CLEAN',
+      size: [424, 9, 8],
+    },
+  )
+  assert.deepEqual(
+    { tally: prs[1].tally, queue: prs[1].queue, mergeState: prs[1].mergeState, files: prs[1].files },
+    { tally: null, queue: null, mergeState: null, files: null },
+    'fields GitHub left out read as null',
+  )
+})
+
+test('tallyOf: check runs and statuses together, skipped as passed, an unconcluded completed run left out', () => {
+  assert.deepEqual(
+    tallyOf({
+      checkRunCountsByState: [
+        { state: 'SUCCESS', count: 3 },
+        { state: 'NEUTRAL', count: 1 },
+        { state: 'IN_PROGRESS', count: 2 },
+        { state: 'QUEUED', count: 1 },
+        { state: 'FAILURE', count: 1 },
+        { state: 'TIMED_OUT', count: 1 },
+        { state: 'COMPLETED', count: 4 },
+      ],
+      statusContextCountsByState: [
+        { state: 'PENDING', count: 1 },
+        { state: 'ERROR', count: 1 },
+      ],
+    }),
+    { passed: 4, failed: 3, pending: 4 },
+  )
+  assert.equal(tallyOf(null), null)
+  assert.equal(tallyOf({ checkRunCountsByState: [] }), null)
 })
 
 test('the query asks for closed q:promote issues', () => {
