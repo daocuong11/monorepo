@@ -1,5 +1,6 @@
 // @ts-check
 import { facetsOf, inboxItems, priorityRank, viewOf } from './inbox.mjs'
+import { autoApproved, flameFrames, flameTree } from './flame.mjs'
 import { markdown } from './markdown.mjs'
 
 const CSS = `
@@ -147,12 +148,24 @@ a.row-link{color:inherit}a.row-link:hover{text-decoration:none}tr.run:hover td{b
 .legend{display:flex;flex-wrap:wrap;gap:2px var(--s3);margin-bottom:var(--s3);font-size:12px;color:var(--muted)}.legend span{display:inline-flex;align-items:center;gap:5px}
 .legend i{width:10px;height:8px;border-radius:2px;background:var(--fam,var(--muted))}.legend i.wait{background:repeating-linear-gradient(135deg,var(--bar) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px var(--bar)}.legend i.err{background:var(--err)}
 .sp .d{text-align:right;color:var(--muted)}
+.sp .nm .pill{margin-left:6px}
+.trace-split{display:grid;grid-template-columns:minmax(0,3fr) minmax(300px,2fr);gap:var(--s4);align-items:start;margin-top:var(--s3)}.trace-split .wf{margin-top:0}
+.quiet-note{display:flex;flex-wrap:wrap;gap:2px var(--s2);margin-bottom:var(--s2);font-size:12px;color:var(--faint)}
+.flame{position:sticky;top:calc(var(--top-h,90px) + var(--s4));max-height:calc(100vh - var(--top-h,90px) - var(--s4) * 2);overflow:auto;scrollbar-width:thin;scrollbar-color:var(--bar) transparent;border-left:1px solid var(--line);padding-left:var(--s4)}
+.flame h2{margin-bottom:var(--s1)}.crumbs{display:flex;flex-wrap:wrap;gap:2px 6px;font-size:12px;color:var(--faint);margin-bottom:var(--s2);overflow-wrap:anywhere}
+.fl{position:relative}
+.fr{appearance:none;position:absolute;height:18px;padding:0 4px;border:0;border-radius:2px;box-shadow:inset 0 0 0 1px var(--panel);font:11px/18px ui-monospace,SFMono-Regular,Menlo,monospace;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;
+color:var(--text);background:color-mix(in srgb,var(--fam,var(--muted)) 32%,var(--panel))}
+.fr:hover{background:color-mix(in srgb,var(--fam,var(--muted)) 55%,var(--panel))}.fr:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.fr.err{box-shadow:inset 0 -2px 0 var(--err),inset 0 0 0 1px var(--panel)}
+.fl-note{font-size:12px;color:var(--faint);margin-top:var(--s2)}
 .attrs{margin:0;padding:var(--s2) 0 var(--s3) var(--s4);display:grid;grid-template-columns:max-content minmax(0,1fr);gap:2px var(--s3);font-size:12px}
 .attrs dt{color:var(--muted)}.attrs dd{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
 @media (max-width:900px){.ib{grid-template-columns:minmax(0,1fr)}.ib.open>.ib-tools,.ib.open>.ib-side,.ib:not(.open)>.ib-pane{display:none}
 .ib-pane{position:static;max-height:none;padding:var(--s3) var(--s4) var(--s4)}.back{display:inline-block}
 .facets{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding:2px 0}.chip{flex:none}}
 @media (max-width:1100px){.cols{grid-template-columns:repeat(4,minmax(0,1fr))}.detail{grid-template-columns:1fr}
+.trace-split{grid-template-columns:minmax(0,1fr)}.flame{order:-1;position:static;max-height:none;border-left:0;padding-left:0;border-bottom:1px solid var(--line);padding-bottom:var(--s3)}
 .col.prs{grid-column:1/-1;border-left:0;padding-left:0;border-top:1px solid var(--line);padding-top:var(--s3)}}
 @media (max-width:760px){.cols{grid-template-columns:repeat(2,minmax(0,1fr))}
 .sp,.wf-axis{grid-template-columns:minmax(0,1fr) 56px}.sp .track,.wf-axis .ticks{grid-column:1/-1;order:3}.wf-axis>span:not(.ticks){display:none}}
@@ -161,7 +174,7 @@ a.row-link{color:inherit}a.row-link:hover{text-decoration:none}tr.run:hover td{b
 `
 
 const JS = `
-${[inboxItems, priorityRank, facetsOf, viewOf, markdown].map(String).join('\n')}
+${[inboxItems, priorityRank, facetsOf, viewOf, markdown, autoApproved, flameTree, flameFrames].map(String).join('\n')}
 const $ = (id) => document.getElementById(id)
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag)
@@ -541,6 +554,8 @@ function runsView(f, now) {
 
 function spanDetail(sp) {
   const a = sp.attrs
+  if (sp.name === 'claude_code.tool.blocked_on_user') return [a.decision === 'reject' ? 'rejected' : 'accepted', a.source ? 'by ' + a.source : null]
+  if (a.tool_name) return [a.tool_name]
   if (a['cambium.node']) return [a['cambium.node'], a['cambium.edge'] ? '→ ' + a['cambium.edge'] : null, a['cambium.attempt'] != null ? 'attempt ' + a['cambium.attempt'] : null]
   if (a['claude.tool.name']) return [a['claude.tool.name'], a['claude.tool.command']]
   if (a['claude.task.description']) return [a['claude.task.description']]
@@ -552,7 +567,7 @@ function spanDetail(sp) {
 }
 const preview = (v) => { const t = String(v).replace(/\\s+/g, ' ').trim(); return t.length > 120 ? t.slice(0, 119) + '…' : t }
 const showValue = (v) => (typeof v === 'string' ? v : JSON.stringify(v))
-let openSpans = new Set()
+let openSpans = new Set(), showQuiet = false, flameKey = ''
 // Bars are colored by the span name's prefix: which part of the stack did this work.
 const FAMILIES = ['cambium', 'claude', 'mycelium']
 const familyOf = (name) => { const f = String(name).split('.')[0]; return FAMILIES.includes(f) ? f : null }
@@ -578,7 +593,9 @@ function traceView(d) {
     h('span', { class: 'faint mono', style: 'margin-left:auto' }, t.id))
   const axis = h('div', { class: 'wf-axis', 'aria-hidden': 'true' }, h('span', {}, 'span'),
     h('span', { class: 'ticks' }, [0, 0.25, 0.5, 0.75, 1].map((f) => h('span', {}, f ? '+' + dur(span * f) : '0'))), h('span', { style: 'text-align:right' }, 'took'))
-  const rows = d.spans.map((sp) => {
+  const quiet = d.spans.filter(autoApproved)
+  const shown = showQuiet ? d.spans : d.spans.filter((sp) => !autoApproved(sp))
+  const rows = shown.map((sp) => {
     const left = ((sp.start - t.start) / span) * 100, width = ((sp.end - sp.start) / span) * 100
     const open = openSpans.has(sp.spanId)
     const detail = spanDetail(sp).filter((x) => x != null && x !== '')
@@ -587,7 +604,7 @@ function traceView(d) {
     const row = h('button', { type: 'button', class: 'sp', 'data-span': sp.spanId, 'aria-expanded': String(open),
         title: sp.name + ' · at +' + dur(sp.start - t.start) + ' · took ' + dur(sp.end - sp.start) },
       h('span', { class: 'nm', style: 'padding-left:' + sp.depth * 14 + 'px' },
-        sp.status === 'error' ? h('span', { class: 'dot err' }) : null, sp.name, detail.length ? h('span', { class: 'faint' }, detail.join(' · ')) : null),
+        sp.status === 'error' ? h('span', { class: 'dot err' }) : null, sp.name, detail.length ? h('span', { class: 'faint' }, detail.join(' · ')) : null, askPill(sp)),
       h('span', { class: 'track' }, h('i', { class: bar || null, style: 'left:' + left.toFixed(3) + '%;width:' + width.toFixed(3) + '%' })),
       h('span', { class: 'd' }, dur(sp.end - sp.start)))
     if (!open) return row
@@ -596,7 +613,47 @@ function traceView(d) {
     for (const e of sp.events) kv.push(['event · ' + e.name, (isFinite(e.at) ? '+' + dur(e.at - sp.start) + ' ' : '') + Object.entries(e.attrs).map(([k, v]) => k + '=' + showValue(v)).join(' ')])
     return [row, h('dl', { class: 'attrs mono' }, kv.map(([k, v]) => [h('dt', {}, k), h('dd', {}, showValue(v))]))]
   })
-  return h('section', {}, head, h('div', { class: 'wf' }, legend(d.spans), axis, rows), traceFileNote(d))
+  const note = quiet.length ? h('div', { class: 'quiet-note' },
+    h('span', {}, plural(quiet.length, 'permission check', 'permission checks'), ' approved by config or a hook, with nobody asked, ', showQuiet ? 'shown' : 'hidden', '.'),
+    h('button', { type: 'button', class: 'linkish', 'data-quiet': '' }, showQuiet ? 'hide them' : 'show them')) : null
+  return h('section', {}, head, h('div', { class: 'trace-split' },
+    h('div', { class: 'wf' }, legend(d.spans), note, axis, rows), flameView(d.spans)), traceFileNote(d))
+}
+
+// A permission check a person answered, or one that was refused, is the one worth seeing.
+function askPill(sp) {
+  if (sp.name !== 'claude_code.tool.blocked_on_user' || autoApproved(sp)) return null
+  if (sp.attrs.decision === 'reject') return h('span', { class: 'pill err' }, 'refused')
+  return h('span', { class: 'pill warn' }, 'asked you · ' + dur(sp.end - sp.start))
+}
+
+// Where the time went: spans with the same path of names fold into one frame, as wide as their summed time.
+function flameView(spans) {
+  const tree = flameTree(spans)
+  const { top, frames } = flameFrames(tree, flameKey)
+  const ROW = 20
+  const levels = frames.reduce((n, f) => Math.max(n, f.level), 0) + 1
+  const crumbs = [h('button', { type: 'button', class: 'linkish', 'data-frame': '' }, 'all spans')]
+  let at = tree
+  for (const part of top.key.split('/').slice(1)) {
+    at = at.kids.find((k) => k.label === part)
+    if (!at) break
+    crumbs.push(' › ', at === top ? h('span', {}, part) : h('button', { type: 'button', class: 'linkish', 'data-frame': at.key }, part))
+  }
+  const share = (f) => (top.ms ? Math.round((f.ms / top.ms) * 1000) / 10 : 0) + '%'
+  const boxes = frames.map((f) => {
+    const fam = familyOf(f.label)
+    const up = f === frames[0] && top !== tree ? top.key.slice(0, top.key.lastIndexOf('/')) : f.key
+    return h('button', { type: 'button', class: ['fr', fam ? 'f-' + fam : '', f.errors ? 'err' : ''].join(' ').trim(), 'data-frame': up,
+      style: 'left:' + (f.left * 100).toFixed(3) + '%;width:' + (f.width * 100).toFixed(3) + '%;top:' + f.level * ROW + 'px',
+      title: f.label + '\\n' + dur(f.ms) + ' · ' + share(f) + ' · ' + plural(f.count, 'span', 'spans') + (f.errors ? ' · ' + f.errors + ' failed' : '') +
+        (f === frames[0] && top !== tree ? '\\nclick to zoom out' : '') },
+      f.label + ' · ' + dur(f.ms))
+  })
+  return h('aside', { class: 'flame', 'aria-label': 'Flame graph' }, h('h2', {}, 'Where time went'),
+    h('div', { class: 'crumbs' }, crumbs),
+    h('div', { class: 'fl', style: 'height:' + levels * ROW + 'px' }, boxes),
+    h('div', { class: 'fl-note' }, 'Width is time summed over every span on that path, so parallel work adds up. Click a frame to zoom in.'))
 }
 
 function tracesTab(now) {
@@ -718,6 +775,17 @@ $('main').addEventListener('click', (e) => {
     if (ds.clear != null) document.querySelector('.seg [aria-pressed=true]')?.focus()
     return pump()
   }
+  const fr = e.target.closest('[data-frame]')
+  if (fr) {
+    flameKey = fr.dataset.frame
+    if (last) render(last)
+    return document.querySelector('.fr[data-frame="' + CSS.escape(flameKey) + '"],.crumbs [data-frame="' + CSS.escape(flameKey) + '"]')?.focus({ preventScroll: true })
+  }
+  if (e.target.closest('[data-quiet]')) {
+    showQuiet = !showQuiet
+    if (last) render(last)
+    return document.querySelector('[data-quiet]')?.focus({ preventScroll: true })
+  }
   const sp = e.target.closest('[data-span]')
   if (!sp) return
   const id = sp.dataset.span
@@ -748,7 +816,7 @@ addEventListener('hashchange', async () => {
   let sel
   ;[tab, traceSel, sel] = parseHash()
   if (sel) { ibSel = sel; ibOpen = true }
-  if (traceSel !== before) { openSpans = new Set(); window.scrollTo(0, 0) }
+  if (traceSel !== before) { openSpans = new Set(); flameKey = ''; window.scrollTo(0, 0) }
   if (last) render(last)
   await loadTraces()
   if (last) render(last)
