@@ -1,6 +1,6 @@
 {
   "name": "@oakgreencc/mycelium",
-  "version": "0.0.0",
+  "version": "0.0.6",
   "description": "Intake connectors: Discord posts and App Store / Google Play reviews become deduplicated q:intake intent issues on GitHub.",
   "license": "AGPL-3.0-only",
   "type": "module",
