@@ -1,13 +1,13 @@
 # mycelium
 
-Intake connectors. An external event (a Discord post, an App Store review, a Google Play review) is normalized into an **envelope**, fingerprinted, and either opens one `q:intake` intent issue or, when an open intent already has that fingerprint, becomes a comment on it.
+Intake connectors. An external event (a Discord post, an App Store review, a Google Play review, an in-app Report a Bug) is normalized into an **envelope**, fingerprinted, and either opens one `q:intake` intent issue or, when an open intent already has that fingerprint, becomes a comment on it.
 
 Node ≥ 22; the only dependencies are OpenTelemetry's (see [Tracing](#tracing)). GitHub access goes through [`graft api`](../graft), so `graft` must be on `PATH` and set up for the target repository.
 
 ## Usage
 
 ```sh
-mycelium poll <discord|asc|play> [--dry-run]   # one pass over one source
+mycelium poll <discord|asc|play|device-logs> [--dry-run]   # one pass over one source
 mycelium run [--dry-run]                       # every configured source, each on its own interval, then the notifier
 mycelium notify [--dry-run]                    # one notifier pass (see Notify)
 mycelium install [--dry-run]                   # write the launchd agent for `run`
@@ -21,17 +21,18 @@ As a service: write the settings to `~/.mycelium/env` (see [Configuration](#conf
 
 ```js
 {
-  source, externalId, receivedAt, author, title, body, url, meta
+  (source, externalId, receivedAt, author, title, body, url, meta);
 }
 ```
 
 The fingerprint is the first 24 hex chars of `sha256("<source>:<identity>")`, lowercased and trimmed. Only the identity counts; text, author and time do not.
 
-| source  | identity                                                                                     |
-| ------- | -------------------------------------------------------------------------------------------- |
-| discord | `<channelId>/<rootId>`: the forum thread, the message a reply answers, or the message itself |
-| asc     | `<appId>/<reviewId>`                                                                         |
-| play    | `<packageName>/<reviewId>`; an edited review keeps its id, so the edit lands as a comment    |
+| source      | identity                                                                                              |
+| ----------- | ----------------------------------------------------------------------------------------------------- |
+| discord     | `<channelId>/<rootId>`: the forum thread, the message a reply answers, or the message itself          |
+| asc         | `<appId>/<reviewId>`                                                                                  |
+| play        | `<packageName>/<reviewId>`; an edited review keeps its id, so the edit lands as a comment             |
+| device-logs | `<stage>/<logId>`; an opt-in crash is `<stage>/<signature>`, so repeats of one crash land as comments |
 
 ## Issues
 
@@ -62,7 +63,21 @@ Channels are opt-in per source:
 | ------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | discord | `MYCELIUM_DISCORD_NOTIFY=true` | in the forum post's thread, or as a reply to the channel message; mentions never parsed. The bot needs Send Messages (and Send Messages in Threads for forums). |
 
-asc and play have no channel: their reviews are answered (or not) in the store consoles.
+asc and play have no channel: their reviews are answered (or not) in the store consoles. device-logs has none either: the app shows no replies.
+
+## Device logs
+
+In-app reports (SeKtor You > Settings > Report a Bug) are filed by the app as Device Logs (`POST /v3/me/logs`, `X-Log-Kind: bug-report`) with the note under a `=== USER BUG REPORT ===` header and screenshots as attachments, from iOS and Android. Each pass:
+
+- signs in to the Cognito user pool with `USER_SRP_AUTH` and answers the `SOFTWARE_TOKEN_MFA` challenge with a TOTP code (node:crypto only; the id token is reused until it expires). A refused sign-in fails the pass with Cognito's reason (`device-logs: sign-in refused: NotAuthorizedException: …`), never an empty list;
+- lists `GET /v3/admin/device-logs?kind=bug-report&from=<cursor>` through every `nextCursor`, plus the unfiltered list for logs with `kind: null` (clients too old to send `X-Log-Kind`), which are kept only when the body's first line is the report header;
+- reads each new log with `GET /v3/admin/device-logs/<logId>` and its body from the presigned `downloadUrl`.
+
+The envelope's table holds `stage`, `kind`, `platform`, `deviceModel`, `appVersion`, `sessionLocalId`, `userId` (the opaque id; never an email) and the screenshot count. The body is the note, the route and trail, and the last 40 lines of the log, with emails, tokens and presigned URLs redacted. Presigned URLs expire, so none is copied: the body names the `GET /v3/admin/device-logs/<logId>` call that returns fresh ones for the log and its screenshots.
+
+With `MYCELIUM_DEVICELOG_CRASHES=true`, `kind: crash` uploads are filed too, keyed by a crash signature (origin, normalized message and top three frames; line numbers and addresses stripped), so every copy of one crash lands on one intent.
+
+Prod uses the read-only `log-reader` principal (SeKtor's `SEKTOR_LOG_READER_USER` / `_PASSWORD` / `_TOTP_SECRET`); the pool and client ids and the API base are `VITE_COGNITO_USER_POOL_ID`, `VITE_COGNITO_CLIENT_ID` and `VITE_API_BASE_URL` in SeKtor's `apps/admin/.env.prod`.
 
 ## State
 
@@ -72,22 +87,28 @@ One cursor per source in `$MYCELIUM_STATE`, else `$XDG_STATE_HOME/mycelium/state
 
 From the environment, over the settings file `$MYCELIUM_ENV` (default `~/.mycelium/env`): `KEY=value` lines with the same keys, `#` comments, values bare or quoted. A variable set in the environment wins. Keep the file `0600`. A source with missing settings is skipped by `run` and refused by `poll`.
 
-| variable                                            | meaning                                                                                        |
-| --------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `MYCELIUM_ENV`                                      | the settings file; environment only, default `~/.mycelium/env`                                 |
-| `MYCELIUM_REPO`                                     | `owner/name` that receives intents (or `--repo`)                                               |
-| `MYCELIUM_STATE`                                    | cursor file (or `--state`)                                                                     |
-| `MYCELIUM_BACKFILL_HOURS`                           | first-run window, default 24                                                                   |
-| `MYCELIUM_<SOURCE>_INTERVAL_S`                      | `run` interval; defaults discord 60, asc 900, play 1800                                        |
-| `MYCELIUM_DISCORD_TOKEN`                            | bot token (needs View Channel + Read Message History)                                          |
-| `MYCELIUM_DISCORD_CHANNELS`                         | comma list of channel ids; `forum:<id>` for a forum channel                                    |
-| `MYCELIUM_DISCORD_GUILD`                            | guild id; required for forum channels, used for message links                                  |
-| `MYCELIUM_DISCORD_NOTIFY`                           | `true` answers Discord reporters ([Notify](#notify)); the token then needs Send Messages       |
-| `MYCELIUM_NOTIFY_INTERVAL_S`                        | notifier interval in `run`, default 60                                                         |
-| `MYCELIUM_ASC_KEY_ID`, `MYCELIUM_ASC_ISSUER_ID`     | App Store Connect API key                                                                      |
-| `MYCELIUM_ASC_KEY_P8`                               | the `.p8` PEM, or its base64                                                                   |
-| `MYCELIUM_ASC_APP_ID`                               | the app's numeric App Store Connect id                                                         |
-| `MYCELIUM_PLAY_PACKAGE`                             | Android package name                                                                           |
-| `MYCELIUM_PLAY_KEY_JSON` / `MYCELIUM_PLAY_KEY_PATH` | service-account key JSON, inline or as a path (Play Console: reply to reviews / view app info) |
+| variable                                                     | meaning                                                                                                  |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `MYCELIUM_ENV`                                               | the settings file; environment only, default `~/.mycelium/env`                                           |
+| `MYCELIUM_REPO`                                              | `owner/name` that receives intents (or `--repo`)                                                         |
+| `MYCELIUM_STATE`                                             | cursor file (or `--state`)                                                                               |
+| `MYCELIUM_BACKFILL_HOURS`                                    | first-run window, default 24                                                                             |
+| `MYCELIUM_<SOURCE>_INTERVAL_S`                               | `run` interval; defaults discord 60, asc 900, play 1800, devicelog 300 (`MYCELIUM_DEVICELOG_INTERVAL_S`) |
+| `MYCELIUM_DISCORD_TOKEN`                                     | bot token (needs View Channel + Read Message History)                                                    |
+| `MYCELIUM_DISCORD_CHANNELS`                                  | comma list of channel ids; `forum:<id>` for a forum channel                                              |
+| `MYCELIUM_DISCORD_GUILD`                                     | guild id; required for forum channels, used for message links                                            |
+| `MYCELIUM_DISCORD_NOTIFY`                                    | `true` answers Discord reporters ([Notify](#notify)); the token then needs Send Messages                 |
+| `MYCELIUM_NOTIFY_INTERVAL_S`                                 | notifier interval in `run`, default 60                                                                   |
+| `MYCELIUM_ASC_KEY_ID`, `MYCELIUM_ASC_ISSUER_ID`              | App Store Connect API key                                                                                |
+| `MYCELIUM_ASC_KEY_P8`                                        | the `.p8` PEM, or its base64                                                                             |
+| `MYCELIUM_ASC_APP_ID`                                        | the app's numeric App Store Connect id                                                                   |
+| `MYCELIUM_PLAY_PACKAGE`                                      | Android package name                                                                                     |
+| `MYCELIUM_PLAY_KEY_JSON` / `MYCELIUM_PLAY_KEY_PATH`          | service-account key JSON, inline or as a path (Play Console: reply to reviews / view app info)           |
+| `MYCELIUM_DEVICELOG_API`                                     | SeKtor API base (`VITE_API_BASE_URL`); `/v3` is added unless present                                     |
+| `MYCELIUM_DEVICELOG_POOL_ID`, `MYCELIUM_DEVICELOG_CLIENT_ID` | the admin Cognito user pool and its app client                                                           |
+| `MYCELIUM_DEVICELOG_USER`, `MYCELIUM_DEVICELOG_PASSWORD`     | the log reader's sign-in                                                                                 |
+| `MYCELIUM_DEVICELOG_TOTP_SECRET`                             | the log reader's base32 TOTP secret                                                                      |
+| `MYCELIUM_DEVICELOG_STAGE`                                   | the stage in the identity, default `prod`                                                                |
+| `MYCELIUM_DEVICELOG_CRASHES`                                 | `true` also files `kind: crash` logs, grouped by signature                                               |
 
-The connectors only read: Discord, App Store Connect and Play are sent GETs (plus Google's OAuth token exchange). The only writes outside GitHub are the [notifier](#notify)'s, and only for channels turned on. Play's reviews API returns only reviews created or edited in the last week.
+The connectors only read: Discord, App Store Connect, Play and the Device Log API are sent GETs (plus Google's OAuth token exchange and the Cognito sign-in). The only writes outside GitHub are the [notifier](#notify)'s, and only for channels turned on. Play's reviews API returns only reviews created or edited in the last week.
