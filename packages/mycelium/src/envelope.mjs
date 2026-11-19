@@ -44,6 +44,8 @@ export function envelope(fields) {
  *   message a reply points at, or else the message itself.
  * - asc: `<appId>/<reviewId>`.
  * - play: `<packageName>/<reviewId>`; an edited review keeps its id.
+ * - vitals: `<packageName>/<issueId>`; Google groups crashes and ANRs into
+ *   issues, so a rise in an issue's count lands as a comment.
  * - device-logs: `<stage>/<logId>`; a crash (opt-in) is `<stage>/<signature>`,
  *   so repeats of one crash land on one intent.
  *
@@ -53,6 +55,7 @@ export const IDENTITY = {
   discord: (e) => `${e.meta.channelId}/${e.meta.rootId ?? e.externalId}`,
   asc: (e) => `${e.meta.appId}/${e.externalId}`,
   play: (e) => `${e.meta.packageName}/${e.externalId}`,
+  vitals: (e) => `${e.meta.packageName}/${e.externalId}`,
   'device-logs': (e) => `${e.meta.stage}/${e.meta.signature ?? e.externalId}`,
 }
 

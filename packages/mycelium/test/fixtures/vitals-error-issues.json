@@ -1,0 +1,47 @@
+{
+  "token": { "access_token": "ya29.synthetic-reporting-token", "expires_in": 3599, "token_type": "Bearer" },
+  "page1": {
+    "errorIssues": [
+      {
+        "name": "apps/com.example.app/errorIssues/1111aaaa",
+        "type": "CRASH",
+        "cause": "java.lang.NullPointerException",
+        "location": "com.example.app.feed.FeedAdapter.onBindViewHolder",
+        "errorReportCount": "12",
+        "distinctUsers": "9",
+        "lastErrorReportTime": "2026-11-01T18:00:00Z",
+        "issueUri": "https://play.google.com/console/developers/0/app/0/vitals/crashes/1111aaaa/details",
+        "firstOsVersion": { "apiLevel": "30" },
+        "lastOsVersion": { "apiLevel": "35" },
+        "firstAppVersion": { "versionCode": "41" },
+        "lastAppVersion": { "versionCode": "42" }
+      }
+    ],
+    "nextPageToken": "PAGE2"
+  },
+  "page2": {
+    "errorIssues": [
+      {
+        "name": "apps/com.example.app/errorIssues/2222bbbb",
+        "type": "ANR",
+        "cause": "Input dispatching timed out",
+        "location": "com.example.app.MainActivity",
+        "errorReportCount": "3",
+        "distinctUsers": "3",
+        "lastErrorReportTime": "2026-11-01T17:00:00Z",
+        "issueUri": "https://play.google.com/console/developers/0/app/0/vitals/crashes/2222bbbb/details",
+        "firstAppVersion": { "versionCode": "42" },
+        "lastAppVersion": { "versionCode": "42" }
+      }
+    ]
+  },
+  "report": {
+    "errorReports": [
+      {
+        "name": "apps/com.example.app/errorReports/r1",
+        "type": "CRASH",
+        "reportText": "java.lang.NullPointerException\n\tat com.example.app.feed.FeedAdapter.onBindViewHolder(FeedAdapter.kt:88)"
+      }
+    ]
+  }
+}

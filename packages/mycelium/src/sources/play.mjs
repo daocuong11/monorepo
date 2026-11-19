@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { envelope } from '../envelope.mjs'
 import { requestJson } from '../http.mjs'
-import { playAssertion } from '../jwt.mjs'
+import { PLAY_SCOPE, playAssertion } from '../jwt.mjs'
 import { isNew, ordered } from '../state.mjs'
 
 export const PLAY_BASE = 'https://androidpublisher.googleapis.com/androidpublisher/v3'
@@ -67,6 +67,40 @@ export function reviewEnvelope(review, packageName) {
 }
 
 /**
+ * A cached OAuth access token for a Google service account: the JWT-bearer
+ * exchange, minted again a minute before it expires.
+ *
+ * @param {{
+ *   fetch: import('../http.mjs').Fetch,
+ *   sleep?: (ms: number) => Promise<void>,
+ *   account: { client_email: string, private_key: string, token_uri: string },
+ *   scope?: string,
+ *   label: string,
+ * }} ports
+ * @returns {(now: number) => Promise<string>}
+ */
+export function googleToken({ fetch, sleep, account, scope = PLAY_SCOPE, label }) {
+  /** @type {{ token: string, expires: number } | null} */
+  let cached = null
+  return async (now) => {
+    if (cached && now < cached.expires) return cached.token
+    const body = new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: playAssertion(account, now, scope),
+    }).toString()
+    const minted = await requestJson({ fetch, sleep, label: `${label} token` }, account.token_uri, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    })
+    if (typeof minted?.access_token !== 'string') throw new Error(`${label}: no access token`)
+    const ttl = (Number(minted.expires_in) || 3600) * 1000
+    cached = { token: minted.access_token, expires: now + ttl - TOKEN_MARGIN_MS }
+    return cached.token
+  }
+}
+
+/**
  * Google Play reviews. The token exchange is a POST to Google's OAuth
  * endpoint; Play itself is only sent GETs.
  *
@@ -78,25 +112,7 @@ export function reviewEnvelope(review, packageName) {
  * }} ports
  */
 export function playSource({ fetch, config, sleep, intervalMs = PLAY_INTERVAL_MS }) {
-  /** @type {{ token: string, expires: number } | null} */
-  let cached = null
-
-  const token = async (/** @type {number} */ now) => {
-    if (cached && now < cached.expires) return cached.token
-    const body = new URLSearchParams({
-      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion: playAssertion(config.account, now),
-    }).toString()
-    const minted = await requestJson({ fetch, sleep, label: 'play token' }, config.account.token_uri, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body,
-    })
-    if (typeof minted?.access_token !== 'string') throw new Error('play: no access token')
-    const ttl = (Number(minted.expires_in) || 3600) * 1000
-    cached = { token: minted.access_token, expires: now + ttl - TOKEN_MARGIN_MS }
-    return cached.token
-  }
+  const token = googleToken({ fetch, sleep, account: config.account, label: 'play' })
 
   return {
     name: 'play',
