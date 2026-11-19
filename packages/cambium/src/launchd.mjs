@@ -1,5 +1,11 @@
 // @ts-check
-/** The launchd agent: KeepAlive restarts the daemon whenever it exits. */
+/**
+ * The launchd agent: KeepAlive restarts the daemon whenever it exits.
+ *
+ * Workers inherit the daemon's launchd context. `ProcessType` Background throttles the whole tree
+ * (builds, test runs) to background QoS, so it is Standard. launchd sets no locale, and CocoaPods
+ * fails under the ASCII-8BIT default, so LANG and LC_ALL are set here.
+ */
 import { join } from 'node:path'
 
 export const LABEL = 'com.oakgreencc.cambium'
@@ -29,7 +35,7 @@ ${args}
   <key>ThrottleInterval</key>
   <integer>30</integer>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Standard</string>
   <key>WorkingDirectory</key>
   <string>${xml(home)}</string>
   <key>EnvironmentVariables</key>
@@ -38,6 +44,10 @@ ${args}
     <string>${xml(path)}</string>
     <key>HOME</key>
     <string>${xml(home)}</string>
+    <key>LANG</key>
+    <string>en_US.UTF-8</string>
+    <key>LC_ALL</key>
+    <string>en_US.UTF-8</string>
   </dict>
   <key>StandardOutPath</key>
   <string>/dev/null</string>
