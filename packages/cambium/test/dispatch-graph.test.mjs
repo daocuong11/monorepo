@@ -393,6 +393,8 @@ test('triagePrompt: no OpenRig vocabulary; the issue, the queue and AGENTS.md', 
   assert.match(p, /--- AGENTS\.md/)
   assert.match(p, /- defer: .*default 6/)
   assert.match(p, /never the way to verify what a machine can/)
+  assert.match(p, /\/repos\/o\/r\/issues\/9\/timeline/, 'checks linked PRs before judging')
+  assert.match(p, /\/repos\/o\/r\/issues\/9\/comments/)
   assert.ok(!p.includes('When in doubt between actionable and needs-human, choose needs-human'))
   assert.ok(!p.includes('re-triage'), 'no defer note on a first triage')
 })

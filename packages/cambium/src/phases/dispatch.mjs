@@ -132,6 +132,7 @@ Verdicts:
 
 How to look:
 - Read the code here (Read, Glob, Grep) to judge what the change touches and whether it already exists.
+- First, has it already been done? Its comments (\`graft api GET /repos/${repo}/issues/${issue.number}/comments\`) and its timeline (\`graft api GET '/repos/${repo}/issues/${issue.number}/timeline?per_page=100'\`: cross-referenced PRs, and whether they merged) often say so. A merged PR whose change is on ${baseBranch}, and nothing left of the issue, is obsolete; a PR still open or in CI is defer.
 - Read an issue with \`graft issue read <n>\`; search with \`graft api GET '/search/issues?q=repo:${repo}+is:issue+<words>'\`. Never \`gh\`.
 - Be quick: a verdict, not an investigation. When in doubt whether the work is clear enough to do, choose needs-human; when in doubt whether something is true, check it, or defer until it can be checked.
 
