@@ -1,7 +1,7 @@
 // @ts-check
 import { parseArgs } from 'node:util'
 import { resolveSettings } from './config.mjs'
-import { cachedQueues, graftClient, MIN_TTL_MS } from './github.mjs'
+import { cachedIssues, cachedQueues, graftClient, MIN_TTL_MS } from './github.mjs'
 import { createApp, DEFAULT_HOST, DEFAULT_PORT } from './server.mjs'
 import { traceStore } from './traces.mjs'
 
@@ -18,7 +18,7 @@ usage: canopy [--port <n>] [--host <addr>] [--state <file>] [--traces <file>] [-
   --cache <seconds>  how long a GitHub answer is reused (default and minimum ${MIN_TTL_MS / 1000})
   --graft <cmd>      graft binary (default: graft on PATH)
 
-Reads only. Open http://<host>:<port>/ ; the page polls /api/state (and /api/traces on the Traces tab).
+Reads only. Open http://<host>:<port>/ ; the page polls /api/state (and /api/traces on the Traces tab, /api/issue/<owner>/<name>/<n> for the Inbox pane).
 `
 
 /**
@@ -84,15 +84,15 @@ export function main(
     return 2
   }
   const host = values.host ?? DEFAULT_HOST
-  const queues = cachedQueues({
-    client: client ?? graftClient({ bin: values.graft ?? 'graft' }),
-    ttlMs: cacheS * 1000,
-  })
+  const gh = client ?? graftClient({ bin: values.graft ?? 'graft' })
+  const queues = cachedQueues({ client: gh, ttlMs: cacheS * 1000 })
+  const issues = cachedIssues({ client: gh, ttlMs: cacheS * 1000 })
   const notes = settings.configError ? [settings.configError] : []
   const server = createApp({
     statePath: settings.statePath,
     repos: settings.repos,
     queues,
+    issues,
     host,
     notes,
     traces: traceStore({ path: settings.tracesPath }),
