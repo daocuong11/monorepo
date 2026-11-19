@@ -38,10 +38,12 @@ import { exec as defaultExec } from './github.mjs'
  *   reused: string | null,
  * }} Started `reused`: why the previous attempt's worktree was kept, when it was
  * @typedef {{ removed: boolean, reason: string | null }} Teardown
+ * @typedef {{ clean: boolean, reason: string | null }} Held `clean`: `graft status` says GitHub holds all of it
  * @typedef {{
  *   convention(repo: import('./config.mjs').Repo): Convention,
  *   start(spec: StartSpec): Promise<Started>,
  *   cleanup(w: { repo: import('./config.mjs').Repo, worktree: string, branch: string, readOnly?: boolean }): Promise<Teardown>,
+ *   held(w: { repo: import('./config.mjs').Repo, worktree: string, branch: string }): Promise<Held>,
  *   tail(path: string, lines?: number): string,
  *   readLog(path: string): string,
  * }} Spawner
@@ -167,10 +169,37 @@ export function processSpawner({
   }
 
   /**
-   * Remove a worktree only once `graft status` says GitHub holds everything in
-   * it; otherwise keep it and say why. Its local branch goes with it.
+   * Whether GitHub holds everything in a worktree, per `graft status`. An empty `branch` (a detached HEAD)
+   * is left out of the call.
    *
    * @param {{ repo: import('./config.mjs').Repo, worktree: string, branch: string }} w
+   * @returns {Promise<Held>}
+   */
+  async function held({ repo, worktree, branch }) {
+    let out
+    try {
+      out = await exec(
+        config.graft.command,
+        ['status', ...(branch ? [branch] : []), '-C', worktree, '--repo', repo.slug],
+        {
+          cwd: worktree,
+          env: graftEnv,
+        },
+      )
+    } catch (err) {
+      return { clean: false, reason: `graft status failed: ${/** @type {Error} */ (err)?.message ?? err}` }
+    }
+    const verdict = out.trim().split('\n').at(-1) ?? ''
+    return verdict === GRAFT_CLEAN
+      ? { clean: true, reason: null }
+      : { clean: false, reason: verdict || 'graft status printed nothing' }
+  }
+
+  /**
+   * Remove a worktree only once {@link held} says GitHub holds everything in
+   * it; otherwise keep it and say why. Its local branch goes with it.
+   *
+   * @param {{ repo: import('./config.mjs').Repo, worktree: string, branch: string, readOnly?: boolean }} w
    * @returns {Promise<Teardown>}
    */
   async function teardown({ repo, worktree, branch, readOnly = false }) {
@@ -179,17 +208,8 @@ export function processSpawner({
       await git(repo.path, ['worktree', 'prune']).catch(() => {})
       return { removed: true, reason: null }
     }
-    let out
-    try {
-      out = await exec(config.graft.command, ['status', branch, '-C', worktree, '--repo', repo.slug], {
-        cwd: worktree,
-        env: graftEnv,
-      })
-    } catch (err) {
-      return { removed: false, reason: `graft status failed: ${/** @type {Error} */ (err)?.message ?? err}` }
-    }
-    const verdict = out.trim().split('\n').at(-1) ?? ''
-    if (verdict !== GRAFT_CLEAN) return { removed: false, reason: verdict || 'graft status printed nothing' }
+    const h = await held({ repo, worktree, branch })
+    if (!h.clean) return { removed: false, reason: h.reason }
     const head = (await git(worktree, ['symbolic-ref', '--short', '-q', 'HEAD']).catch(() => '')).trim()
     await git(repo.path, ['worktree', 'remove', '--force', worktree])
     if (head === branch) await git(repo.path, ['branch', '-D', branch]).catch(() => {})
@@ -306,6 +326,7 @@ export function processSpawner({
       return { pid: child.pid, worktree, ...files, exited, reused }
     },
     cleanup: teardown,
+    held,
     tail: tailFile,
     readLog: readLogFile,
   }

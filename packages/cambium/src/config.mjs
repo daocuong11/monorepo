@@ -34,7 +34,12 @@ import { join, resolve } from 'node:path'
  *   graft: { command: string, app: string | null, botLogin: string | null },
  *   worker: { command: string, args: string[], graftApp: string | null, fetch: boolean, env: Record<string, string> },
  *   update: { auto: boolean, checkMinutes: number },
+ *   gc: GcConfig,
  * }} Config
+ * @typedef {{ everyMinutes: number, graceMinutes: number, staleDays: number }} GcConfig
+ *   Worktree garbage collection (gc.mjs): the daemon sweeps every `everyMinutes` (0: only `cambium gc`). A
+ *   worktree touched within `graceMinutes` is left alone; one idle `staleDays` with work GitHub lacks is
+ *   archived under `<home>/gc/`, then removed.
  */
 
 /** @type {readonly MergePolicy[]} */
@@ -68,6 +73,7 @@ export function defaults(home = DEFAULT_HOME) {
     graft: { command: 'graft', app: null, botLogin: null },
     worker: { command: 'claude', args: [], graftApp: null, fetch: true, env: {} },
     update: { auto: false, checkMinutes: 360 },
+    gc: { everyMinutes: 60, graceMinutes: 60, staleDays: 14 },
   }
 }
 
@@ -129,6 +135,9 @@ export function resolveConfig(raw = {}) {
     throw new Error('config: worker.env must be an object of string values')
   if (typeof config.update.auto !== 'boolean') throw new Error('config: update.auto must be true or false')
   if (!(Number(config.update.checkMinutes) >= 5)) throw new Error('config: update.checkMinutes must be at least 5')
+  for (const k of /** @type {const} */ (['everyMinutes', 'graceMinutes', 'staleDays']))
+    if (!(typeof config.gc[k] === 'number' && config.gc[k] >= 0))
+      throw new Error(`config: gc.${k} must be a number, at least 0`)
   if (config.engine !== 'legacy' && config.engine !== 'graph')
     throw new Error(`config: engine must be "legacy" or "graph", got ${JSON.stringify(config.engine)}`)
   const merging = config.repos.filter((r) => r.merge === 'green')

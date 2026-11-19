@@ -9,6 +9,7 @@ import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { configPath, loadConfig } from './config.mjs'
+import { collectGarbage, describe } from './gc.mjs'
 import { acquireLock, readHeartbeat, realDeps, runDaemon } from './daemon.mjs'
 import { plist, plistPath } from './launchd.mjs'
 import { openStore } from './store.mjs'
@@ -31,6 +32,9 @@ export const HELP = `cambium ${VERSION} — the scheduler daemon
   cambium run <graph> --issue <n> [--repo <owner/name>] [--follow]
                                         engine "graph": advance the issue in the foreground to the first wait
                                         that is not ready; --follow keeps polling until the graph ends
+  cambium gc [--dry-run] [--repo <owner/name>]
+                                        remove worktrees GitHub holds all of; archive (to ~/.cambium/gc) then
+                                        remove stale ones; skip live workers and live Claude Code sessions
   cambium install [--dry-run]           write the launchd agent (KeepAlive); --dry-run prints it
   cambium update [--check] [--version <v>]
                                         install the latest (or <v>) from npm into this global install, then
@@ -138,10 +142,32 @@ export async function main(argv, io) {
     }
     case 'run':
       return runOne(config, rest, io, depsFor)
+    case 'gc':
+      return gc(config, rest, io, depsFor)
     case 'install':
       return install(cfgPath, config, io, has(rest, '--dry-run'))
   }
   return fail(io, `unknown verb "${verb}"\n\n${HELP}`)
+}
+
+/**
+ * @param {import('./config.mjs').Config} config @param {string[]} argv @param {IO} io
+ * @param {(c: import('./config.mjs').Config) => import('./tick.mjs').Deps} depsFor
+ */
+async function gc(config, argv, io, depsFor) {
+  const repo = flag(argv, '--repo')
+  if (repo && !config.repos.some((r) => r.slug === repo)) return fail(io, `no repo ${repo} in the config`)
+  const deps = depsFor(config)
+  const dryRun = has(argv, '--dry-run')
+  try {
+    const out = await collectGarbage({ ...deps, now: deps.clock.now }, { dryRun, repo })
+    for (const o of out) io.out(describe(o))
+    if (!out.length) io.out('no worktrees')
+    else if (dryRun) io.out('(dry run: nothing changed)')
+    return 0
+  } finally {
+    deps.store.close?.()
+  }
 }
 
 /** @param {IO} io @param {string} msg */

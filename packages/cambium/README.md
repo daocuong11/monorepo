@@ -28,6 +28,7 @@ cambium status
 | `cambium resume`                                                   | Back to `running`.                                                                                                                                                                                                                                                                                                                                        |
 | `cambium run task --issue <n> [--repo <owner/name>]`               | Claim one open `q:task` issue, run its worker in the foreground, then make the same transition the daemon would.                                                                                                                                                                                                                                          |
 | `cambium run <graph> --issue <n> [--repo <owner/name>] [--follow]` | `engine: "graph"` only (`task` is the one graph today). Advance one issue through the graph runtime in the foreground: a `q:task` issue without a lease starts with a foreground worker; anything else resumes where its marker rests. Stops at the first wait that is not ready; `--follow` re-reads and polls every `tickSeconds` until the graph ends. |
+| `cambium gc [--dry-run] [--repo <owner/name>]`                     | Collect worktrees now; `--dry-run` only reports. See [Worktree GC](#worktree-gc).                                                                                                                                                                                                                                                                         |
 | `cambium install [--dry-run]`                                      | Write the launchd agent (`KeepAlive`, `RunAtLoad`) for `start --config <this config>`; `--dry-run` prints it. It does not call `launchctl`; it prints the command.                                                                                                                                                                                        |
 | `cambium update [--check] [--version <v>]`                         | Install the latest version (or `<v>`, even an older one) from npm into this global install, then SIGTERM the launchd agent so it finishes its tick and KeepAlive starts the new version. `--check` only reports. No config file needed. See [Self-update](#self-update).                                                                                  |
 
@@ -115,7 +116,8 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
   "logs": { "keepPerIssue": 20, "daemonMaxBytes": 10485760 },
   "graft": { "command": "graft", "app": null, "botLogin": null },
   "worker": { "command": "claude", "args": [], "graftApp": null, "fetch": true, "env": {} },
-  "update": { "auto": false, "checkMinutes": 360 }
+  "update": { "auto": false, "checkMinutes": 360 },
+  "gc": { "everyMinutes": 60, "graceMinutes": 60, "staleDays": 14 }
 }
 ```
 
@@ -156,6 +158,16 @@ How a repo's worktrees are made is the repo's call: a `"cambium"` key in its roo
 - Unknown keys, wrong types, paths outside the repo and an unparseable `package.json` fail the start (requeued as `spawn-failed`) with the error.
 
 The key decides which commands run on this host, so list `package.json` as protected (CODEOWNERS) in the target repo, next to its `"graft"` policy.
+
+## Worktree GC
+
+Every `gc.everyMinutes` (0: off; `cambium gc` still works) the daemon looks at each worktree under a repo's convention root, the checkout itself never. Skipped: a cambium worker's, a locked one (a Claude Code session lock counts only while its pid is alive with the start it names), and one touched within `gc.graceMinutes` (its directory, HEAD, reflog or a dirty path). The rest:
+
+- **complete**: `graft status` says GitHub holds all of it. Removed, with its local branch.
+- **stale**: idle `gc.staleDays` with work GitHub lacks. Archived to `<home>/gc/<owner>__<name>/<dir>-<stamp>/` (`commits.bundle` of HEAD less `origin/<base>`, `changes.patch`, `untracked/`, `worktree.json`), then removed. Restore commits with `git fetch <bundle> HEAD:<branch>`.
+- **kept**: anything else; `cambium gc --dry-run` says why.
+
+A worktree whose directory is gone is pruned. The sweep is not awaited by the tick; removals and archives are logged.
 
 ## Self-update
 
