@@ -1,4 +1,6 @@
 // @ts-check
+import { facetsOf, inboxItems, priorityRank, viewOf } from './inbox.mjs'
+import { markdown } from './markdown.mjs'
 
 const CSS = `
 :root{color-scheme:light dark;--bg:#f7f7f5;--panel:#fff;--line:#e4e4e0;--text:#1d1d1b;--muted:#5f5f5a;--faint:#72726c;
@@ -23,11 +25,66 @@ header h1{font-size:14px;margin:0;font-weight:600}
 .tab .count.attn{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn);font-weight:600}
 .tab .dot{margin:0}
 main{padding:var(--s4) var(--s4) var(--s5);display:grid;gap:var(--s4);max-width:1600px}
-.inbox{list-style:none;margin:0;padding:0}
-.inbox li{padding:var(--s3) 0;border-top:1px solid var(--line)}.inbox li:first-child{border-top:0;padding-top:var(--s1)}
-.inbox .title{font-size:14px;font-weight:500;overflow-wrap:anywhere}.inbox .title .faint{font-weight:400}
-.inbox .why{display:inline-block;padding:0 7px;border-radius:9px;font-size:12px;font-weight:600;color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
-.inbox .meta{margin-top:var(--s1);align-items:center}
+.ib{display:grid;grid-template-columns:minmax(300px,420px) minmax(0,1fr);gap:var(--s3) var(--s4);align-items:start}
+.ib-tools{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s4)}
+.seg{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:6px;background:var(--panel);padding:2px}
+.seg button,.chip{appearance:none;font:inherit;font-size:12px;color:var(--muted);cursor:pointer;white-space:nowrap}
+.seg button{background:none;border:0;border-radius:4px;padding:2px 10px}
+.seg button:hover,.chip:hover{color:var(--text)}
+.seg button[aria-pressed=true]{background:var(--chip);color:var(--text);font-weight:600}
+.facets{flex-basis:100%;order:3;display:flex;flex-wrap:wrap;align-items:center;gap:6px}.facet{display:contents}
+.facet+.facet>.chip:first-child{margin-left:var(--s2)}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:1px 9px;border:1px solid var(--line);border-radius:999px;background:var(--panel)}
+.chip .n{color:var(--faint)}
+.chip[aria-pressed=true]{color:var(--text);font-weight:600;border-color:color-mix(in srgb,var(--accent) 55%,var(--line));background:color-mix(in srgb,var(--accent) 12%,var(--panel))}
+.chip[aria-pressed=true] .n{color:var(--muted)}
+.seg button:focus-visible,.chip:focus-visible,.btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.ib-count{margin-left:auto;font-size:12px}
+.ib-side{min-width:0}
+.ib-list{padding:0;overflow:hidden}
+.ib-list ul{list-style:none;margin:0;padding:0}
+.row{display:grid;gap:3px;padding:10px var(--s3);border-top:1px solid var(--line);cursor:pointer;outline:none}
+.row:first-child{border-top:0}
+.row:hover{background:color-mix(in srgb,var(--chip) 70%,transparent)}
+.row[aria-selected=true]{background:color-mix(in srgb,var(--accent) 11%,var(--panel))}
+.row:focus-visible{box-shadow:inset 0 0 0 2px var(--accent)}
+.row-t{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;font-weight:500}
+.row[aria-selected=true] .row-t{font-weight:600}
+.row .meta{align-items:center}.row .age{margin-left:auto}
+.why{display:inline-block;padding:0 7px;border-radius:9px;font-size:12px;font-weight:600;color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+.prio-critical{color:var(--err);font-weight:600}.prio-high{color:var(--warn);font-weight:600}
+.keys{margin-top:var(--s2);font-size:12px;color:var(--faint)}
+kbd{font:11px ui-monospace,SFMono-Regular,Menlo,monospace;padding:0 4px;border:1px solid var(--line);border-bottom-width:2px;border-radius:3px;color:var(--muted);background:var(--panel)}
+.ib-pane{position:sticky;top:calc(var(--top-h,90px) + var(--s4));max-height:calc(100vh - var(--top-h,90px) - var(--s4) * 2);overflow:auto;padding:var(--s4) var(--s5) var(--s5);scrollbar-width:thin;scrollbar-color:var(--bar) transparent;outline:none}
+.ib-pane:focus-visible{box-shadow:0 0 0 2px var(--accent)}
+.pane-head{display:grid;gap:var(--s2);padding-bottom:var(--s3);border-bottom:1px solid var(--line)}
+h2.pane-title{font-size:17px;line-height:1.3;text-transform:none;letter-spacing:0;color:var(--text);margin:0;overflow-wrap:anywhere;text-wrap:balance}
+.pane-title .faint{font-weight:400}
+.actions{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1) var(--s3)}
+.btn{display:inline-block;padding:3px 10px;border-radius:5px;border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line));background:color-mix(in srgb,var(--accent) 8%,var(--panel));font-weight:500}
+.btn:hover{text-decoration:none;background:color-mix(in srgb,var(--accent) 15%,var(--panel))}
+.back{display:none;justify-self:start}
+.part{margin-top:var(--s4)}.part>h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 var(--s2);font-weight:600;display:flex;gap:var(--s2);align-items:baseline}
+.part>h3 span{text-transform:none;letter-spacing:0;font-weight:400;color:var(--faint)}
+.part .banner{margin-bottom:var(--s2)}
+.cmt{padding:var(--s3) 0;border-top:1px solid var(--line)}.cmt:first-of-type{border-top:0;padding-top:0}
+.cmt-head{display:flex;flex-wrap:wrap;gap:2px 8px;align-items:baseline;font-size:12px;margin-bottom:var(--s1)}.cmt-head b{font-size:13px}
+.status{padding:var(--s3);border-radius:6px;background:color-mix(in srgb,var(--chip) 60%,transparent)}
+.md{font-size:13.5px;line-height:1.55;overflow-wrap:anywhere;max-width:78ch}
+.md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}
+.md p,.md ul,.md ol,.md pre,.md blockquote,.md .md-table,.md details{margin:0 0 var(--s2)}
+.md h3,.md h4,.md h5,.md h6{margin:var(--s4) 0 var(--s1);font-weight:600;line-height:1.3}.md h3{font-size:15px}.md h4{font-size:14px}.md h5,.md h6{font-size:13px}
+.md ul,.md ol{padding-left:22px}.md li>p{margin:0}.md li+li{margin-top:2px}.md li>ul,.md li>ol{margin:2px 0 0}
+.md li.task{list-style:none}.md li.task>input{margin:0 6px 0 -20px;vertical-align:-1px;accent-color:var(--ok)}.md li.task>p:first-of-type{display:inline}
+.md code{font-size:12px;background:var(--chip);padding:1px 4px;border-radius:3px}
+.md pre{background:var(--chip);padding:var(--s2) var(--s3);border-radius:4px;overflow:auto;scrollbar-width:thin}
+.md pre code{background:none;padding:0;white-space:pre;overflow-wrap:normal}
+.md blockquote{margin-left:0;padding-left:var(--s3);border-left:2px solid var(--bar);color:var(--muted)}
+.md hr{border:0;border-top:1px solid var(--line);margin:var(--s3) 0}
+.md .md-table{overflow-x:auto;scrollbar-width:thin}.md table{width:auto;overflow-wrap:normal}.md th,.md td{font-size:12px;padding:3px 12px 3px 0}
+.md td:last-child{white-space:normal;min-width:18ch}
+.md summary{cursor:pointer;color:var(--muted)}.md summary:hover{color:var(--text)}.md details[open]>summary{margin-bottom:var(--s1)}
+.md summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
 .calm{padding:var(--s5) 0;text-align:center}.calm p{margin:0}.calm p+p{margin-top:var(--s1)}.calm b{font-size:14px;font-weight:600}
 .lane-label{font-weight:400;text-transform:none;letter-spacing:0;color:var(--faint);margin-left:6px}
 .linkish{appearance:none;background:none;border:0;padding:0;font:inherit;color:var(--accent);cursor:pointer}.linkish:hover{text-decoration:underline}
@@ -77,6 +134,9 @@ a.row-link{color:inherit}a.row-link:hover{text-decoration:none}tr.run:hover td{b
 .sp .d{text-align:right;color:var(--muted)}
 .attrs{margin:0;padding:var(--s2) 0 var(--s3) var(--s4);display:grid;grid-template-columns:max-content minmax(0,1fr);gap:2px var(--s3);font-size:12px}
 .attrs dt{color:var(--muted)}.attrs dd{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
+@media (max-width:900px){.ib{grid-template-columns:minmax(0,1fr)}.ib.open>.ib-tools,.ib.open>.ib-side,.ib:not(.open)>.ib-pane{display:none}
+.ib-pane{position:static;max-height:none;padding:var(--s3) var(--s4) var(--s4)}.back{display:inline-block}
+.facets{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding:2px 0}.chip{flex:none}}
 @media (max-width:1100px){.cols{grid-template-columns:repeat(4,minmax(0,1fr))}.detail{grid-template-columns:1fr}
 .col.prs{grid-column:1/-1;border-left:0;padding-left:0;border-top:1px solid var(--line);padding-top:var(--s3)}}
 @media (max-width:760px){.cols{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -86,6 +146,7 @@ a.row-link{color:inherit}a.row-link:hover{text-decoration:none}tr.run:hover td{b
 `
 
 const JS = `
+${[inboxItems, priorityRank, facetsOf, viewOf, markdown].map(String).join('\n')}
 const $ = (id) => document.getElementById(id)
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag)
@@ -202,27 +263,180 @@ function inbox(s, now) {
   if (!xs.length && !st.length) return [calm('Nothing needs you.',
     plural(inFlight(gh), 'issue', 'issues') + ' queued · ' + plural(gh.prs.length, 'agent PR', 'agent PRs') + ' open · ',
     h('button', { class: 'linkish', type: 'button', 'data-go': 'queue' }, 'see the queue'))]
-  const title = (i) => link(i.url, h('span', { class: 'title', title: i.title }, h('span', { class: 'faint' }, '#' + i.number + ' '), i.title))
-  const human = xs.length ? h('section', { class: 'attn' }, h('h2', {}, 'Needs you', h('span', { class: 'n' }, xs.length), h('span', { class: 'lane-label mono' }, 'q:human')),
-    h('ul', { class: 'inbox' }, xs.map((i) => h('li', {}, title(i),
-      h('div', { class: 'meta' },
-        i.why ? h('span', { class: 'why' }, 'why:' + i.why) : h('span', { class: 'faint' }, 'no why: label'),
-        i.priority ? h('span', {}, 'priority:' + i.priority) : null,
-        multi ? h('span', {}, i.repo) : null,
-        h('span', { class: 'faint', title: i.updatedAt || i.createdAt || '' }, ago(i.updatedAt || i.createdAt, now)),
-        traceLink(i.repo, i.number)))))) : null
-  const stranded = st.length ? h('section', { class: 'attn' },
-    h('h2', {}, 'PR closed, issue stranded', h('span', { class: 'n' }, st.length), h('span', { class: 'lane-label' }, "left the release queue unmerged; no queue label, so cambium won't pick it up")),
-    h('ul', { class: 'inbox' }, st.map((i) => h('li', {}, title(i),
-      h('div', { class: 'meta' },
-        h('span', { class: 'why' }, 'PR closed'),
-        link(i.pr.url, '#' + i.pr.number),
-        h('span', { class: 'faint mono' }, i.pr.branch),
-        i.priority ? h('span', {}, 'priority:' + i.priority) : null,
-        multi ? h('span', {}, i.repo) : null,
-        h('span', { class: 'faint', title: i.pr.closedAt || '' }, 'closed ' + ago(i.pr.closedAt, now)),
-        traceLink(i.repo, i.number)))))) : null
-  return [human, stranded].filter(Boolean)
+  return [inboxSplit(gh, multi, now)]
+}
+
+// Inbox reading pane. The list is the inbox model (inbox.mjs); the pane reads one issue through /api/issue,
+// prefetching the rest of the list one at a time so moving through it rarely waits.
+const store = {
+  get(k, dflt) { try { const v = localStorage.getItem('canopy.' + k); return v == null ? dflt : JSON.parse(v) } catch { return dflt } },
+  set(k, v) { try { localStorage.setItem('canopy.' + k, JSON.stringify(v)) } catch {} },
+}
+const SORTS = [['newest', 'Newest'], ['oldest', 'Oldest'], ['priority', 'Priority']]
+let ibSort = SORTS.some(([k]) => k === store.get('inbox.sort')) ? store.get('inbox.sort') : 'newest'
+let ibTags = new Set([].concat(store.get('inbox.tags', [])).filter((t) => typeof t === 'string'))
+let ibSel = null, ibOpen = false, ibShown = []
+const details = new Map()
+const ibHash = (key) => '#inbox/' + key.replace('#', '/')
+const DETAIL_FRESH_MS = 60000, DETAIL_RETRY_MS = 30000
+const versionOf = (it) => it.updatedAt || it.at
+
+function wantDetail(it) {
+  const d = details.get(it.key)
+  if (!d) return true
+  if (d.loading) return false
+  if (d.error && !d.data) return Date.now() - d.at > DETAIL_RETRY_MS
+  return d.forV !== versionOf(it) || Date.now() - d.at > DETAIL_FRESH_MS
+}
+
+async function loadDetail(it, force) {
+  if (!force && !wantDetail(it)) return
+  const prev = details.get(it.key) || {}
+  details.set(it.key, { ...prev, loading: true })
+  if (force && last) render(last)
+  const [repo, n] = it.key.split('#')
+  let next
+  try {
+    const r = await fetch('/api/issue/' + repo + '/' + n, { cache: 'no-store' })
+    const j = await r.json()
+    if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status)
+    next = { data: j.issue, fetchedAt: j.fetchedAt, stale: j.error, error: null }
+  } catch (err) {
+    next = { data: prev.data || null, fetchedAt: prev.fetchedAt, stale: null, error: (err && err.message) || 'no answer' }
+  }
+  details.set(it.key, { ...next, loading: false, at: Date.now(), forV: versionOf(it) })
+  if (last && tab === 'inbox') render(last)
+}
+
+let pumping = false
+async function pump() {
+  if (pumping) return
+  pumping = true
+  try {
+    for (;;) {
+      const sel = ibShown.find((x) => x.key === ibSel)
+      const next = tab === 'inbox' ? [sel, ...ibShown].find((it) => it && wantDetail(it)) : null
+      if (!next) break
+      await loadDetail(next)
+    }
+  } finally { pumping = false }
+}
+
+function select(key, how) {
+  ibSel = key
+  if (how && how.open) ibOpen = true
+  history.replaceState(null, '', ibHash(key))
+  if (last) render(last)
+  if (how && how.focus) focusRow(key)
+  if (how && how.open && how.focusPane) $('ib-pane')?.focus({ preventScroll: true })
+  const it = ibShown.find((x) => x.key === key)
+  if (it) loadDetail(it)
+}
+const focusRow = (key) => document.querySelector('[data-key="' + CSS.escape(key) + '"]')?.focus({ preventScroll: false })
+function move(step, focus) {
+  if (!ibShown.length) return
+  const at = ibShown.findIndex((x) => x.key === ibSel)
+  const i = at < 0 ? 0 : Math.max(0, Math.min(ibShown.length - 1, at + step))
+  if (ibShown[i].key !== ibSel || focus) select(ibShown[i].key, { focus })
+}
+const selectedUrl = () => {
+  const it = ibShown.find((x) => x.key === ibSel)
+  return (it && it.url) || (details.get(ibSel) && details.get(ibSel).data && details.get(ibSel).data.url) || null
+}
+
+const PRIO = { critical: 'prio-critical', high: 'prio-high' }
+const prio = (p) => (p ? h('span', { class: PRIO[p] || null }, 'priority:' + p) : null)
+const whyOf = (it) => (it.kind === 'stranded' ? h('span', { class: 'why' }, 'PR closed') : it.why ? h('span', { class: 'why' }, 'why:' + it.why) : h('span', { class: 'faint' }, 'no why: label'))
+const tagText = (t) => (t.id === 'kind:human' ? 'q:human' : t.id === 'kind:stranded' ? 'stranded' : t.id.startsWith('label:') || t.id.startsWith('repo:') ? t.value : t.id)
+const TAG_TITLE = { 'kind:human': 'In the Human Queue (q:human)', 'kind:stranded': 'Agent PR closed unmerged; no queue label' }
+
+function inboxSplit(gh, multi, now) {
+  const all = inboxItems(gh)
+  const shown = viewOf(all, { sort: ibSort, tags: ibTags })
+  ibShown = shown
+  // Keep the selection while it is in the list; an issue that has left the inbox stays open (marked as gone)
+  // if it was already read, rather than jumping away while someone is reading it.
+  let sel = shown.find((x) => x.key === ibSel) || null, gone = null
+  if (!sel && ibSel && !all.some((x) => x.key === ibSel) && details.get(ibSel) && details.get(ibSel).data) gone = details.get(ibSel).data
+  if (!sel && !gone) {
+    sel = shown[0] || null
+    ibSel = sel ? sel.key : null
+    if (tab === 'inbox') history.replaceState(null, '', ibSel ? ibHash(ibSel) : '#inbox')
+  }
+
+  const tools = h('div', { class: 'ib-tools' },
+    h('div', { class: 'seg', role: 'group', 'aria-label': 'Sort the inbox' },
+      SORTS.map(([k, label]) => h('button', { type: 'button', 'data-sort': k, 'data-fk': 'sort:' + k, 'aria-pressed': String(ibSort === k) }, label))),
+    h('div', { class: 'facets', role: 'group', 'aria-label': 'Filter by tag' },
+      facetsOf(all, ibTags).map((f) => h('span', { class: 'facet' }, f.tags.map((t) =>
+        h('button', { type: 'button', class: 'chip', 'data-tag': t.id, 'data-fk': 'tag:' + t.id, 'aria-pressed': String(t.on), title: TAG_TITLE[t.id] || null },
+          tagText(t), h('span', { class: 'n' }, t.n)))))),
+    h('span', { class: 'ib-count faint', 'aria-live': 'polite' }, ibTags.size
+      ? [shown.length + ' of ' + all.length + ' shown · ', h('button', { class: 'linkish', type: 'button', 'data-clear': '', 'data-fk': 'clear' }, 'Clear filters')]
+      : plural(all.length, 'item', 'items')))
+
+  const focusable = sel ? sel.key : shown[0] && shown[0].key
+  const rows = shown.map((it) => h('li', { class: 'row', role: 'option', 'data-key': it.key, 'data-fk': 'row:' + it.key,
+      'aria-selected': String(it.key === ibSel), tabindex: it.key === focusable ? 0 : -1 },
+    h('span', { class: 'row-t', title: it.title }, h('span', { class: 'faint' }, '#' + it.number + ' '), it.title),
+    h('span', { class: 'meta' }, whyOf(it), prio(it.priority), multi ? h('span', {}, it.repo.split('/')[1]) : null,
+      h('span', { class: 'faint age', title: it.at || '' }, ago(it.at, now)))))
+  const side = h('div', { class: 'ib-side' },
+    h('section', { class: 'ib-list attn' }, rows.length
+      ? h('ul', { role: 'listbox', 'aria-label': 'Inbox' }, rows)
+      : h('div', { class: 'calm' }, h('p', {}, h('b', {}, 'Nothing matches these tags.')),
+          h('p', {}, h('button', { class: 'linkish', type: 'button', 'data-clear': '', 'data-fk': 'clear-empty' }, 'Clear filters')))),
+    rows.length ? h('div', { class: 'keys' }, h('kbd', {}, 'j'), ' ', h('kbd', {}, 'k'), ' move · ', h('kbd', {}, 'o'), ' open on GitHub') : null)
+
+  const d = sel || gone ? details.get(sel ? sel.key : ibSel) : null
+  const sig = JSON.stringify([ibSel, sel, gone && gone.updatedAt, traceIdx[ibSel], ago(sel && sel.at, now),
+    d && [d.loading && !d.data, d.error, d.stale, d.data,
+      d.data && [ago(d.data.createdAt, now), d.data.status && ago(d.data.status.updatedAt, now), d.data.comments.map((c) => ago(c.createdAt, now))]]])
+  const old = $('ib-pane')
+  const pane = sel || gone ? (old && old.dataset.sig === sig ? null : issuePane(sel, gone, d, multi, now, sig)) : h('section', { class: 'ib-pane calm', id: 'ib-pane' }, h('p', { class: 'muted' }, 'Pick an item to read it here.'))
+  return { ib: h('div', { class: 'ib' + (ibOpen ? ' open' : ''), id: 'ib' }, tools, side, pane), tools, side, pane }
+}
+
+function issuePane(sel, gone, d, multi, now, sig) {
+  const base = sel || gone, repo = base.repo, data = d && d.data
+  const url = (sel && sel.url) || gone.url
+  const md = (src) => h('div', { class: 'md' }, markdown(src, h, { repo }))
+  const comment = (c, extra) => h('article', { class: 'cmt' },
+    h('div', { class: 'cmt-head' }, h('b', {}, c.author || 'ghost'), link(c.url, h('span', { title: c.createdAt || '' }, ago(c.createdAt, now))), extra), md(c.body))
+  const edited = (c) => (c.updatedAt && c.updatedAt !== c.createdAt ? h('span', { class: 'faint', title: c.updatedAt }, 'edited ' + ago(c.updatedAt, now)) : null)
+
+  const head = h('div', { class: 'pane-head' },
+    h('button', { class: 'linkish back', type: 'button', 'data-back': '', 'data-fk': 'back' }, 'Back to the inbox'),
+    h('h2', { class: 'pane-title', id: 'pane-title' }, h('span', { class: 'faint' }, '#' + base.number + ' '), base.title),
+    h('div', { class: 'meta' },
+      sel ? whyOf(sel) : h('span', { class: 'why' }, 'left the inbox'), prio(sel ? sel.priority : null),
+      multi ? h('span', {}, repo) : null,
+      data && data.author ? h('span', {}, 'opened by ', h('b', {}, data.author), ' ', h('span', { class: 'faint', title: data.createdAt || '' }, ago(data.createdAt, now))) : null,
+      sel ? h('span', { class: 'faint', title: sel.at || '' }, (sel.kind === 'stranded' ? 'PR closed ' : 'updated ') + ago(sel.at, now)) : null),
+    h('div', { class: 'actions' },
+      /^https:\\/\\//.test(url || '') ? h('a', { class: 'btn', href: url, target: '_blank', rel: 'noopener' }, 'Open on GitHub') : null,
+      sel && sel.pr ? h('span', { class: 'muted' }, 'closed PR ', link(sel.pr.url, '#' + sel.pr.number), ' ', h('span', { class: 'faint mono' }, sel.pr.branch)) : null,
+      traceLink(repo, base.number)))
+
+  const parts = []
+  if (gone) parts.push(h('div', { class: 'banner warn part' }, h('b', {}, 'No longer in the inbox. '), "It has left q:human (or is no longer stranded). Showing it as last read; it won't refresh here."))
+  if (sel && sel.kind === 'stranded') parts.push(h('div', { class: 'banner warn part' }, h('b', {}, 'Stranded: '),
+    'agent PR #' + sel.pr.number + ' closed unmerged ' + ago(sel.pr.closedAt, now) + ' and no open agent PR replaces it. With no queue label, cambium will not pick this issue up again. Add a queue label to send it back, or close it.'))
+  if (d && d.error) parts.push(h('div', { class: 'banner err part' }, h('b', {}, data ? "Couldn't refresh this issue: " : "Couldn't read this issue from GitHub: "), d.error,
+    data ? '. Showing what canopy read ' + ago(d.fetchedAt, now) + '. ' : '. ', h('button', { class: 'linkish', type: 'button', 'data-retry': '', 'data-fk': 'retry' }, 'Try again')))
+  else if (d && d.stale) parts.push(h('div', { class: 'banner warn part' }, h('b', {}, 'GitHub refresh failed: '), d.stale, '. Showing what it returned ' + ago(d.fetchedAt, now) + '.'))
+  if (!data) {
+    if (!d || d.loading || !d.error) parts.push(h('p', { class: 'faint part' }, 'Reading #' + base.number + ' from GitHub…'))
+  } else {
+    if (data.status) parts.push(h('div', { class: 'part' }, h('h3', {}, 'cambium status', edited(data.status) || h('span', { title: data.status.createdAt || '' }, ago(data.status.createdAt, now))),
+      h('div', { class: 'status' }, md(data.status.body))))
+    parts.push(h('div', { class: 'part' }, h('h3', {}, 'Description'), data.body.trim() ? md(data.body) : h('p', { class: 'faint' }, 'No description.')))
+    const n = data.comments.length
+    parts.push(h('div', { class: 'part' }, h('h3', {}, 'Comments', h('span', {}, n ? (data.earlier ? 'latest ' + n + ' of ' + (n + data.earlier) : String(n)) : 'none')),
+      data.earlier ? h('p', { class: 'faint' }, link(url, plural(data.earlier, 'earlier comment', 'earlier comments') + ' on GitHub')) : null,
+      data.comments.map((c) => comment(c, edited(c)))))
+  }
+  return h('section', { class: 'ib-pane', id: 'ib-pane', tabindex: -1, 'aria-labelledby': 'pane-title', 'data-sig': sig, 'data-key': base.repo + '#' + base.number }, head, parts)
 }
 
 function queues(s, now) {
@@ -321,7 +535,7 @@ function spanDetail(sp) {
   if (a['cambium.graph']) return [a['cambium.graph']]
   return []
 }
-const preview = (v) => { const t = String(v).replace(/\s+/g, ' ').trim(); return t.length > 120 ? t.slice(0, 119) + '…' : t }
+const preview = (v) => { const t = String(v).replace(/s+/g, ' ').trim(); return t.length > 120 ? t.slice(0, 119) + '…' : t }
 const showValue = (v) => (typeof v === 'string' ? v : JSON.stringify(v))
 let openSpans = new Set()
 
@@ -366,11 +580,14 @@ function tracesTab(now) {
 }
 
 const TABS = ['inbox', 'queue', 'traces', 'health']
+// #inbox/<owner>/<name>/<n> selects an inbox item; #traces/<id> opens a trace.
 const parseHash = () => {
-  const [t, id] = location.hash.slice(1).split('/')
-  return TABS.includes(t) ? [t, t === 'traces' && /^[0-9a-f]{32}$/.test(id || '') ? id : null] : ['inbox', null]
+  const [t, id, name, n] = location.hash.slice(1).split('/')
+  if (!TABS.includes(t)) return ['inbox', null, null]
+  return [t, t === 'traces' && /^[0-9a-f]{32}$/.test(id || '') ? id : null, t === 'inbox' && name && /^[1-9][0-9]*$/.test(n || '') ? id + '/' + name + '#' + n : null]
 }
-let [tab, traceSel] = parseHash(), last = null, traceState = null
+let [tab, traceSel, hashSel] = parseHash(), last = null, traceState = null
+if (hashSel) { ibSel = hashSel; ibOpen = true }
 const traceKey = () => (traceSel ? '/api/traces/' + traceSel : '/api/traces')
 async function loadTraces() {
   if (tab !== 'traces') return
@@ -412,7 +629,7 @@ async function go(t, focus) {
   if (!TABS.includes(t)) return
   tab = t
   traceSel = null
-  history.replaceState(null, '', '#' + t)
+  history.replaceState(null, '', t === 'inbox' && ibSel ? ibHash(ibSel) : '#' + t)
   window.scrollTo(0, 0)
   if (last) render(last)
   if (focus) $('tab-' + t).focus()
@@ -433,6 +650,21 @@ $('tabs').addEventListener('keydown', (e) => {
 $('main').addEventListener('click', (e) => {
   const b = e.target.closest('[data-go]')
   if (b) return go(b.dataset.go, true)
+  const ctl = e.target.closest('[data-sort],[data-tag],[data-clear],[data-key],[data-back],[data-retry]')
+  if (ctl) {
+    const ds = ctl.dataset
+    if (ds.key) return select(ds.key, { open: true, focus: true })
+    if (ds.back != null) { ibOpen = false; if (last) render(last); return ibSel && focusRow(ibSel) }
+    if (ds.retry != null) { const it = ibShown.find((x) => x.key === ibSel); return it && loadDetail(it, true) }
+    if (ds.sort) ibSort = ds.sort
+    else if (ds.tag) ibTags.has(ds.tag) ? ibTags.delete(ds.tag) : ibTags.add(ds.tag)
+    else ibTags.clear()
+    store.set('inbox.sort', ibSort)
+    store.set('inbox.tags', [...ibTags])
+    if (last) render(last)
+    if (ds.clear != null) document.querySelector('.seg [aria-pressed=true]')?.focus()
+    return pump()
+  }
   const sp = e.target.closest('[data-span]')
   if (!sp) return
   const id = sp.dataset.span
@@ -441,9 +673,28 @@ $('main').addEventListener('click', (e) => {
   if (last) render(last)
   document.querySelector('[data-span="' + id + '"]')?.focus({ preventScroll: true })
 })
+// Inbox keys: j/k (and arrows in the list) move, Enter reads, o opens on GitHub, Escape goes back on narrow screens.
+document.addEventListener('keydown', (e) => {
+  if (tab !== 'inbox' || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return
+  const t = e.target
+  if (t.closest && t.closest('input,textarea,select,[contenteditable],#tabs')) return
+  const inList = !!(t.closest && t.closest('[role=listbox]'))
+  const step = { j: 1, k: -1 }[e.key] || (inList ? { ArrowDown: 1, ArrowUp: -1 }[e.key] : 0)
+  if (step) { e.preventDefault(); return move(step, inList) }
+  if (inList && (e.key === 'Home' || e.key === 'End')) {
+    e.preventDefault()
+    const it = e.key === 'Home' ? ibShown[0] : ibShown[ibShown.length - 1]
+    return it && select(it.key, { focus: true })
+  }
+  if (inList && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); return ibSel && select(ibSel, { open: true, focusPane: true }) }
+  if (e.key === 'o' && !t.closest('a,button')) { const u = selectedUrl(); if (/^https:/.test(u || '')) { e.preventDefault(); window.open(u, '_blank', 'noopener') } return }
+  if (e.key === 'Escape' && ibOpen && matchMedia('(max-width:900px)').matches) { ibOpen = false; if (last) render(last); if (ibSel) focusRow(ibSel) }
+})
 addEventListener('hashchange', async () => {
   const before = traceSel
-  ;[tab, traceSel] = parseHash()
+  let sel
+  ;[tab, traceSel, sel] = parseHash()
+  if (sel) { ibSel = sel; ibOpen = true }
   if (traceSel !== before) { openSpans = new Set(); window.scrollTo(0, 0) }
   if (last) render(last)
   await loadTraces()
@@ -456,7 +707,8 @@ function render(s) {
   const now = Date.parse(s.now) || Date.now()
   const d = s.heartbeat.data
   const body = [...banners(s, now)]
-  if (tab === 'inbox') body.push(...inbox(s, now))
+  let split = null
+  if (tab === 'inbox') for (const x of inbox(s, now)) if (x instanceof Node) body.push(x); else body.push((split = x).ib)
   if (tab === 'queue') body.push(queues(s, now))
   if (tab === 'traces') body.push(tracesTab(now))
   if (tab === 'health') {
@@ -465,16 +717,36 @@ function render(s) {
   }
   tabs(s)
   const focused = document.activeElement, href = focused && focused.getAttribute && focused.getAttribute('href')
+  const fk = focused && focused.dataset && focused.dataset.fk
   const scrolled = [...document.querySelectorAll('.events,.scroll')].map((el) => [el.className, el.scrollTop, el.scrollLeft])
   $('head').replaceChildren(header(s, now))
-  $('main').replaceChildren(...body)
+  const ib = $('ib'), oldPane = $('ib-pane')
+  const paneWas = oldPane && { key: oldPane.dataset.key, top: oldPane.scrollTop, open: [...oldPane.querySelectorAll('details')].map((x) => x.open) }
+  if (split && !split.pane && ib && $('ib-pane')) {
+    // The pane hasn't changed: patch around it so a selection, scroll position or open <details> in it survive the poll.
+    ib.className = split.ib.className
+    ib.querySelector(':scope > .ib-tools').replaceWith(split.tools)
+    ib.querySelector(':scope > .ib-side').replaceWith(split.side)
+    for (const c of [...$('main').children]) if (c !== ib) c.remove()
+    ib.before(...body.filter((x) => x !== split.ib))
+  } else {
+    $('main').replaceChildren(...body)
+    const p = $('ib-pane')
+    if (p && paneWas && p.dataset.key === paneWas.key) {
+      p.querySelectorAll('details').forEach((x, i) => { if (paneWas.open[i]) x.open = true })
+      p.scrollTop = paneWas.top
+    }
+  }
+  document.documentElement.style.setProperty('--top-h', $('top').offsetHeight + 'px')
   document.body.classList.remove('down')
   for (const [cls, top, left] of scrolled) {
     const el = document.getElementsByClassName(cls)[0]
     if (el) Object.assign(el, { scrollTop: top, scrollLeft: left })
   }
-  if (href) [...document.querySelectorAll('a')].find((a) => a.getAttribute('href') === href)?.focus({ preventScroll: true })
+  if (fk) document.querySelector('[data-fk="' + CSS.escape(fk) + '"]')?.focus({ preventScroll: true })
+  else if (href) [...document.querySelectorAll('a')].find((a) => a.getAttribute('href') === href)?.focus({ preventScroll: true })
   else if (focused && focused.classList && (focused.classList.contains('events') || focused.classList.contains('scroll'))) document.getElementsByClassName(focused.className)[0]?.focus({ preventScroll: true })
+  if (tab === 'inbox') pump()
   const human = needsYou(s.github)
   document.title = (human ? '(' + human + ') ' : '') + 'canopy' + (d ? ' · ' + d.mode : '') + (s.heartbeat.stale ? ' · stale' : '')
 }

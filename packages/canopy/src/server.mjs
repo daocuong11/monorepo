@@ -20,6 +20,7 @@ export const POLL_MS = 5000
  *   host?: string,
  *   notes?: string[],
  *   traces?: import('./traces.mjs').TraceStore,
+ *   issues?: { get(slug: string, number: number): Promise<import('./github.mjs').IssueRead> },
  * }} AppOptions
  */
 
@@ -95,11 +96,10 @@ export function createHandler(opts) {
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(405, 'text/plain; charset=utf-8', 'read-only\n')
     const path = new URL(req.url ?? '/', 'http://x').pathname
     if (path === '/' || path === '/index.html') return send(200, 'text/html; charset=utf-8', PAGE)
-    const json = async (/** @type {() => Promise<unknown>} */ fn) => {
+    const json = async (/** @type {() => Promise<unknown>} */ fn, missing = 'no such trace') => {
       try {
         const body = await fn()
-        if (body === null)
-          return send(404, 'application/json; charset=utf-8', JSON.stringify({ error: 'no such trace' }))
+        if (body === null) return send(404, 'application/json; charset=utf-8', JSON.stringify({ error: missing }))
         return send(200, 'application/json; charset=utf-8', JSON.stringify(body))
       } catch (err) {
         return send(
@@ -114,6 +114,17 @@ export function createHandler(opts) {
     if (traces && path === '/api/traces') return json(async () => traceList(await traces.read()))
     const one = /^\/api\/traces\/([0-9a-f]{32})$/.exec(path)
     if (traces && one) return json(async () => traceDetail(await traces.read(), one[1]))
+    const issue = /^\/api\/issue\/([\w.-]+)\/([\w.-]+)\/([1-9]\d{0,9})$/.exec(path)
+    if (opts.issues && issue) {
+      const { issues, readHeartbeat = defaultReadHeartbeat } = opts
+      const slug = `${issue[1]}/${issue[2]}`
+      // Only the repos canopy watches: the page is not a general-purpose proxy onto graft.
+      return json(async () => {
+        if (!reposFor(opts.repos, await readHeartbeat(opts.statePath)).includes(slug)) return null
+        const read = await issues.get(slug, Number(issue[3]))
+        return read.issue ? read : null
+      }, `no such issue in a watched repo: ${slug}#${issue[3]}`)
+    }
     return send(404, 'text/plain; charset=utf-8', 'not found\n')
   }
 }

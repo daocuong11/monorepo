@@ -1,10 +1,14 @@
 // @ts-check
 import { execFile } from 'node:child_process'
+import { ISSUE_QUERY, issueDetail, issueVars } from './issue.mjs'
 import { combine, emptyColumns, group, QUEUES_QUERY, queryVars } from './queues.mjs'
 
 /**
  * @typedef {(cmd: string, args: string[]) => Promise<string>} Exec
- * @typedef {{ queues(slug: string): Promise<import('./queues.mjs').Queues> }} GithubClient
+ * @typedef {{
+ *   queues(slug: string): Promise<import('./queues.mjs').Queues>,
+ *   issue?(slug: string, number: number): Promise<import('./issue.mjs').IssueDetail | null>,
+ * }} GithubClient
  */
 
 /** @type {Exec} */
@@ -28,6 +32,17 @@ export function graftClient({ exec = defaultExec, bin = 'graft' } = {}) {
     async queues(slug) {
       const out = await exec(bin, ['graphql', QUEUES_QUERY, '--vars', JSON.stringify(queryVars(slug)), '--repo', slug])
       return group(JSON.parse(out), slug)
+    },
+    async issue(slug, number) {
+      const out = await exec(bin, [
+        'graphql',
+        ISSUE_QUERY,
+        '--vars',
+        JSON.stringify(issueVars(slug, number)),
+        '--repo',
+        slug,
+      ])
+      return issueDetail(JSON.parse(out), slug, number)
     },
   }
 }
@@ -85,6 +100,61 @@ export function cachedQueues({ client, ttlMs = MIN_TTL_MS, now = Date.now }) {
         }),
       )
       return combine(repos, cached)
+    },
+  }
+}
+
+/** Issues kept in the reading-pane cache; the least recently fetched goes first. */
+const ISSUES_KEPT = 200
+
+/**
+ * @typedef {{ issue: import('./issue.mjs').IssueDetail | null, fetchedAt: string | null, error: string | null }} IssueRead
+ *   `error` set with an `issue` means the last refresh failed and this is the last good answer.
+ */
+
+/**
+ * The same cache, per issue, for the Inbox reading pane: one fetch per issue per `ttlMs`, one in flight at a
+ * time, the last good answer kept beside a failed refresh. A first fetch that fails throws.
+ *
+ * @param {{ client: GithubClient, ttlMs?: number, now?: () => number }} opts
+ */
+export function cachedIssues({ client, ttlMs = MIN_TTL_MS, now = Date.now }) {
+  const ttl = Math.max(MIN_TTL_MS, ttlMs)
+  /** @type {Map<string, { at: number, value: IssueRead }>} */
+  const entries = new Map()
+  /** @type {Map<string, Promise<IssueRead>>} */
+  const inflight = new Map()
+
+  const refresh = (/** @type {string} */ slug, /** @type {number} */ number) => {
+    const key = `${slug}#${number}`
+    const pending = inflight.get(key)
+    if (pending) return pending
+    const p = (async () => {
+      const prev = entries.get(key)?.value
+      /** @type {IssueRead} */
+      let value
+      try {
+        if (!client.issue) throw new Error('this GitHub client cannot read single issues')
+        value = { issue: await client.issue(slug, number), fetchedAt: new Date(now()).toISOString(), error: null }
+      } catch (err) {
+        if (!prev) throw err
+        value = { ...prev, error: /** @type {Error} */ (err)?.message ?? String(err) }
+      }
+      entries.delete(key)
+      entries.set(key, { at: now(), value })
+      if (entries.size > ISSUES_KEPT) entries.delete(/** @type {string} */ (entries.keys().next().value))
+      return value
+    })().finally(() => inflight.delete(key))
+    inflight.set(key, p)
+    return p
+  }
+
+  return {
+    ttlMs: ttl,
+    /** @param {string} slug @param {number} number @returns {Promise<IssueRead>} */
+    get(slug, number) {
+      const hit = entries.get(`${slug}#${number}`)
+      return hit && now() - hit.at < ttl ? Promise.resolve(hit.value) : refresh(slug, number)
     },
   }
 }

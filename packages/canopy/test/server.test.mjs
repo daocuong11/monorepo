@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { main } from '../src/cli.mjs'
 import { resolveSettings } from '../src/config.mjs'
-import { cachedQueues } from '../src/github.mjs'
+import { cachedIssues, cachedQueues } from '../src/github.mjs'
 import { group } from '../src/queues.mjs'
 import { buildState, createApp, hostnameOf } from '../src/server.mjs'
 import { graphqlAnswer, heartbeat, T0 } from './fixtures.mjs'
@@ -132,6 +132,24 @@ test('read-only, loopback Host only, 404 elsewhere', async () => {
     assert.equal((await get('/', { host: 'evil.example' })).status, 403)
     assert.equal((await get('/', { host: 'localhost:4317' })).status, 200)
     assert.equal((await get('/', { method: 'HEAD' })).body, '')
+  })
+})
+
+test('GET /api/issue/<owner>/<name>/<n>: watched repos only, 404 for a missing issue', async () => {
+  const { queues } = fakeQueues()
+  const issues = cachedIssues({
+    client: {
+      queues: async () => assert.fail('not used'),
+      issue: async (slug, n) => (n === 4 ? /** @type {any} */ ({ repo: slug, number: n, title: 'Issue 4' }) : null),
+    },
+  })
+  await serve({ statePath: stateFile(heartbeat()), repos: [REPO], queues, issues }, async (get) => {
+    const ok = await get(`/api/issue/${REPO}/4`)
+    assert.equal(ok.status, 200)
+    assert.equal(JSON.parse(ok.body).issue.title, 'Issue 4')
+    assert.equal((await get(`/api/issue/${REPO}/5`)).status, 404)
+    assert.match(JSON.parse((await get('/api/issue/someone/else/4')).body).error, /watched repo/)
+    assert.equal((await get(`/api/issue/${REPO}/0`)).status, 404)
   })
 })
 
