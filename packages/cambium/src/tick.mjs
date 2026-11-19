@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * One tick: Read → Reconcile → Watch → Sweep → Schedule → Release →
+ * One tick: Read → Reconcile → Watch → Sweep → Schedule → Release → GC →
  * Heartbeat. Every collaborator is injected ({@link Deps}); the daemon is a
  * loop around this function. Each step is bounded by `stepTimeoutSeconds`; a
  * step that throws or times out is recorded and the tick moves on. Nothing
@@ -37,6 +37,7 @@ import { DISPATCH_NOT_BUILT, dispatchNotBuilt } from './phases/dispatch.mjs'
  *   tickNumber?: number,
  *   telemetry?: import('./tracing.mjs').Telemetry,
  *   updater?: import('./update.mjs').Updater,
+ *   gc?: () => Promise<unknown>,
  *   daemonStartedAt?: number,
  *   pid?: number,
  * }} Deps
@@ -92,6 +93,7 @@ export async function tick(deps) {
         ])),
     ...(ctx.mode === 'running' ? /** @type {[string, StepFn][]} */ ([['schedule', schedule]]) : []),
     ...(paused ? [] : /** @type {[string, any][]} */ ([['release', release]])),
+    ...(paused || !deps.gc ? [] : /** @type {[string, StepFn][]} */ ([['gc', gc]])),
   ]
   for (const [name, fn] of steps) await runStep(deps, ctx, name, () => fn(deps, ctx))
   const state = heartbeatState(deps, ctx)
@@ -573,6 +575,22 @@ export async function startTask(deps, ctx, slug, issue, snap, { foreground = fal
     issue: issue.number,
   })
   return { ...started, attempt: marker.attempt }
+}
+
+// ---- GC
+
+/**
+ * Start a worktree sweep (gc.mjs) every `gc.everyMinutes`; 0 switches it off. Not awaited: a sweep asks
+ * GitHub about each worktree and can outlast the step.
+ *
+ * @param {Deps} deps @param {Ctx} ctx
+ */
+async function gc(deps, ctx) {
+  const every = deps.config.gc.everyMinutes
+  const last = Number(deps.store.get('gc.lastRun') ?? 0)
+  if (!every || ctx.now - last < every * MIN) return
+  deps.store.set('gc.lastRun', String(ctx.now))
+  void deps.gc?.()
 }
 
 // ---- Release (no agent). Legacy: once a day, the run is a seam. Graph: the release-prepare / release-promote

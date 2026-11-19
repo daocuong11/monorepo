@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSy
 import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { applyReload } from './config.mjs'
+import { gcRunner } from './gc.mjs'
 import { graftGitHub } from './github.mjs'
 import { openStore } from './store.mjs'
 import { tick } from './tick.mjs'
@@ -69,13 +70,15 @@ export function realDeps(config, { echo } = {}) {
     maxBytes: config.logs.daemonMaxBytes,
     echo,
   })
+  const spawner = processSpawner({ config })
   return {
     config,
     clock: { now: Date.now },
     github: graftGitHub({ config }),
     store,
-    spawner: processSpawner({ config }),
+    spawner,
     procs: realProcs,
+    gc: gcRunner({ config, store, spawner, procs: realProcs, now: Date.now }, log),
     log,
     events,
     heartbeat: (state) => writeHeartbeat(config.paths.heartbeat, state),

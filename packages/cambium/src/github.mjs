@@ -278,6 +278,8 @@ export function exec(cmd, args, { input, cwd, env } = {}) {
     child.on('close', (code) =>
       code === 0 ? resolveOut(out) : reject(new Error(`${cmd} ${args[0]} exited ${code}: ${err.trim() || out.trim()}`)),
     )
+    // A child that exits without reading stdin (EPIPE) is judged by its exit code, not by the write.
+    child.stdin.on('error', () => {})
     child.stdin.end(input ?? '')
   })
 }
