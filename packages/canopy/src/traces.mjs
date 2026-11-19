@@ -15,8 +15,10 @@ export const TRACE_ID = /^[0-9a-f]{32}$/
  * @typedef {{
  *   id: string, start: number, end: number, durationMs: number, spans: number, errors: number,
  *   root: string, services: string[], repo: string | null, issue: number | null, graph: string | null,
- *   node: string | null, outcome: string | null, costUsd: number | null,
+ *   node: string | null, outcome: string | null, costUsd: number | null, trail: string[],
  * }} TraceSummary
+ *   `trail`: the graph nodes the run stepped through, oldest first, repeats in a row folded, at most the last 6.
+ * @typedef {Pick<TraceSummary, 'id' | 'graph' | 'node' | 'outcome' | 'costUsd' | 'errors' | 'end' | 'trail'>} IssueProgress
  * @typedef {{
  *   status: 'ok' | 'missing' | 'unreadable', path: string, message: string | null,
  *   files: number, malformed: number, traces: Map<string, Span[]>,
@@ -165,8 +167,14 @@ export function summarize(id, spans) {
     node: lastStep ? String(lastStep.attrs['cambium.node']) : null,
     outcome: lastStep && lastStep.attrs['cambium.outcome'] != null ? String(lastStep.attrs['cambium.outcome']) : null,
     costUsd: costs.length ? costs.reduce((a, b) => a + /** @type {number} */ (b), 0) : null,
+    trail: steps
+      .map((s) => String(s.attrs['cambium.node']))
+      .filter((n, i, all) => n !== all[i - 1])
+      .slice(-TRAIL_KEPT),
   }
 }
+
+const TRAIL_KEPT = 6
 
 /**
  * The collector's trace file plus its rotated backups (`traces-<time>.jsonl`
@@ -301,7 +309,8 @@ export function traceList(f, { limit = 200 } = {}) {
 
 /**
  * What `/api/state` carries: counts and, per `owner/name#n`, that issue's
- * newest trace id, so other tabs can link to it.
+ * newest trace id, so other tabs can link to it, and where that run has got to
+ * (`progress`), so the Queue tab can show how far live work has come.
  *
  * @param {TraceFile} f
  */
@@ -309,8 +318,17 @@ export function traceIndex(f) {
   const all = summaries(f)
   /** @type {Record<string, string>} */
   const byIssue = {}
-  for (const t of all) if (t.repo && t.issue) byIssue[`${t.repo}#${t.issue}`] ??= t.id
-  return { ...describe(f), total: all.length, errored: all.filter((t) => t.errors).length, byIssue }
+  /** @type {Record<string, IssueProgress>} */
+  const progress = {}
+  for (const t of all) {
+    if (!t.repo || !t.issue) continue
+    const key = `${t.repo}#${t.issue}`
+    if (byIssue[key]) continue
+    byIssue[key] = t.id
+    const { id, graph, node, outcome, costUsd, errors, end, trail } = t
+    progress[key] = { id, graph, node, outcome, costUsd, errors, end, trail }
+  }
+  return { ...describe(f), total: all.length, errored: all.filter((t) => t.errors).length, byIssue, progress }
 }
 
 /**

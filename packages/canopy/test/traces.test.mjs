@@ -163,6 +163,7 @@ test('summarize: issue, graph, last node and outcome, errors, cost', () => {
   assert.equal(t.costUsd, 1.25)
   assert.equal(t.durationMs, 60_000)
   assert.deepEqual(t.services, ['cambium'])
+  assert.deepEqual(t.trail, ['start-worker', 'ci-running'], 'the nodes it stepped through, oldest first')
 })
 
 test('traceDetail orders parents before children, siblings by start', () => {
@@ -196,6 +197,16 @@ test('traceDetail orders parents before children, siblings by start', () => {
   assert.equal(traceList(f, { limit: 1 }).traces.length, 1)
   assert.deepEqual(traceIndex(f).byIssue, { 'oakgreencc/monorepo#12': TRACE })
   assert.equal(traceIndex(f).errored, 1)
+  assert.deepEqual(traceIndex(f).progress['oakgreencc/monorepo#12'], {
+    id: TRACE,
+    graph: 'task',
+    node: 'ci-running',
+    outcome: 'merged',
+    costUsd: 1.25,
+    errors: 1,
+    end: summarize(TRACE, /** @type {any} */ (f.traces.get(TRACE))).end,
+    trail: ['start-worker', 'ci-running'],
+  })
 })
 
 test('traceDetail keeps spans caught in a parent loop', () => {

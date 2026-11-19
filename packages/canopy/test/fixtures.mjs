@@ -81,10 +81,34 @@ export function graphqlAnswer() {
             headRefName: 'agent/issue-3',
             isDraft: false,
             isInMergeQueue: true,
+            createdAt: iso(T0 - 7_200_000),
             updatedAt: iso(T0),
+            mergeStateStatus: 'CLEAN',
+            additions: 424,
+            deletions: 9,
+            changedFiles: 8,
             autoMergeRequest: { enabledAt: iso(T0) },
+            mergeQueueEntry: { position: 2, state: 'AWAITING_CHECKS' },
             closingIssuesReferences: { nodes: [{ number: 3 }] },
-            commits: { nodes: [{ commit: { statusCheckRollup: { state: 'SUCCESS' } } }] },
+            commits: {
+              nodes: [
+                {
+                  commit: {
+                    statusCheckRollup: {
+                      state: 'SUCCESS',
+                      contexts: {
+                        checkRunCountsByState: [
+                          { state: 'SUCCESS', count: 6 },
+                          { state: 'SKIPPED', count: 1 },
+                          { state: 'COMPLETED', count: 0 },
+                        ],
+                        statusContextCountsByState: [{ state: 'SUCCESS', count: 1 }],
+                      },
+                    },
+                  },
+                },
+              ],
+            },
           },
           {
             number: 21,
