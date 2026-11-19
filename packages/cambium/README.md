@@ -38,13 +38,14 @@ Every command takes `--config <file>`; the default is `$CAMBIUM_CONFIG`, then `~
 
 Each step is bounded by `stepTimeoutSeconds`. A step that throws or times out is logged and recorded in the heartbeat, and the tick moves on. Nothing waits on a worker.
 
-1. **Read.** One GraphQL query per repo (`graft graphql`): open issues with any `q:` label, open and recently merged PRs on `agent/*` with their check rollup, merge-queue state, `mergeable`, `reviewDecision` and the issues they close. GitHub links closing references only for a PR into the default branch, so cambium also reads `Closes/Fixes/Resolves #n` from the PR body, fetching issues the first query did not read in one more. A worker's PR that names no issue (found by its branch) gets `Closes #n` added at submission.
+1. **Read.** One GraphQL query per repo (`graft graphql`): open issues with any `q:` label (100 per page; more pages follow the cursor, so a busy queue's newest issues are not invisible), open and recently merged PRs on `agent/*` with their check rollup, merge-queue state, `mergeable`, `reviewDecision` and the issues they close. GitHub links closing references only for a PR into the default branch, so cambium also reads `Closes/Fixes/Resolves #n` from the PR body, fetching issues the first query did not read in one more (also the issue an open PR that closes none names by its branch, `agent/<n>-…`, for the [reaper](#upkeep)). A worker's PR that names no issue (found by its branch) gets `Closes #n` added at submission.
 2. **Reconcile.** For each tracked worker: alive and under its wall-clock cap → nothing. Over the cap → terminate it: every process below `claude` (its Bash tools, a test run) is SIGKILLed at once, and `claude` gets SIGTERM, on which Claude Code ends its interaction span and flushes its exporter (a bare SIGKILL left `claude_code.*` spans orphaned under a root that was never exported). It usually exits within a second; still alive 30 s past the cap (and at least one tick later) → kill its process group and every descendant (Claude Code runs each Bash command in a group of its own, so a group kill alone left a test run loading the next attempt). Gone → exit check (a PR on its branch, or closing its issue, that is open or merged and not still on the commit CI already failed) → `submitted`; otherwise requeue with the stderr tail (a failed prepare step requeues as `spawn-failed`). Then the worktree is torn down if `graft status` says GitHub holds everything in it and no process has its cwd inside it (`lsof`; the worktree's own nx daemon excepted), else kept with a `warn` saying why. Teardown stops the worktree's nx daemon (nx keys each daemon to its workspace root, so no other checkout's is touched; left running, it served the next client from a deleted tree until `nx reset`), moves the tree to `<paths.home>/trash` with one rename, prunes git's record, and erases the trash in the background: a worktree with CocoaPods in it took `git worktree remove` past the step timeout.
 3. **Watch** (no agent). Graph engine: the [PR graph](#the-pr-graph), once per tick for each agent PR whose CI has settled and whose issue has no Task queued or running: merge, rework, close, or `q:human`. Legacy, for agent PRs whose issue is in no queue: merged → close the issue, delete the branch; red → requeue with the failing checks' summaries; left the merge queue without merging → requeue; not merged `mergeQueueMinutes` after submission → `q:human`.
 4. **Sweep.** An issue labelled `running` with this host (or no host) in its marker and no tracked worker → requeue. This is what makes losing the SQLite file cost one requeue.
 5. **Schedule.** Start Task workers for `q:task` issues without `running`, by priority label then age, up to `phases.task.cap` counted from live workers. A task requeued earlier in the same tick can start in that tick. Then, with `engine: "graph"` and `phases.dispatch.cap > 0`, start triage workers for `q:intake` issues the same way ([the dispatch graph](#the-dispatch-graph)).
 6. **Release.** Legacy: once a day at `release.time` when `release.enabled`; the run itself is a seam. Graph: the [release graphs](#the-release-graphs), per repo.
-7. **Heartbeat.** Write the state file.
+7. **Upkeep** (graph engine). The hourly [reaper](#upkeep) of untracked agent PRs, then the daily [re-triage](#upkeep) of `q:human`.
+8. **Heartbeat.** Write the state file.
 
 A requeue is `q:task` with attempt + 1, or, once `maxAttempts` are spent, `q:human` + `why:budget`. Who merges a Task PR is the repo's `merge` setting ([The PR graph](#the-pr-graph)): by default not cambium (a merge queue, auto-merge or a human); with `"merge": "green"` cambium merges it once CI is green. The other merge cambium asks for is an approved promotion PR, through `graft pr merge`; see [The release graphs](#the-release-graphs).
 
@@ -115,6 +116,8 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
   "merge": "none",
   "priorityLabels": ["priority:critical", "priority:high", "priority:medium", "priority:low"],
   "release": { "enabled": false, "time": "06:00" },
+  "reaper": { "everyMinutes": 60, "staleMinutes": 30, "orphanDays": 3 },
+  "retriage": { "enabled": false, "time": "05:00" },
   "paths": {
     "home": "~/.cambium",
     "db": "~/.cambium/cambium.db",
@@ -167,6 +170,21 @@ How a repo's worktrees are made is the repo's call: a `"cambium"` key in its roo
 - Unknown keys, wrong types, paths outside the repo and an unparseable `package.json` fail the start (requeued as `spawn-failed`) with the error.
 
 The key decides which commands run on this host, so list `package.json` as protected (CODEOWNERS) in the target repo, next to its `"graft"` policy.
+
+## Upkeep
+
+Two clocks in the graph engine's `upkeep` step, after Watch (`src/upkeep.mjs`).
+
+**Reaper** (every `reaper.everyMinutes`, default 60; 0 turns it off). It looks at each open `agent/*` PR that nothing has updated for `reaper.staleMinutes` (default 30) and that cambium is not tracking. Such a PR comes from a worker killed at its wall-clock cap whose `graft publish` still landed, or from a PR body that never said `Closes #n`. Its issue is the one it closes, else the one its branch names (`agent/<n>-…`):
+
+| Found                                                           | Reaper does                                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Issue open, no live worker, its marker's `pr` is not this PR    | Adopt: `Closes #n` added if missing, then the task graph's `submit` (marker `pr`, out of every queue, `q:human` included) and a comment. The PR graph takes it from the next tick: merge when green, rework when red or conflicting, close when superseded. A fresh Task never redoes work a PR already holds. |
+| Issue closed                                                    | Close the PR with a comment.                                                                                                                                                                                                                                                                                   |
+| No issue (none named, or not readable)                          | Close the PR after `reaper.orphanDays` (default 3) untouched. The branch stays.                                                                                                                                                                                                                                |
+| A live worker on the issue, or the issue already tracks this PR | Leave it.                                                                                                                                                                                                                                                                                                      |
+
+**Re-triage** (once a day at `retriage.time` when `retriage.enabled`; off by default). Every `q:human` issue goes back to `q:intake` without its `why:*`, so [triage](#the-dispatch-graph) looks again under its current rubric: done since (obsolete, closed), now checkable (defer), or now a task. Not `why:approve`, a merge only a human may make, where a re-triage would start a duplicate Task. Not one holding `running`. The reaper runs first, so an issue whose PR it adopted is not re-triaged.
 
 ## Worktree GC
 

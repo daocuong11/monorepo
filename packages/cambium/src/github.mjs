@@ -22,6 +22,7 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
  *   checks: 'SUCCESS' | 'FAILURE' | 'ERROR' | 'PENDING' | 'EXPECTED' | null, failing: FailingCheck[], closes: number[],
  *   mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN' | null,
  *   reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null, createdAt: string | null,
+ *   updatedAt?: string | null,
  * }} PullRequest
  *   `mergeable`: GitHub's conflict check against the base (UNKNOWN while it computes). `reviewDecision`: null
  *   when the base requires no review.
@@ -66,7 +67,7 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
  *   `linkIssue`: put `Closes #<issue>` at the top of the PR's body, so the PR names the issue it closes.
  */
 
-const PR_FIELDS = `number url headRefName state headRefOid isInMergeQueue body mergeable reviewDecision createdAt
+const PR_FIELDS = `number url headRefName state headRefOid isInMergeQueue body mergeable reviewDecision createdAt updatedAt
   headRef { id }
   autoMergeRequest { enabledAt }
   closingIssuesReferences(first: 5) { nodes { ...I } }
@@ -82,7 +83,7 @@ const PR_FIELDS = `number url headRefName state headRefOid isInMergeQueue body m
  */
 export const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $labels: [String!], $release: Boolean!, $from: String!, $to: String!, $health: Boolean!, $baseRef: String!, $check: String!) {
   repository(owner: $owner, name: $name) {
-    issues(labels: $labels, states: OPEN, first: 100, orderBy: { field: CREATED_AT, direction: ASC }) { nodes { ...I } }
+    issues(labels: $labels, states: OPEN, first: 100, orderBy: { field: CREATED_AT, direction: ASC }) { pageInfo { hasNextPage endCursor } nodes { ...I } }
     open: pullRequests(states: OPEN, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { ${PR_FIELDS} } }
     merged: pullRequests(states: MERGED, first: 30, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { ${PR_FIELDS} } }
     promoteRef: pullRequests(headRefName: $from, baseRefName: $to, states: OPEN, first: 10) @include(if: $release) { nodes { ...P } }
@@ -129,6 +130,15 @@ export const issuesQuery = (numbers) =>
     .map((n) => `i${n}: issueOrPullRequest(number: ${n}) { __typename ... on Issue { ...I } }`)
     .join(' ')} } }
 ${SNAPSHOT_QUERY.slice(SNAPSHOT_QUERY.indexOf('fragment I on Issue'), SNAPSHOT_QUERY.indexOf('fragment P on'))}`
+
+/** The queued issues after `$after`: the snapshot's first page holds 100, a busy repo has more. */
+export const ISSUES_PAGE_QUERY = `query($owner: String!, $name: String!, $labels: [String!], $after: String) { repository(owner: $owner, name: $name) {
+    issues(labels: $labels, states: OPEN, first: 100, after: $after, orderBy: { field: CREATED_AT, direction: ASC }) { pageInfo { hasNextPage endCursor } nodes { ...I } }
+} }
+${SNAPSHOT_QUERY.slice(SNAPSHOT_QUERY.indexOf('fragment I on Issue'), SNAPSHOT_QUERY.indexOf('fragment P on'))}`
+
+/** Pages read past the first: 10 × 100 queued issues per repo is far past any real queue. */
+const MAX_ISSUE_PAGES = 10
 
 const FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'])
 
@@ -207,8 +217,22 @@ function toIssue(n, botLogin) {
   }
 }
 
-/** The PRs' closed issues the snapshot has not read. @param {Snapshot} snap @returns {number[]} */
-export const unreadCloses = (snap) => [...new Set(snap.prs.flatMap((p) => p.closes).filter((n) => !snap.issues.has(n)))]
+/** The issue an agent branch names: `agent/<n>-<slug>` or `agent/issue-<n>`. @param {string} branch */
+export const branchIssue = (branch) => {
+  const m = /^agent\/(?:issue-)?(\d+)(?:-|$)/.exec(branch)
+  return m ? Number(m[1]) : null
+}
+
+/**
+ * The issues the snapshot has not read that PRs name: the ones they close, and for an open PR that closes none, the
+ * one its branch names (the reaper pairs those). @param {Snapshot} snap @returns {number[]}
+ */
+export const unreadCloses = (snap) => {
+  const named = snap.prs.flatMap((p) =>
+    p.closes.length || p.state !== 'OPEN' ? p.closes : [branchIssue(p.branch)].filter((n) => n !== null),
+  )
+  return [...new Set(named.filter((n) => !snap.issues.has(n)))]
+}
 
 /**
  * Add the answer to {@link issuesQuery} to the snapshot; a number that is not an issue (a PR, or gone) is dropped
@@ -270,6 +294,7 @@ export function normalize(data, { botLogin = null, release = null, health = null
       mergeable: p.mergeable ?? null,
       reviewDecision: p.reviewDecision ?? null,
       createdAt: p.createdAt ?? null,
+      updatedAt: p.updatedAt ?? null,
     })
   }
   return {
@@ -341,6 +366,15 @@ export function graftGitHub({ config, exec: run = exec }) {
         check: health?.check ?? '',
       })
       const data = await json(graft(slug, ['graphql', SNAPSHOT_QUERY, '--vars', vars]))
+      // More than 100 queued issues: follow the cursor, or the newest ones are never scheduled or watched.
+      const issues = (data?.data ?? data)?.repository?.issues
+      for (let page = 0, info = issues?.pageInfo; info?.hasNextPage && page < MAX_ISSUE_PAGES; page++) {
+        const pageVars = JSON.stringify({ owner, name, labels: QUEUE_LABELS, after: info.endCursor })
+        const next = await json(graft(slug, ['graphql', ISSUES_PAGE_QUERY, '--vars', pageVars]))
+        const more = (next?.data ?? next)?.repository?.issues
+        issues.nodes.push(...(more?.nodes ?? []))
+        info = more?.pageInfo
+      }
       const snap = normalize(data, { botLogin: config.graft.botLogin, release, health })
       const unread = unreadCloses(snap)
       if (!unread.length) return snap

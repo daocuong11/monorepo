@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { resolveConfig } from '../src/config.mjs'
-import { graftGitHub, normalize, SNAPSHOT_QUERY } from '../src/github.mjs'
+import { graftGitHub, ISSUES_PAGE_QUERY, normalize, SNAPSHOT_QUERY } from '../src/github.mjs'
 import { byPriorityThenAge, move } from '../src/labels.mjs'
 import { plist } from '../src/launchd.mjs'
 import {
@@ -538,4 +538,35 @@ test('graft client: behindBase compares the base branch to the PR head, live; up
     ['api', 'GET', '/repos/o/r/compare/release%2Fnext...abc123', '--repo', 'o/r'],
     ['pr', 'update', '9', '--repo', 'o/r'],
   ])
+})
+
+test('graft client: more than 100 queued issues → it follows the cursor (the newest are scheduled too)', async () => {
+  const issue = (/** @type {number} */ n) => ({
+    number: n,
+    title: `T${n}`,
+    url: `u${n}`,
+    state: 'OPEN',
+    createdAt: '2026-11-01T00:00:00Z',
+    body: '',
+    labels: { nodes: [{ name: 'q:task' }] },
+    comments: { nodes: [] },
+  })
+  const first = /** @type {any} */ (structuredClone(graphqlAnswer))
+  first.repository.issues = { pageInfo: { hasNextPage: true, endCursor: 'c1' }, nodes: [issue(5)] }
+  const second = { repository: { issues: { pageInfo: { hasNextPage: false, endCursor: 'c2' }, nodes: [issue(6)] } } }
+  const answers = [JSON.stringify(first), JSON.stringify(second)]
+  /** @type {string[][]} */
+  const argv = []
+  const config = resolveConfig({ repos: [{ slug: 'o/r', path: '/src/r' }] })
+  const gh = graftGitHub({
+    config,
+    exec: async (_cmd, args) => {
+      argv.push(args)
+      return /** @type {string} */ (answers.shift())
+    },
+  })
+  const snap = await gh.read('o/r')
+  assert.deepEqual([...snap.issues.keys()].sort(), [5, 6])
+  assert.equal(argv[1][1], ISSUES_PAGE_QUERY)
+  assert.equal(JSON.parse(argv[1][3]).after, 'c1')
 })

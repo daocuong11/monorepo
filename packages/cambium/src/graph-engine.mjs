@@ -15,6 +15,7 @@
  * Schedule admits entries), when it enters a wait (polled next tick, unless the wait is `pollOnEntry`), at END,
  * or at a wait that is not ready.
  */
+import { upkeep } from './upkeep.mjs'
 import { advance, END } from './graph/index.mjs'
 import { deleteMergedBranch, prGraph } from './graphs/pr.mjs'
 import { HANDED_OFF, inputFor, lostLeaseOf, task, TASK_QUEUES, TERMINAL } from './graphs/task.mjs'
@@ -258,6 +259,7 @@ export const GRAPH_ENGINE = {
   sweep: inOrder(sweep, DISPATCH_STEPS.sweep),
   scheduleTasks,
   scheduleDispatch: DISPATCH_STEPS.schedule,
+  upkeep,
 }
 
 // ---- `cambium run <graph> --issue <n> [--follow]`
