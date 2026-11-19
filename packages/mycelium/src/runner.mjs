@@ -1,10 +1,11 @@
 // @ts-check
 import { ASC_ENV, ascConfig, ascSource } from './sources/asc.mjs'
+import { DEVICELOG_ENV, deviceLogConfig, deviceLogsSource } from './sources/device-logs.mjs'
 import { DISCORD_ENV, discordChannel, discordConfig, discordSource } from './sources/discord.mjs'
 import { PLAY_ENV, playConfig, playSource } from './sources/play.mjs'
 import { testflightSource } from './sources/testflight.mjs'
 
-export const SOURCES = /** @type {const} */ (['discord', 'asc', 'testflight', 'play'])
+export const SOURCES = /** @type {const} */ (['discord', 'asc', 'testflight', 'play', 'device-logs'])
 export const BACKFILL_HOURS = 24
 
 /**
@@ -21,7 +22,11 @@ const NEEDS = {
   asc: ASC_ENV,
   testflight: ASC_ENV,
   play: [PLAY_ENV[0], `${PLAY_ENV[1]} or ${PLAY_ENV[2]}`],
+  'device-logs': DEVICELOG_ENV,
 }
+
+/** The settings prefix of each source: `MYCELIUM_<PREFIX>_INTERVAL_S`. */
+const PREFIX = { discord: 'DISCORD', asc: 'ASC', play: 'PLAY', 'device-logs': 'DEVICELOG' }
 
 /**
  * One source from the environment, or an error naming what it needs.
@@ -31,7 +36,8 @@ const NEEDS = {
  * @returns {Source}
  */
 export function sourceFromEnv(name, { env, fetch, sleep }) {
-  const interval = Number(env[`MYCELIUM_${name.toUpperCase()}_INTERVAL_S`])
+  const prefix = PREFIX[/** @type {keyof PREFIX} */ (name)] ?? name.toUpperCase()
+  const interval = Number(env[`MYCELIUM_${prefix}_INTERVAL_S`])
   const intervalMs = Number.isFinite(interval) && interval > 0 ? interval * 1000 : undefined
   const make = {
     discord: () => {
@@ -49,6 +55,10 @@ export function sourceFromEnv(name, { env, fetch, sleep }) {
     play: () => {
       const config = playConfig(env)
       return config && playSource({ fetch, sleep, config, intervalMs })
+    },
+    'device-logs': () => {
+      const config = deviceLogConfig(env)
+      return config && deviceLogsSource({ fetch, sleep, config, intervalMs })
     },
   }[name]
   if (!make) throw new Error(`unknown source '${name}'; the sources are ${SOURCES.join(', ')}`)

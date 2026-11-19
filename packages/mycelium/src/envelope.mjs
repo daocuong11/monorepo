@@ -47,6 +47,8 @@ export function envelope(fields) {
  * - testflight: feedback `<appId>/<submissionId>`; a crash
  *   `<appId>/crash/<signature>`, so repeats of one crash land as comments
  *   (a crash whose log yields no signature is keyed on its submission id).
+ * - device-logs: `<stage>/<logId>`; a crash (opt-in) is `<stage>/<signature>`,
+ *   so repeats of one crash land on one intent.
  *
  * @type {Record<string, (e: Envelope) => string>}
  */
@@ -58,6 +60,7 @@ export const IDENTITY = {
     e.meta.kind === 'crash'
       ? `${e.meta.appId}/crash/${e.meta.signature ?? `submission-${e.externalId}`}`
       : `${e.meta.appId}/${e.externalId}`,
+  'device-logs': (e) => `${e.meta.stage}/${e.meta.signature ?? e.externalId}`,
 }
 
 /** @param {Envelope} e */
