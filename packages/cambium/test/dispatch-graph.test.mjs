@@ -11,7 +11,7 @@ import { dispatch, nodeOf } from '../src/graphs/dispatch.mjs'
 import { readTriage, triagePrompt } from '../src/phases/dispatch.mjs'
 import { tick } from '../src/tick.mjs'
 import { runIssue } from '../src/graph-engine.mjs'
-import { harness, SLUG } from './fakes.mjs'
+import { harness, SLUG, T0 } from './fakes.mjs'
 
 const MIN = 60_000
 
@@ -253,6 +253,50 @@ test('defer → rests in q:intake until recheck time, then re-triage sees the re
     m?.history.map((x) => x.outcome),
     ['defer', 'obsolete'],
   )
+})
+
+test('defer → a blocker closing after the defer wakes it before deferUntil; one closed before does not', async () => {
+  const h = intake({
+    issues: [
+      {
+        number: 7,
+        labels: ['q:intake'],
+        body: 'Blocked by #3 and #4.',
+        blockedBy: [
+          { number: 3, state: 'OPEN', closedAt: null },
+          { number: 4, state: 'CLOSED', closedAt: new Date(T0 - 60 * MIN).toISOString() },
+        ],
+      },
+    ],
+  })
+  await triage(h, logWith(verdictMessage({ verdict: 'defer', reason: 'Blocked by #3.', recheckHours: 24 })))
+  assert.equal(h.gh.marker(7)?.node, 'deferred')
+
+  // #3 still open: left alone.
+  h.clock.advance(5 * MIN)
+  await tick(h.deps)
+  assert.equal(h.spawner.started.length, 1)
+
+  // #3 closes: the next tick triages it again, a day early.
+  h.gh.issue(7).blockedBy[0] = { number: 3, state: 'CLOSED', closedAt: new Date(h.clock.now()).toISOString() }
+  h.clock.advance(1 * MIN)
+  await tick(h.deps)
+  assert.equal(h.spawner.started.length, 2)
+  assert.equal(h.gh.marker(7)?.node, 'triaging')
+
+  // Deferred again with every blocker already closed: it waits for deferUntil, no re-triage every tick.
+  const w = h.deps.store.worker(SLUG, 7)
+  assert.ok(w)
+  h.spawner.logs.set(
+    w.stdout,
+    logWith(verdictMessage({ verdict: 'defer', reason: 'Wait for the deploy.', recheckHours: 6 })),
+  )
+  h.procs.live.delete(w.pid)
+  await tick(h.deps)
+  assert.equal(h.gh.marker(7)?.node, 'deferred')
+  h.clock.advance(5 * MIN)
+  await tick(h.deps)
+  assert.equal(h.spawner.started.length, 2)
 })
 
 test('defer without recheckHours uses phases.dispatch.deferHours; past maxDefers it goes to a human', async () => {

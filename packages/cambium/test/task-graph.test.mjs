@@ -65,6 +65,7 @@ const issueWith = (labels, marker) =>
     body: '',
     labels,
     stateComment: marker ? { id: 1, marker: newMarker(marker) } : null,
+    blockedBy: [],
   })
 
 test('locate: the label wins, a PR-graph node is not the task graph’s, a vanished node restarts', () => {
