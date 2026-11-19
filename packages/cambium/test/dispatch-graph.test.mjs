@@ -53,11 +53,20 @@ async function triage(h, log, n = 7) {
   return w
 }
 
-test('dispatch graph: six nodes, one wait, valid; entry q:intake at start-triage', () => {
+test('dispatch graph: eight nodes, one wait, valid; entry q:intake at start-triage', () => {
   assert.deepEqual(validateGraph(dispatch), [])
   assert.deepEqual(
     dispatch.nodes.map((n) => n.name),
-    ['start-triage', 'triaging', 'retry-triage', 'to-task', 'to-human', 'close-duplicate'],
+    [
+      'start-triage',
+      'triaging',
+      'retry-triage',
+      'to-task',
+      'to-human',
+      'close-duplicate',
+      'deferred',
+      'close-obsolete',
+    ],
   )
   assert.deepEqual(
     dispatch.nodes.filter((n) => n.kind === 'wait').map((n) => n.name),
@@ -72,6 +81,8 @@ test('dispatch graph: six nodes, one wait, valid; entry q:intake at start-triage
     'to-task': ['q:task', false],
     'to-human': ['q:human', false],
     'close-duplicate': [null, false],
+    deferred: ['q:intake', false],
+    'close-obsolete': [null, false],
   })
 })
 
@@ -196,6 +207,68 @@ test('duplicate → closed as a duplicate with a link to the original', async ()
   assert.equal(m?.history.at(-1)?.outcome, 'duplicate')
 })
 
+test('defer → rests in q:intake until recheck time, then re-triage sees the reason; obsolete closes it', async () => {
+  const h = intake()
+  const check = 'Next main cd run green → obsolete; red → actionable.'
+  await triage(h, logWith(verdictMessage({ verdict: 'defer', reason: check, recheckHours: 2 })))
+  assert.deepEqual(h.gh.issue(7).labels, ['q:intake'], 'never q:human')
+  let m = h.gh.marker(7)
+  assert.equal(m?.node, 'deferred')
+  assert.equal(m?.defers, 1)
+  assert.equal(m?.deferReason, check)
+  assert.equal(Date.parse(m?.deferUntil ?? '') - h.clock.now(), 120 * MIN)
+  assert.equal(m?.attempt, 1, 'a defer is not a failed attempt')
+  assert.equal(m?.history.at(-1)?.outcome, 'defer')
+  assert.match(h.gh.issue(7).comment?.body ?? '', /re-triage after /)
+
+  // Before the recheck time: left alone.
+  h.clock.advance(119 * MIN)
+  await tick(h.deps)
+  assert.equal(h.spawner.started.length, 1)
+
+  // Due: triaged again, the earlier reason in the prompt; this time it can check, and it is obsolete.
+  h.clock.advance(2 * MIN)
+  await tick(h.deps)
+  assert.equal(h.spawner.started.length, 2)
+  const p = h.spawner.started[1].prompt
+  assert.match(p, /re-triage 2: an earlier triage deferred it to check this:\nNext main cd run green/)
+  m = h.gh.marker(7)
+  assert.equal(m?.node, 'triaging')
+  assert.equal(m?.deferUntil, null)
+  const w = h.deps.store.worker(SLUG, 7)
+  assert.ok(w)
+  h.spawner.logs.set(w.stdout, logWith(verdictMessage({ verdict: 'obsolete', reason: 'cd run 123 on main is green.' })))
+  h.procs.live.delete(w.pid)
+  await tick(h.deps)
+  assert.equal(h.gh.issue(7).state, 'CLOSED')
+  assert.deepEqual(h.gh.issue(7).labels, [])
+  const close = h.gh.calls.find((c) => c.op === 'close')
+  assert.match(close?.args[2], /^Obsolete: cd run 123 on main is green\./)
+  assert.deepEqual(close?.args[3], { reason: 'not_planned' })
+  m = h.gh.marker(7)
+  assert.equal(m?.node, 'close-obsolete')
+  assert.equal(m?.status, 'done')
+  assert.deepEqual(
+    m?.history.map((x) => x.outcome),
+    ['defer', 'obsolete'],
+  )
+})
+
+test('defer without recheckHours uses phases.dispatch.deferHours; past maxDefers it goes to a human', async () => {
+  const h = intake({ config: { phases: { dispatch: { cap: 1, deferHours: 1, maxDefers: 2 }, task: { cap: 0 } } } })
+  const reason = 'Wait for the release.'
+  await triage(h, logWith(verdictMessage({ verdict: 'defer', reason })))
+  assert.equal(Date.parse(h.gh.marker(7)?.deferUntil ?? '') - h.clock.now(), 60 * MIN)
+  for (const n of [2, 3]) {
+    h.clock.advance(61 * MIN)
+    const w = await triage(h, logWith(verdictMessage({ verdict: 'defer', reason })))
+    assert.equal(w.attempt, 1)
+    if (n === 2) assert.equal(h.gh.marker(7)?.defers, 2)
+  }
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:human', 'why:triage'])
+  assert.match(h.gh.marker(7)?.lastFailure ?? '', /deferred 2 times without an answer\. Last: Wait for the release\./)
+})
+
 test('invalid triage output → q:human with the validation error', async () => {
   const h = intake()
   await triage(h, logWith(verdictMessage({ verdict: 'duplicate', reason: 'Seen before.' })))
@@ -291,6 +364,15 @@ test('readTriage: the last fenced block, bare JSON, and every way it can be wron
   assert.match(fail(logWith('{"verdict":"maybe","reason":"r"}')), /invalid triage result: verdict:/)
   assert.match(fail(logWith('{"verdict":"actionable"}')), /invalid triage result: reason:/)
   assert.match(fail(logWith('{"verdict":"duplicate","duplicateOf":7,"reason":"r"}')), /cannot duplicate itself/)
+  assert.deepEqual(readTriage(logWith('{"verdict":"defer","recheckHours":12,"reason":"next cd"}'), 7), {
+    ok: true,
+    result: { verdict: 'defer', recheckHours: 12, reason: 'next cd' },
+  })
+  assert.match(fail(logWith('{"verdict":"defer","recheckHours":500,"reason":"r"}')), /recheckHours/)
+  assert.deepEqual(readTriage(logWith('{"verdict":"obsolete","reason":"gone"}'), 7), {
+    ok: true,
+    result: { verdict: 'obsolete', reason: 'gone' },
+  })
 })
 
 test('triagePrompt: no OpenRig vocabulary; the issue, the queue and AGENTS.md', () => {
@@ -309,4 +391,8 @@ test('triagePrompt: no OpenRig vocabulary; the issue, the queue and AGENTS.md', 
   assert.match(p, /- #1 Other \(q:human\)/)
   assert.ok(!p.includes('- #9 T'), 'the issue itself is not in the list')
   assert.match(p, /--- AGENTS\.md/)
+  assert.match(p, /- defer: .*default 6/)
+  assert.match(p, /never the way to verify what a machine can/)
+  assert.ok(!p.includes('When in doubt between actionable and needs-human, choose needs-human'))
+  assert.ok(!p.includes('re-triage'), 'no defer note on a first triage')
 })

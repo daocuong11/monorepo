@@ -43,8 +43,13 @@
  *   lastFailure?: string | null,
  *   mergeRefusal?: { sha: string | null, at: string, reason: string } | null,
  *   triage?: { title?: string, acceptance?: string[] } | null,
+ *   defers?: number,
+ *   deferUntil?: string | null,
+ *   deferReason?: string | null,
  * }} Marker
  *   `mergeRefusal`: the last `graft pr merge` cambium was refused (task graph `merge`), and on which head.
+ *   `defers`, `deferUntil`, `deferReason`: the dispatch graph's `deferred` node: how many times triage deferred, until
+ *   when, and what the next triage should check.
  *   `triage`: what the dispatch graph's triage added when it handed the issue to `q:task`; the task prompt shows it.
  * @typedef {{ graph: string, entryNode: string, nodes?: Iterable<string> }} QueueOwner
  */
@@ -172,7 +177,8 @@ export function renderMarker(input, { maxAttempts } = {}) {
       ` · attempt ${marker.attempt}${of}` +
       (marker.pr ? ` · PR #${marker.pr}` : '') +
       (marker.host ? ` · host \`${marker.host}\`` : '') +
-      (marker.start ? ` · started ${marker.start}` : ''),
+      (marker.start ? ` · started ${marker.start}` : '') +
+      (marker.node === 'deferred' && marker.deferUntil ? ` · re-triage after ${marker.deferUntil}` : ''),
   ]
   if (marker.lastFailure)
     lines.push(

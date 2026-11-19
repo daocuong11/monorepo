@@ -101,7 +101,15 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
   "repos": [{ "slug": "oakgreencc/monorepo", "path": "~/OGCC/monorepo", "baseBranch": "main" }],
   "phases": {
     "task": { "cap": 2, "wallClockMinutes": 60, "maxTurns": 200, "maxAttempts": 3 },
-    "dispatch": { "cap": 0, "wallClockMinutes": 15, "maxTurns": 50, "maxAttempts": 3, "maxRounds": 3 }
+    "dispatch": {
+      "cap": 0,
+      "wallClockMinutes": 15,
+      "maxTurns": 50,
+      "maxAttempts": 3,
+      "maxRounds": 3,
+      "deferHours": 6,
+      "maxDefers": 8
+    }
   },
   "mergeQueueMinutes": 120,
   "merge": "none",
@@ -334,7 +342,7 @@ Every Task PR lands on `baseBranch`, so a red base fails every worker for a reas
 
 ## The dispatch graph
 
-With `"engine": "graph"` and `phases.dispatch.cap > 0`, each `q:intake` issue is triaged by a one-shot `claude -p` worker (`src/graphs/dispatch.mjs`, steps in `src/dispatch-engine.mjs`, prompt and result in `src/phases/dispatch.mjs`), then moved to `q:task`, moved to `q:human`, or closed as a duplicate.
+With `"engine": "graph"` and `phases.dispatch.cap > 0`, each `q:intake` issue is triaged by a one-shot `claude -p` worker (`src/graphs/dispatch.mjs`, steps in `src/dispatch-engine.mjs`, prompt and result in `src/phases/dispatch.mjs`), then moved to `q:task`, moved to `q:human`, closed as a duplicate or obsolete, or deferred to be triaged again later.
 
 ```mermaid
 flowchart TD
@@ -345,6 +353,8 @@ flowchart TD
   n3["to-task"]
   n4["to-human"]
   n5["close-duplicate"]
+  n6["deferred"]
+  n7["close-obsolete"]
   end_(("end"))
   start_ --> n0
   n0 -->|"started"| n1
@@ -354,6 +364,8 @@ flowchart TD
   n1 -->|"leaseLost"| n2
   n1 -->|"actionable"| n3
   n1 -->|"duplicate"| n5
+  n1 -->|"defer"| n6
+  n1 -->|"obsolete"| n7
   n1 -->|"needsHuman"| n4
   n1 --> n4
   n2 -->|"attemptsLeft"| n0
@@ -361,6 +373,9 @@ flowchart TD
   n3 --> end_
   n4 --> end_
   n5 --> end_
+  n6 -->|"budgetSpent"| n4
+  n6 --> end_
+  n7 --> end_
 ```
 
 | Node              | Kind | Queue label | Holds `running` |
@@ -371,11 +386,14 @@ flowchart TD
 | `to-task`         | step | `q:task`    | no              |
 | `to-human`        | step | `q:human`   | no              |
 | `close-duplicate` | step | none        | no              |
+| `deferred`        | step | `q:intake`  | no              |
+| `close-obsolete`  | step | none        | no              |
 
-- **The verdict.** The worker's final message must end with a JSON block, validated by zod (`TriageResult`): `{ verdict: 'actionable' | 'needs-human' | 'duplicate', duplicateOf?, reason, title?, acceptance? }` (`duplicateOf` is required on a duplicate and cannot be the issue itself). cambium reads it from the worker's stdout log: the last `result` event's `result` text, its last fenced block (else the bare JSON).
-- **Outcomes.** `actionable` → a comment with the reason, the task title and acceptance checks (when given), then `q:task` with a task-graph marker at `start-worker`, attempt 1, history kept; the checks also ride in the marker (`triage`) into the task worker's prompt. The issue body is never rewritten: cambium's write path has no issue edit, and the author's text stays as written. `needs-human` → `q:human` + `why:triage`, the reason as the state comment's last failure. `duplicate` → closed with reason `duplicate` and `Duplicate of #n (<link>). <reason>`. A missing or invalid verdict (no `result` event, no JSON, a schema error) or a worker killed at `wallClockMinutes` (the unlabelled `triaging → to-human` edge) → `q:human` + `why:triage` with the error.
+- **The verdict.** The worker's final message must end with a JSON block, validated by zod (`TriageResult`): `{ verdict: 'actionable' | 'needs-human' | 'duplicate' | 'obsolete' | 'defer', duplicateOf?, recheckHours?, reason, title?, acceptance? }` (`duplicateOf` is required on a duplicate and cannot be the issue itself). cambium reads it from the worker's stdout log: the last `result` event's `result` text, its last fenced block (else the bare JSON).
+- **Outcomes.** `actionable` → a comment with the reason, the task title and acceptance checks (when given), then `q:task` with a task-graph marker at `start-worker`, attempt 1, history kept; the checks also ride in the marker (`triage`) into the task worker's prompt. The issue body is never rewritten: cambium's write path has no issue edit, and the author's text stays as written. `needs-human` → `q:human` + `why:triage`, the reason as the state comment's last failure. `duplicate` → closed with reason `duplicate` and `Duplicate of #n (<link>). <reason>`. `obsolete` (the work no longer applies, verified: the code path is gone, already fixed, its check already passed) → closed as `not_planned` with `Obsolete: <reason>`. `defer` → stays in `q:intake` at `deferred` (see below). A missing or invalid verdict (no `result` event, no JSON, a schema error) or a worker killed at `wallClockMinutes` (the unlabelled `triaging → to-human` edge) → `q:human` + `why:triage` with the error.
 - **Read-only checkout.** Triage reads code to judge feasibility and duplicates, so it gets a checkout, but a disposable one: a detached worktree at `<root>/triage-<n>` on `origin/<base>` (the repo's worktree root), no install, hydrate or `prepare`, tools `Read,Glob,Grep,Bash` with Edit/Write and every graft/git write verb denied. It is removed outright after the verdict (no `graft status`: nothing in it is worth keeping).
 - **Retries.** A worker that cannot start, or a lost `running` lease on a `q:intake` issue (Sweep), goes back to `q:intake` with attempt + 1, then to `q:human` once `phases.dispatch.maxAttempts` are spent. A marker from another graph or a finished triage starts over at attempt 1.
+- **Defer, not a human.** A verdict that hangs on something a machine can check later (a CD run that has not happened, a release, a merge, a deploy) is `defer`, never `needs-human`: asking a human to verify what a machine can is what the factory exists to avoid. The issue rests at `deferred` with `deferUntil` (now + `recheckHours`, else `phases.dispatch.deferHours`, default 6) and `deferReason` in its marker; Schedule skips it until then, and the next triage gets the reason in its prompt ("check it now"). A defer is not a failed attempt. After `phases.dispatch.maxDefers` (default 8) it goes to `q:human` + `why:triage` with the last reason.
 - **Leaving intake.** If the issue is closed or relabelled while triage runs, the verdict is dropped and the checkout removed.
 - **Tracing.** Call sites are marked (`TRACING (follow-up)`) as in the task graph: the worker's `TRACEPARENT`, its stream-json spans, and `advanceHooks` in the driver, whose `cambium.issue` root continues mycelium's intake span from the issue body.
 

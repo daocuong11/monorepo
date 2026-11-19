@@ -2,7 +2,7 @@
 /**
  * The Dispatch phase as a graph: a `q:intake` issue is triaged by a one-shot `claude -p` worker whose final
  * message carries a typed verdict ({@link TriageResult}), then moved to `q:task`, moved to `q:human`, or closed as
- * a duplicate. Same conventions as the task graph (graphs/task.mjs): each node declares its queue label and
+ * a duplicate or obsolete, or deferred to be triaged again later. Same conventions as the task graph (graphs/task.mjs): each node declares its queue label and
  * whether it holds `running`, and a node's write is the marker first, then the labels via `move()`.
  *
  * The triage worker runs in a read-only checkout (workers.mjs `readOnly`): detached at the base branch, no install,
@@ -28,7 +28,7 @@ import { task } from './task.mjs'
  */
 
 /** The nodes an issue in `q:intake` can rest at; a marker elsewhere starts triage over at attempt 1. */
-const INTAKE_NODES = new Set(['start-triage', 'triaging', 'retry-triage'])
+const INTAKE_NODES = new Set(['start-triage', 'triaging', 'retry-triage', 'deferred'])
 
 /** The pseudo-branch that names an issue's triage checkout (`<root>/triage-<n>`); never created. @param {number} n */
 export const triageBranch = (n) => `cambium/triage-${n}`
@@ -107,6 +107,8 @@ const verdictOf = (/** @type {Triaged} */ o) => (o.exit === 'triaged' ? o.result
 const actionable = (/** @type {Triaged} */ o) => verdictOf(o) === 'actionable'
 const needsHuman = (/** @type {Triaged} */ o) => verdictOf(o) === 'needs-human'
 const duplicate = (/** @type {Triaged} */ o) => verdictOf(o) === 'duplicate'
+const obsolete = (/** @type {Triaged} */ o) => verdictOf(o) === 'obsolete'
+const defer = (/** @type {Triaged} */ o) => verdictOf(o) === 'defer'
 
 /** @param {DispatchCtx} ctx */
 export const lostLeaseOf = (ctx) => ({
@@ -148,6 +150,7 @@ const startTriage = declare(
       }
       await land(ctx, 'triaging', {
         ...m0,
+        deferUntil: null,
         host: config.host,
         start: iso(ctx.tick.now),
         input: { attempt: m0.attempt },
@@ -170,7 +173,16 @@ const startTriage = declare(
           readOnly: true,
           // This node's cambium.node span, so Claude Code's own spans (when worker.env turns them on) join the trace.
           env: ctx.traceparent ? { TRACEPARENT: ctx.traceparent } : undefined,
-          buildPrompt: (agentsMd) => triagePrompt({ repo: slug, baseBranch: repo.baseBranch, issue, queued, agentsMd }),
+          buildPrompt: (agentsMd) =>
+            triagePrompt({
+              repo: slug,
+              baseBranch: repo.baseBranch,
+              issue,
+              queued,
+              agentsMd,
+              deferHours: caps.deferHours,
+              deferred: m0.deferReason ? { count: m0.defers ?? 0, reason: m0.deferReason } : null,
+            }),
         })
       } catch (err) {
         return {
@@ -416,6 +428,98 @@ const closeDuplicate = declare(
   { queue: null, running: false },
 )
 
+const DeferIn = z.object({ reason: z.string(), recheckHours: z.number().optional(), log: z.string() })
+const deferred = declare(
+  defineNode({
+    name: 'deferred',
+    input: DeferIn,
+    output: z.discriminatedUnion('to', [
+      z.object({ to: z.literal('wait'), until: z.string() }),
+      z.object({ to: z.literal('human'), ...failure }),
+    ]),
+    /**
+     * Defer: the verdict hangs on something a machine can check later (a CD run, a release, a merge). The issue stays
+     * in `q:intake`, resting here until `deferUntil`; Schedule skips it until then, then triage runs again with this
+     * reason in its prompt. A defer is not a failed attempt; `phases.dispatch.maxDefers` bounds them.
+     * @param {z.infer<typeof DeferIn>} d @param {DispatchCtx} ctx
+     */
+    run: async (d, ctx) => {
+      const issue = issueOf(ctx)
+      const m = markerOf(issue)
+      const { deferHours, maxDefers } = ctx.config.phases.dispatch
+      const defers = (m.defers ?? 0) + 1
+      if (defers > maxDefers)
+        return {
+          to: 'human',
+          reason: `deferred ${maxDefers} times without an answer. Last: ${d.reason}`,
+          outcome: 'budget',
+        }
+      const hours = d.recheckHours ?? deferHours
+      const until = iso(ctx.tick.now + hours * 60 * MIN)
+      await land(ctx, 'deferred', {
+        ...withHistory(m, {
+          at: iso(ctx.tick.now),
+          attempt: m.attempt,
+          outcome: 'defer',
+          reason: d.reason,
+          log: d.log,
+        }),
+        defers,
+        deferUntil: until,
+        deferReason: d.reason,
+        host: null,
+        start: null,
+        input: null,
+      })
+      ctx.log('info', `triage deferred until ${until} (${defers}/${maxDefers}): ${d.reason.split('\n')[0]}`, {
+        repo: ctx.subject.slug,
+        issue: issue.number,
+      })
+      return { to: 'wait', until }
+    },
+  }),
+  { queue: Q.intake, running: false },
+)
+
+const ObsIn = z.object({ reason: z.string(), log: z.string() })
+const closeObsolete = declare(
+  defineNode({
+    name: 'close-obsolete',
+    input: ObsIn,
+    output: Empty,
+    /** Out of every queue, closed as not planned with triage's evidence. @param {z.infer<typeof ObsIn>} d @param {DispatchCtx} ctx */
+    run: async (d, ctx) => {
+      const { slug } = ctx.subject
+      const issue = issueOf(ctx)
+      const m = markerOf(issue)
+      await land(
+        ctx,
+        'close-obsolete',
+        {
+          ...withHistory(m, {
+            at: iso(ctx.tick.now),
+            attempt: m.attempt,
+            outcome: 'obsolete',
+            reason: d.reason,
+            log: d.log,
+          }),
+          host: null,
+          start: null,
+          input: null,
+        },
+        { status: 'done' },
+      )
+      await ctx.github.close(slug, issue.number, `Obsolete: ${d.reason}\n\nClosed by cambium.`, {
+        reason: 'not_planned',
+      })
+      issue.state = 'CLOSED'
+      ctx.log('info', 'obsolete; closed as not planned', { repo: slug, issue: issue.number })
+      return {}
+    },
+  }),
+  { queue: null, running: false },
+)
+
 /** @param {unknown} err */
 const errText = (err) => /** @type {Error} */ (err)?.message ?? String(err)
 
@@ -424,7 +528,7 @@ export const dispatch = defineGraph({
   name: 'dispatch',
   version: 1,
   entry: { queue: Q.intake, node: 'start-triage', input: () => ({}) },
-  nodes: [startTriage, triaging, retryTriage, toTask, toHuman, closeDuplicate],
+  nodes: [startTriage, triaging, retryTriage, toTask, toHuman, closeDuplicate, deferred, closeObsolete],
   edges: [
     ['start-triage', 'triaging', started, (o) => ({ attempt: o.attempt })],
     ['start-triage', 'to-human', budgetSpent],
@@ -433,6 +537,8 @@ export const dispatch = defineGraph({
     ['triaging', 'retry-triage', leaseLost],
     ['triaging', 'to-task', actionable, (o) => ({ ...pick(o.result, ['reason', 'title', 'acceptance']), log: o.log })],
     ['triaging', 'close-duplicate', duplicate, (o) => ({ ...pick(o.result, ['duplicateOf', 'reason']), log: o.log })],
+    ['triaging', 'deferred', defer, (o) => ({ ...pick(o.result, ['reason', 'recheckHours']), log: o.log })],
+    ['triaging', 'close-obsolete', obsolete, (o) => ({ reason: o.result.reason, log: o.log })],
     ['triaging', 'to-human', needsHuman, (o) => ({ reason: o.result.reason, outcome: 'needs-human', log: o.log })],
     ['triaging', 'to-human'],
     ['retry-triage', 'start-triage', attemptsLeft, () => ({})],
@@ -440,6 +546,9 @@ export const dispatch = defineGraph({
     ['to-task', END],
     ['to-human', END],
     ['close-duplicate', END],
+    ['deferred', 'to-human', budgetSpent],
+    ['deferred', END],
+    ['close-obsolete', END],
   ],
 })
 
