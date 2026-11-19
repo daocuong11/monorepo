@@ -348,6 +348,8 @@ export function processSpawner({
         ...config.worker.env,
         ...extraEnv,
       }
+      // A triage worker has no branch, even when cambium itself runs inside a worker's environment.
+      if (readOnly) delete env.CAMBIUM_BRANCH
       /** @type {import('node:child_process').ChildProcess} */
       let child
       try {

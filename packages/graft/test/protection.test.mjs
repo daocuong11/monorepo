@@ -370,3 +370,18 @@ test('dropUnchangedKeysAsync: what pr merge uses, same rule', async () => {
     2,
   )
 })
+
+test('check: a package\'s own package.json is neither the CODEOWNERS /package.json nor the "graft"-keyed root', () => {
+  const owned = createPolicy({ codeowners: { path: 'CODEOWNERS', text: '/package.json @alice\n' } })
+  const keyed = createPolicy()
+  for (const p of ['packages/a/package.json', './packages/a/package.json', 'apps/web/package.json']) {
+    assert.equal(owned.check(p), null, p)
+    assert.equal(keyed.check(p), null, p)
+  }
+  const v = judge({ paths: ['packages/a/package.json'], policies: [owned, keyed], keyChanged: () => true })
+  assert.equal(v.ok, true)
+  // The root's "graft" key still is protected; a change elsewhere in it is not.
+  assert.equal(judge({ paths: ['package.json'], policies: [keyed], keyChanged: () => true }).ok, false)
+  assert.equal(judge({ paths: ['package.json'], policies: [keyed], keyChanged: () => false }).ok, true)
+  assert.equal(owned.check('package.json')?.owners[0], '@alice')
+})

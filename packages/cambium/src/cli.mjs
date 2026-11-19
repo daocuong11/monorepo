@@ -14,7 +14,7 @@ import { acquireLock, readHeartbeat, realDeps, runDaemon } from './daemon.mjs'
 import { plist, plistPath } from './launchd.mjs'
 import { openStore } from './store.mjs'
 import { finish, newCtx, startTask } from './tick.mjs'
-import { runIssue } from './graph-engine.mjs'
+import { REPO_GRAPHS, runIssue } from './graph-engine.mjs'
 import { createTelemetry } from './tracing.mjs'
 import { defaultExec, realUpdater, runUpdate, VERSION } from './update.mjs'
 
@@ -29,9 +29,14 @@ export const HELP = `cambium ${VERSION} — the scheduler daemon
   cambium drain                         reconcile and watch, start no new workers
   cambium run task --issue <n> [--repo <owner/name>]
                                         claim one q:task issue, run its worker in the foreground, transition
-  cambium run <task|pr> --issue <n> [--repo <owner/name>] [--follow]
+  cambium run <task|pr|dispatch> --issue <n> [--repo <owner/name>] [--follow]
                                         engine "graph": advance the issue in the foreground to the first wait
-                                        that is not ready; --follow keeps polling until the graph ends
+                                        that is not ready; --follow keeps polling until the graph ends.
+                                        dispatch: triage a q:intake issue with a foreground triage worker
+  cambium run release-prepare [--repo <owner/name>]
+                                        engine "graph": open or refresh the promotion PR now (the day's run)
+  cambium run release-promote [--repo <owner/name>] [--issue <pr>]
+                                        engine "graph": merge each approved q:promote promotion PR (or only <pr>)
   cambium gc [--dry-run] [--repo <owner/name>]
                                         remove worktrees GitHub holds all of; archive (to ~/.cambium/gc) then
                                         remove stale ones; skip live workers and live Claude Code sessions
@@ -229,10 +234,16 @@ function status(config, io, json) {
  * @param {(config: import('./config.mjs').Config) => import('./tick.mjs').Deps} depsFor
  */
 async function runOne(config, argv, io, depsFor) {
-  const n = Number(flag(argv, '--issue'))
+  const issueFlag = flag(argv, '--issue')
+  const n = Number(issueFlag)
   const graph = argv[0]
-  if (!graph || graph.startsWith('-') || !Number.isInteger(n) || n <= 0)
-    return fail(io, 'usage: cambium run <graph> --issue <n> [--repo <owner/name>] [--follow]')
+  const optional = REPO_GRAPHS.has(graph) && issueFlag === undefined
+  if (!graph || graph.startsWith('-') || (!optional && (!Number.isInteger(n) || n <= 0)))
+    return fail(
+      io,
+      'usage: cambium run <graph> --issue <n> [--repo <owner/name>] [--follow]\n' +
+        '       cambium run <release-prepare|release-promote> [--repo <owner/name>] [--issue <pr>]',
+    )
   const follow = has(argv, '--follow')
   if (config.engine === 'legacy' && (graph !== 'task' || follow))
     return fail(io, `engine "legacy" runs only \`run task --issue <n>\`; set "engine": "graph" for graphs and --follow`)
@@ -245,7 +256,15 @@ async function runOne(config, argv, io, depsFor) {
   const deps = depsFor(config)
   if (config.engine === 'graph') {
     const r = await withTelemetry(deps, io, () =>
-      runIssue(deps, { graph, slug, number: n, follow, out: io.out, sleep: io.sleep, signal: io.signal }),
+      runIssue(deps, {
+        graph,
+        slug,
+        number: optional ? undefined : n,
+        follow,
+        out: io.out,
+        sleep: io.sleep,
+        signal: io.signal,
+      }),
     )
     return r.ok ? 0 : fail(io, /** @type {string} */ (r.error))
   }

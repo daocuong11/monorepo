@@ -276,3 +276,43 @@ test('guard: an edit to package.json is judged by its "graft" key', async () => 
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// ---------------------------------------------------------------------------
+// A package's own package.json is not the root /package.json
+// ---------------------------------------------------------------------------
+
+test('guard: packages/<x>/package.json is not the root package.json, after a `cd` too', () => {
+  const owned = createPolicy({ codeowners: { path: '.github/CODEOWNERS', text: '/package.json @alice\n' } })
+  const lookup = (/** @type {string} */ path, /** @type {string} */ cwd) => {
+    const abs = resolve(cwd, path)
+    if (abs !== ROOT && !abs.startsWith(`${ROOT}/`)) return null
+    return { rel: abs.slice(ROOT.length + 1), policy: owned, grant: G.none }
+  }
+  const bash = (/** @type {string} */ command) => bashVerdict({ command, cwd: ROOT, lookup })
+  const edit = (/** @type {string} */ filePath) => verdict({ tool: 'Edit', filePath, cwd: ROOT, lookup })
+
+  assert.equal(edit('packages/a/package.json'), null)
+  assert.equal(edit('/repo/packages/a/package.json'), null)
+  assert.match(String(edit('package.json')), /`package\.json` is protected/)
+
+  assert.equal(bash("sed -i '' 's/1.0.0/1.0.1/' packages/a/package.json"), null)
+  assert.equal(bash("cd packages/a && sed -i '' 's/1.0.0/1.0.1/' package.json"), null)
+  assert.equal(bash('cd packages; cd a && echo {} > package.json'), null)
+  assert.equal(bash('cd /repo/packages/a && echo {} > package.json'), null)
+  assert.equal(bash("cd packages/a && python3 -c \"open('package.json','w')\""), null)
+  // Still the root's: no cd, a cd back up, a cd that cannot be read, a cd in a pipeline (a subshell).
+  assert.notEqual(bash("sed -i '' 's/1.0.0/1.0.1/' package.json"), null)
+  assert.notEqual(bash('cd packages/a && cd ../.. && echo {} > package.json'), null)
+  assert.notEqual(bash('cd "$PKG" && echo {} > package.json'), null)
+  assert.notEqual(bash('cd packages/a | true; echo {} > package.json'), null)
+  assert.notEqual(bash('echo {} > package.json; cd packages/a'), null)
+})
+
+test('writeTargetsIn: each target with the directory a preceding cd moved to', async () => {
+  const { writeTargetsIn } = await import('../src/hooks/guard-protected.mjs')
+  assert.deepEqual(writeTargetsIn('echo x > a.txt && cd packages/a && rm b.txt && cd c; echo y > d.txt'), [
+    { path: 'a.txt', dir: null },
+    { path: 'd.txt', dir: 'packages/a/c' },
+    { path: 'b.txt', dir: 'packages/a' },
+  ])
+})
