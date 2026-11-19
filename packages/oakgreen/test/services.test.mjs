@@ -16,7 +16,7 @@ const HOME = '/Users/me'
  */
 function fakeLaunchd(agents) {
   let nextPid = 100
-  /** @type {Record<string, { installed: boolean, loaded: boolean, pid: number | null, stopping: number, unloading: boolean, stopTicks: number }>} */
+  /** @type {Record<string, { installed: boolean, loaded: boolean, pid: number | null, stopping: number, unloading: boolean, stopTicks: number, disabled: boolean }>} */
   const state = {}
   for (const [name, a] of Object.entries(agents))
     state[`com.oakgreencc.${name}`] = {
@@ -26,6 +26,7 @@ function fakeLaunchd(agents) {
       stopping: 0,
       unloading: false,
       stopTicks: a.stopTicks ?? 0,
+      disabled: false,
     }
   /** @type {string[][]} */
   const calls = []
@@ -45,6 +46,17 @@ function fakeLaunchd(agents) {
     assert.equal(cmd, 'launchctl')
     const [sub, ...rest] = args
     const ok = (stdout = '') => ({ code: 0, stdout, stderr: '' })
+    if (sub === 'enable' || sub === 'disable') {
+      const s = state[labelOf(rest[0])]
+      if (s) s.disabled = sub === 'disable'
+      return ok()
+    }
+    if (sub === 'kickstart') {
+      const s = state[labelOf(rest[0])]
+      if (!s?.loaded) return { code: 113, stdout: '', stderr: 'Could not find service' }
+      s.pid ??= ++nextPid
+      return ok()
+    }
     if (sub === 'print') {
       const s = state[labelOf(rest[0])]
       if (!s?.loaded) return { code: 113, stdout: '', stderr: 'Could not find service' }
@@ -67,7 +79,7 @@ function fakeLaunchd(agents) {
     if (sub === 'bootstrap') {
       const label = /** @type {string} */ (rest[1].split('/').at(-1)).replace(/\.plist$/, '')
       const s = state[label]
-      if (s.loaded) return { code: 5, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }
+      if (s.loaded || s.disabled) return { code: 5, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }
       Object.assign(s, { loaded: true, pid: ++nextPid })
       return ok()
     }
@@ -111,7 +123,7 @@ test('services: running, loaded but down, installed but not loaded, not installe
   const { ports } = fakeLaunchd({ otelcol: { loaded: false }, cambium: {} })
   const r = await run(['services'], ports)
   assert.equal(r.code, 0)
-  assert.match(r.out, /· otelcol|✗ otelcol {2}installed, not loaded: oakgreen reload otelcol/)
+  assert.match(r.out, /✗ otelcol {2}installed, not loaded: oakgreen start otelcol/)
   assert.match(r.out, /✓ cambium {2}running, pid \d+/)
   const none = fakeLaunchd({ otelcol: { installed: false, loaded: false }, cambium: {} })
   assert.match((await run(['services'], none.ports)).out, /· otelcol {2}not installed/)
@@ -121,6 +133,7 @@ test('services: running, loaded but down, installed but not loaded, not installe
     [
       ['otelcol', false, true],
       ['cambium', true, true],
+      ['mycelium', false, false],
     ],
   )
 })
@@ -188,9 +201,79 @@ test('unknown service, unknown option, and not macOS', async () => {
   const { ports } = fakeLaunchd({ cambium: {} })
   const u = await run(['restart', 'canopy'], ports)
   assert.equal(u.code, 2)
-  assert.match(u.err, /unknown service canopy \(known: otelcol, cambium\)/)
+  assert.match(u.err, /unknown service canopy \(known: otelcol, cambium, mycelium\)/)
   assert.equal((await run(['reload', '--force'], ports)).code, 2)
   const linux = await run(['services'], { ...ports, platform: 'linux' })
   assert.equal(linux.code, 2)
   assert.match(linux.err, /macOS only/)
+})
+
+/**
+ * The fake launchd's exec, plus the stack's tools: `<tool> install` writes the agent into the fake launchd (or
+ * fails, as an unconfigured one does).
+ * @param {ReturnType<typeof fakeLaunchd>} launchd @param {Record<string, string>} [fail] tool → stderr
+ */
+function installer({ ports, state }, fail = {}) {
+  /** @type {string[][]} */
+  const ran = []
+  /** @type {import('../src/tools.mjs').Exec} */
+  const exec = async (cmd, args) => {
+    if (cmd === 'launchctl') return ports.exec(cmd, args)
+    const tool = /\/(\w+)\.mjs$/.exec(cmd === process.execPath ? args[0] : cmd)?.[1] ?? cmd
+    const rest = cmd === process.execPath ? args.slice(1) : args
+    ran.push([tool, ...rest])
+    if (fail[tool]) return { code: 1, stdout: '', stderr: `${tool}: ${fail[tool]}\n` }
+    state[`com.oakgreencc.${tool}`].installed = true
+    return { code: 0, stdout: 'wrote it', stderr: '' }
+  }
+  return { exec, ran }
+}
+
+test('start: installs a missing agent through its tool, enables and loads it; running ones are left alone', async () => {
+  const launchd = fakeLaunchd({ otelcol: {}, cambium: {}, mycelium: { installed: false, loaded: false } })
+  const { ports, state, calls } = launchd
+  const before = state['com.oakgreencc.cambium'].pid
+  const { exec, ran } = installer(launchd)
+  const r = await run(['start'], { ...ports, exec })
+  assert.equal(r.code, 0, r.out + r.err)
+  assert.match(r.out, /✓ otelcol {2}already running/)
+  assert.match(r.out, new RegExp(`✓ cambium {2}already running, pid ${before}`))
+  assert.match(r.out, /✓ mycelium loaded, pid \d+/)
+  assert.deepEqual(ran, [['mycelium', 'install']])
+  const subs = calls.filter((c) => c.at(-1)?.includes('mycelium')).map((c) => c[1])
+  assert.ok(subs.indexOf('enable') < subs.indexOf('bootstrap'))
+})
+
+test('start with no names skips a service its tool cannot install; named, it fails with the reason', async () => {
+  const launchd = fakeLaunchd({ cambium: {}, mycelium: { installed: false, loaded: false } })
+  const { ports } = launchd
+  const { exec } = installer(launchd, { mycelium: 'no source is configured; write settings to ~/.mycelium/env first' })
+  const all = await run(['start'], { ...ports, exec })
+  assert.equal(all.code, 0, all.out)
+  assert.match(all.out, /· mycelium skipped: mycelium install: mycelium: no source is configured/)
+  const named = await run(['start', 'mycelium'], { ...ports, exec })
+  assert.equal(named.code, 1)
+  assert.match(named.out, /✗ mycelium mycelium install: .*no source is configured/)
+  const otel = fakeLaunchd({ otelcol: { installed: false, loaded: false } })
+  assert.match((await run(['start', 'otelcol'], otel.ports)).out, /✗ otelcol {2}not installed/)
+})
+
+test('stop: disables and unloads in reverse order; start brings it back; a loaded idle agent is kickstarted', async () => {
+  const { ports, state, calls } = fakeLaunchd({ otelcol: {}, cambium: { stopTicks: 3 }, mycelium: {} })
+  const r = await run(['stop'], ports)
+  assert.equal(r.code, 0, r.out)
+  assert.deepEqual(
+    calls.filter((c) => c[1] === 'bootout').map((c) => c.at(-1)?.split('.').at(-1)),
+    ['mycelium', 'cambium', 'otelcol'],
+  )
+  assert.ok(Object.values(state).every((s) => !s.loaded && s.disabled))
+  assert.match((await run(['restart', 'cambium'], ports)).out, /✓ cambium {2}loaded/, 'restart re-enables too')
+  assert.match((await run(['stop', 'cambium'], ports)).out, /✓ cambium {2}stopped/)
+  assert.match((await run(['stop', 'cambium'], ports)).out, /✓ cambium {2}not running/)
+  const back = await run(['start'], ports)
+  assert.equal(back.code, 0, back.out)
+  assert.ok(Object.values(state).every((s) => s.loaded && s.pid && !s.disabled))
+
+  state['com.oakgreencc.mycelium'].pid = null
+  assert.match((await run(['start', 'mycelium'], ports)).out, /✓ mycelium started, pid \d+/)
 })

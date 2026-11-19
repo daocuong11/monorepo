@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { parseArgs } from 'node:util'
+import { withEnvFile } from '@oakgreencc/mycelium/envfile'
 import { doctorOk, formatDoctor, runDoctor } from './doctor.mjs'
 import { graftGithub } from './github.mjs'
 import { runServices } from './services.mjs'
@@ -14,7 +15,9 @@ const USAGE = `oakgreen ${PKG.version} — the oakgreen stack in one command
 
   oakgreen doctor [--json] [--repo owner/name] [--config <file>]
   oakgreen setup [--dry-run] [--repo owner/name] [--config <file>]
-  oakgreen services [--json]    the stack's launchd agents (otelcol, cambium) and whether they run
+  oakgreen services [--json]    the stack's launchd agents (otelcol, cambium, mycelium) and whether they run
+  oakgreen start [service...]   install (if needed), enable and start each (default: all that can be)
+  oakgreen stop [service...]    stop each and keep it stopped across logins, until start
   oakgreen restart [service...] new process for each (default: all installed), e.g. after an npm update
   oakgreen reload [service...]  also re-read each agent's plist (its env), waiting for the old one to stop
   oakgreen <tool> [args...]     run ${Object.keys(TOOLS).join(', ')}
@@ -92,7 +95,7 @@ export async function main(argv, ports = {}) {
       return 127
     }
   }
-  if (verb === 'services' || verb === 'restart' || verb === 'reload') {
+  if (['services', 'start', 'stop', 'restart', 'reload'].includes(verb)) {
     const flags = rest.filter((a) => a.startsWith('-'))
     const bad = flags.filter((f) => !(verb === 'services' && f === '--json'))
     if (bad.length) {
@@ -100,7 +103,7 @@ export async function main(argv, ports = {}) {
       return 2
     }
     return runServices(
-      verb,
+      /** @type {import('./services.mjs').Verb} */ (verb),
       rest.filter((a) => !a.startsWith('-')),
       {
         exec,
@@ -111,6 +114,7 @@ export async function main(argv, ports = {}) {
         sleep: ports.sleep,
         now,
         json: flags.includes('--json'),
+        runTool: (tool, args) => runTool(tool, args, { cwd }),
       },
       stdout,
       stderr,
@@ -133,7 +137,8 @@ export async function main(argv, ports = {}) {
     return 0
   }
   const github = ports.github ?? graftGithub((tool, args) => runTool(tool, args, { cwd }))
-  const shared = { env, home, cwd, config: values.config, repo: values.repo, github }
+  // mycelium's settings file counts as its environment, as it does for mycelium itself.
+  const shared = { env: withEnvFile(env, { home }).env, home, cwd, config: values.config, repo: values.repo, github }
 
   if (verb === 'doctor') {
     const checks = await runDoctor({

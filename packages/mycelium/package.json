@@ -1,7 +1,7 @@
 {
   "name": "@oakgreencc/mycelium",
   "version": "0.0.6",
-  "description": "Intake connectors: Discord posts and App Store / Google Play reviews become deduplicated q:intake intent issues on GitHub.",
+  "description": "Intake connectors, run as a launchd agent: Discord posts and App Store / Google Play reviews become deduplicated q:intake intent issues on GitHub.",
   "license": "AGPL-3.0-only",
   "type": "module",
   "repository": {
@@ -23,6 +23,7 @@
   ],
   "exports": {
     ".": "./src/index.mjs",
+    "./envfile": "./src/envfile.mjs",
     "./package.json": "./package.json"
   },
   "bin": {

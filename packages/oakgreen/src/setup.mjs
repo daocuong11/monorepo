@@ -87,10 +87,12 @@ export async function runSetup(ctx) {
   steps.push(
     'Create the GitHub Apps (cambium and workers) and install them on the repo: graft setup app',
     `Set graft.app, graft.botLogin and worker.graftApp in ${file}`,
-    'Install the launchd agent: cambium install, then run the launchctl bootstrap command it prints',
+    'Start the services: oakgreen start (installs the launchd agents on first run)',
   )
   if (!myceliumSources(ctx.env).length)
-    steps.push('Optional: set MYCELIUM_* env vars for intake sources (see the mycelium README)')
+    steps.push(
+      'Optional: write MYCELIUM_* settings to ~/.mycelium/env (see the mycelium README), then: oakgreen start mycelium',
+    )
   print('\nRemaining human steps:')
   for (const [i, s] of steps.entries()) print(`  ${i + 1}. ${s}`)
   print('Then run: oakgreen doctor')
