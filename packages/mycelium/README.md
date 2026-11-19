@@ -8,11 +8,12 @@ Node ≥ 22; the only dependencies are OpenTelemetry's (see [Tracing](#tracing))
 
 ```sh
 mycelium poll <discord|asc|play> [--dry-run]   # one pass over one source
-mycelium run [--dry-run]                       # every configured source, each on its own interval
+mycelium run [--dry-run]                       # every configured source, each on its own interval, then the notifier
+mycelium notify [--dry-run]                    # one notifier pass (see Notify)
 mycelium install [--dry-run]                   # write the launchd agent for `run`
 ```
 
-As a service: write the settings to `~/.mycelium/env` (see [Configuration](#configuration)), check them with `mycelium poll <source> --dry-run`, then `oakgreen start mycelium`. That writes the agent on first use (`com.oakgreencc.mycelium`, `KeepAlive`, `mycelium run`) and starts it; `oakgreen stop|restart mycelium` and `oakgreen services` manage it from there. `mycelium install` refuses when no source is configured or `MYCELIUM_REPO` is missing, since launchd would restart a process that exits at once. The plist holds only `PATH` (captured at install; `graft` must be on it), `HOME` and an explicit `MYCELIUM_ENV`, never credentials. Its log, one timestamped tally line per pass, is `~/.mycelium/logs/mycelium.log`.
+As a service: write the settings to `~/.mycelium/env` (see [Configuration](#configuration)), check them with `mycelium poll <source> --dry-run`, then `oakgreen start mycelium`. That writes the agent on first use (`com.oakgreencc.mycelium`, `KeepAlive`, `mycelium run`) and starts it; `oakgreen stop|restart mycelium` and `oakgreen services` manage it from there. `mycelium install` refuses when no source is configured or `MYCELIUM_REPO` is missing, since launchd would restart a process that exits at once. The plist holds only `PATH` (captured at install; `graft` must be on it), `HOME` and an explicit `MYCELIUM_ENV`, never credentials. Its log is `~/.mycelium/logs/mycelium.log`: a `mycelium up:` line at start (repository, sources, notify channels), then one timestamped tally line per pass and one JSON line per issue filed or reporter answered.
 
 `--dry-run` prints one JSON line per envelope with the planned action (`create` with title/body/labels, or `comment` with the issue number) and writes nothing: no GitHub writes, no cursor moves. Without a repository it plans against no open intents.
 
@@ -49,6 +50,20 @@ Each filed envelope records one short `mycelium.intake` span (`service.name=myce
 
 Configuration is the standard `OTEL_*` environment only. Spans export over OTLP/HTTP when `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set (headers, timeout etc. from `OTEL_EXPORTER_OTLP_*`; `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` override the resource). With no endpoint, or `OTEL_SDK_DISABLED=true`, or `OTEL_TRACES_EXPORTER=none`, tracing is a no-op: the SDK is not loaded and no traceparent is written. Spans are batched and flushed before the CLI exits; `--dry-run` never records or exports.
 
+## Notify
+
+The notifier answers reporters where they reported: one acknowledgement while the intent is open (`Filed as #N <url>. You'll get one more message here when it closes.`), and one outcome note when it closes, keyed on `state_reason` (`completed` → **Fixed.**, `duplicate` (or `not_planned` + `duplicate` label) → **Closed as a duplicate.**, anything else or an `invalid` label → **Closed without a fix.**). An intent closed before it was acknowledged gets only the outcome note.
+
+Each pass reads `GET /repos/<repo>/issues?state=all&since=<cursor>` (any label: triage moves intents off `q:intake`), keeps bodies with the first-line marker, reads the source and url from the `## Intake` table, and hands each to that source's channel. What was posted is recorded per issue under `notify` in the state file before the cursor moves, so a restart never posts twice; a failed post is reported in the tally line and holds the cursor, so it is retried next pass. The first pass reads back `MYCELIUM_BACKFILL_HOURS`. `run` runs it after the sources every `MYCELIUM_NOTIFY_INTERVAL_S` (default 60).
+
+Channels are opt-in per source:
+
+| source  | setting                      | posts                                                                                                                                                          |
+| ------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| discord | `MYCELIUM_DISCORD_NOTIFY=true` | in the forum post's thread, or as a reply to the channel message; mentions never parsed. The bot needs Send Messages (and Send Messages in Threads for forums). |
+
+asc and play have no channel: their reviews are answered (or not) in the store consoles.
+
 ## State
 
 One cursor per source in `$MYCELIUM_STATE`, else `$XDG_STATE_HOME/mycelium/state.json`, else `~/.local/state/mycelium/state.json`. The cursor moves after each envelope is filed, so a crash re-reads at most the one in flight. With no cursor, a source starts `MYCELIUM_BACKFILL_HOURS` (default 24) back.
@@ -67,10 +82,12 @@ From the environment, over the settings file `$MYCELIUM_ENV` (default `~/.myceli
 | `MYCELIUM_DISCORD_TOKEN`                            | bot token (needs View Channel + Read Message History)                                          |
 | `MYCELIUM_DISCORD_CHANNELS`                         | comma list of channel ids; `forum:<id>` for a forum channel                                    |
 | `MYCELIUM_DISCORD_GUILD`                            | guild id; required for forum channels, used for message links                                  |
+| `MYCELIUM_DISCORD_NOTIFY`                           | `true` answers Discord reporters ([Notify](#notify)); the token then needs Send Messages       |
+| `MYCELIUM_NOTIFY_INTERVAL_S`                        | notifier interval in `run`, default 60                                                         |
 | `MYCELIUM_ASC_KEY_ID`, `MYCELIUM_ASC_ISSUER_ID`     | App Store Connect API key                                                                      |
 | `MYCELIUM_ASC_KEY_P8`                               | the `.p8` PEM, or its base64                                                                   |
 | `MYCELIUM_ASC_APP_ID`                               | the app's numeric App Store Connect id                                                         |
 | `MYCELIUM_PLAY_PACKAGE`                             | Android package name                                                                           |
 | `MYCELIUM_PLAY_KEY_JSON` / `MYCELIUM_PLAY_KEY_PATH` | service-account key JSON, inline or as a path (Play Console: reply to reviews / view app info) |
 
-The connectors only read: Discord, App Store Connect and Play are sent GETs (plus Google's OAuth token exchange). Play's reviews API returns only reviews created or edited in the last week.
+The connectors only read: Discord, App Store Connect and Play are sent GETs (plus Google's OAuth token exchange). The only writes outside GitHub are the [notifier](#notify)'s, and only for channels turned on. Play's reviews API returns only reviews created or edited in the last week.

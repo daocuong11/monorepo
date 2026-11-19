@@ -1,6 +1,6 @@
 // @ts-check
 import { ASC_ENV, ascConfig, ascSource } from './sources/asc.mjs'
-import { DISCORD_ENV, discordConfig, discordSource } from './sources/discord.mjs'
+import { DISCORD_ENV, discordChannel, discordConfig, discordSource } from './sources/discord.mjs'
 import { PLAY_ENV, playConfig, playSource } from './sources/play.mjs'
 
 export const SOURCES = /** @type {const} */ (['discord', 'asc', 'play'])
@@ -49,6 +49,26 @@ export function sourceFromEnv(name, { env, fetch, sleep }) {
   const source = make()
   if (!source) throw new Error(`${name}: not configured; set ${NEEDS[/** @type {keyof NEEDS} */ (name)].join(', ')}`)
   return source
+}
+
+const truthy = (/** @type {string | undefined} */ v) => /^(1|true|yes|on)$/i.test(String(v ?? '').trim())
+
+/**
+ * The notifier's reply channels, one per source that opted in
+ * (`MYCELIUM_<SOURCE>_NOTIFY=true`) and is configured. Empty: no notifier.
+ *
+ * @param {{ env: Record<string, string | undefined>, fetch: import('./http.mjs').Fetch, sleep?: (ms: number) => Promise<void> }} ports
+ * @returns {Record<string, import('./notify.mjs').Channel>}
+ */
+export function channelsFromEnv({ env, fetch, sleep }) {
+  /** @type {Record<string, import('./notify.mjs').Channel>} */
+  const channels = {}
+  if (truthy(env.MYCELIUM_DISCORD_NOTIFY)) {
+    const config = discordConfig(env)
+    if (!config) throw new Error(`discord notify: set ${DISCORD_ENV.slice(0, 2).join(', ')}`)
+    channels.discord = discordChannel({ fetch, sleep, config })
+  }
+  return channels
 }
 
 /**
@@ -103,10 +123,11 @@ export async function pass(source, { intake, state, now, backfillMs, dryRun = fa
  *   sleep: (ms: number) => Promise<void>,
  *   signal?: AbortSignal,
  *   report?: (line: string) => void,
+ *   jobs?: { name: string, intervalMs: number, run: (now: number) => Promise<string> }[],
  * }} ctx
  */
-export async function runLoop(sources, { now = Date.now, sleep, signal, report = () => {}, ...ctx }) {
-  const due = new Map(sources.map((s) => [s.name, 0]))
+export async function runLoop(sources, { now = Date.now, sleep, signal, report = () => {}, jobs = [], ...ctx }) {
+  const due = new Map([...sources, ...jobs].map((s) => [s.name, 0]))
   while (!signal?.aborted) {
     for (const s of sources) {
       if (signal?.aborted) break
@@ -120,6 +141,18 @@ export async function runLoop(sources, { now = Date.now, sleep, signal, report =
         report(`${s.name}: ${/** @type {Error} */ (err).message}`)
       }
       due.set(s.name, t + s.intervalMs)
+    }
+    // After the sources, so an intent filed this round is answered this round.
+    for (const j of jobs) {
+      if (signal?.aborted) break
+      const t = now()
+      if (t < /** @type {number} */ (due.get(j.name))) continue
+      try {
+        report(await j.run(t))
+      } catch (err) {
+        report(`${j.name}: ${/** @type {Error} */ (err).message}`)
+      }
+      due.set(j.name, t + j.intervalMs)
     }
     if (signal?.aborted) break
     await sleep(Math.max(0, Math.min(...due.values()) - now()))

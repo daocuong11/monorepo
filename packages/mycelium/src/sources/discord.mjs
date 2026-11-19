@@ -1,6 +1,7 @@
 // @ts-check
 import { envelope } from '../envelope.mjs'
 import { requestJson } from '../http.mjs'
+import { closedText, filedText } from '../notify.mjs'
 
 export const DISCORD_API = 'https://discord.com/api/v10'
 /** Discord rejects requests without a User-Agent of this shape. */
@@ -164,5 +165,54 @@ export function discordSource({ fetch, config, sleep, intervalMs = DISCORD_INTER
       }
       return out
     },
+  }
+}
+
+/**
+ * Where a Discord-filed intent is answered, from its intake url: a forum
+ * post's thread (`/channels/<guild>/<thread>`), or a reply to the message in
+ * its text channel (`/channels/<guild>/<channel>/<message>`). Null for any
+ * other url.
+ *
+ * @param {string | null} url
+ * @returns {{ channelId: string, replyTo: string | null } | null}
+ */
+export function replyTarget(url) {
+  const m = /^https:\/\/discord\.com\/channels\/\d+\/(\d+)(?:\/(\d+))?$/.exec(String(url ?? ''))
+  return m ? { channelId: m[1], replyTo: m[2] ?? null } : null
+}
+
+/**
+ * The notifier's Discord channel: posts the acknowledgement and the outcome
+ * note where the report was made. Needs Send Messages (and Send Messages in
+ * Threads for forums); mentions are never parsed, so nothing pings anyone.
+ *
+ * @param {{
+ *   fetch: import('../http.mjs').Fetch,
+ *   config: NonNullable<ReturnType<typeof discordConfig>>,
+ *   sleep?: (ms: number) => Promise<void>,
+ * }} ports
+ * @returns {import('../notify.mjs').Channel}
+ */
+export function discordChannel({ fetch, config, sleep }) {
+  /** @param {import('../notify.mjs').Intake} intake @param {string} content */
+  const post = async (intake, content) => {
+    const target = replyTarget(intake.url)
+    if (!target) throw new Error(`discord: no reply target in ${intake.url}`)
+    const path = `/channels/${target.channelId}/messages`
+    await requestJson({ fetch, sleep, label: `discord POST ${path}` }, `${DISCORD_API}${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bot ${config.token}`, 'User-Agent': USER_AGENT, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content,
+        allowed_mentions: { parse: [] },
+        ...(target.replyTo ? { message_reference: { message_id: target.replyTo, fail_if_not_exists: false } } : {}),
+      }),
+    })
+  }
+  const link = (/** @type {import('../notify.mjs').Issue} */ i) => i.html_url ?? `#${i.number}`
+  return {
+    filed: (intake, issue) => post(intake, filedText(issue.number, link(issue))),
+    closed: (intake, issue, outcome) => post(intake, closedText(outcome, link(issue))),
   }
 }

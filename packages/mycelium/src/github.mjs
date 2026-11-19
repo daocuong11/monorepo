@@ -49,6 +49,11 @@ export function graftClient({ repo, exec = defaultExec, bin = 'graft' }) {
         .filter((i) => !i.pull_request)
         .map((i) => ({ number: i.number, body: i.body ?? '' }))
     },
+    issuesSince: async (since) => {
+      const q = `state=all&since=${encodeURIComponent(since)}&sort=updated&direction=asc&per_page=100`
+      const list = await api('GET', `${base}/issues?${q}`, undefined, true)
+      return (Array.isArray(list) ? list : []).filter((i) => !i.pull_request)
+    },
     createIssue: ({ title, body, labels }) => api('POST', `${base}/issues`, { title, body, labels }),
     comment: (number, body) => api('POST', `${base}/issues/${number}/comments`, { body }),
   }

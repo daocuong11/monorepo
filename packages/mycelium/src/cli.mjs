@@ -8,14 +8,16 @@ import { envFilePath, withEnvFile } from './envfile.mjs'
 import { graftClient } from './github.mjs'
 import { createIntake } from './intake.mjs'
 import { logPath, plist, plistPath } from './launchd.mjs'
-import { BACKFILL_HOURS, SOURCES, pass, runLoop, sourceFromEnv } from './runner.mjs'
+import { createNotifier } from './notify.mjs'
+import { BACKFILL_HOURS, channelsFromEnv, SOURCES, pass, runLoop, sourceFromEnv } from './runner.mjs'
 import { defaultStatePath, fileState, memoryState } from './state.mjs'
 import { createTracing, NO_TRACING } from './telemetry.mjs'
 
 export const HELP = `mycelium — intake connectors: external events become q:intake intent issues
 
   mycelium poll <source> [--dry-run]   one pass over one source (${SOURCES.join(', ')})
-  mycelium run [--dry-run]             every configured source, each on its own interval
+  mycelium run [--dry-run]             every configured source, each on its own interval, then the notifier
+  mycelium notify [--dry-run]          one notifier pass: acknowledge new intents, post outcomes of closed ones
   mycelium install [--dry-run]         write the launchd agent for \`run\` (start it: oakgreen start mycelium)
 
 Flags:
@@ -107,7 +109,28 @@ export async function main(argv, deps = {}) {
     print: (/** @type {any} */ r) => out(JSON.stringify(r)),
   }
 
+  const channels = channelsFromEnv({ env, fetch, sleep })
+  const interval = Number(env.MYCELIUM_NOTIFY_INTERVAL_S)
+  const notifier =
+    Object.keys(channels).length && github.issuesSince
+      ? createNotifier({
+          github: /** @type {any} */ (github),
+          channels,
+          state,
+          backfillMs: ctx.backfillMs,
+          dryRun,
+          print: ctx.print,
+          intervalMs: Number.isFinite(interval) && interval > 0 ? interval * 1000 : undefined,
+        })
+      : null
+
   try {
+    if (verb === 'notify') {
+      if (!notifier)
+        throw new Error('notify: no channel is enabled (set MYCELIUM_DISCORD_NOTIFY=true) or no repository')
+      err(await notifier.run(now()))
+      return 0
+    }
     if (verb === 'poll') {
       if (!name) throw new Error(`usage: mycelium poll <source>  (${SOURCES.join(', ')})`)
       const tally = await pass(sourceFromEnv(name, { env, fetch, sleep }), { ...ctx, now: now() })
@@ -126,7 +149,9 @@ export async function main(argv, deps = {}) {
       }
       if (sources.length === 0) throw new Error('no source is configured')
       const stamp = (/** @type {string} */ l) => err(`${new Date(now()).toISOString()} ${l}`)
-      await runLoop(sources, { ...ctx, now, sleep, signal, report: stamp })
+      const notifying = notifier ? `notify ${Object.keys(channels).join(', ')}` : 'notify off'
+      stamp(`mycelium up: ${repo ?? '(no repo)'}; sources ${sources.map((s) => s.name).join(', ')}; ${notifying}`)
+      await runLoop(sources, { ...ctx, now, sleep, signal, report: stamp, jobs: notifier ? [notifier] : [] })
       return 0
     }
     throw new Error(`unknown verb '${verb}'\n\n${HELP}`)
