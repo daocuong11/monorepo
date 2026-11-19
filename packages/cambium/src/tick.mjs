@@ -17,6 +17,7 @@ import { releaseDue, releaseNotBuilt } from './phases/release.mjs'
 import { releaseGraphs } from './graphs/release.mjs'
 import { DISPATCH_NOT_BUILT, dispatchNotBuilt } from './phases/dispatch.mjs'
 import { isRepair } from './base-health.mjs'
+import { stopOverdue } from './workers.mjs'
 
 /**
  * @typedef {import('./github.mjs').Issue} Issue
@@ -235,14 +236,7 @@ async function reconcile(deps, ctx) {
     store.workers(),
     async (w) => {
       const caps = config.phases[/** @type {'task'} */ (w.phase)] ?? config.phases.task
-      if (procs.alive(w.pid)) {
-        if (!w.killedReason && ctx.now - w.startedAt <= caps.wallClockMinutes * MIN) return
-        const reason = w.killedReason ?? `killed: over the ${caps.wallClockMinutes} min wall-clock cap`
-        procs.kill(w.pid)
-        store.markKilled(w.repo, w.issue, reason)
-        w.killedReason = reason
-        deps.log('warn', `${reason} (pid ${w.pid})`, { repo: w.repo, issue: w.issue })
-      }
+      if (stopOverdue({ procs, store, log: deps.log }, w, caps.wallClockMinutes, ctx.now) !== 'gone') return
       const snap = ctx.snaps.get(w.repo)
       if (snap) await finish(deps, ctx, w, snap)
     },

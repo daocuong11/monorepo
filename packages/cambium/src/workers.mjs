@@ -14,11 +14,13 @@ import {
   readdirSync,
   readFileSync,
   readSync,
+  realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readConvention, topicOf } from './convention.mjs'
 import { exec as defaultExec } from './github.mjs'
@@ -47,7 +49,15 @@ import { exec as defaultExec } from './github.mjs'
  *   tail(path: string, lines?: number): string,
  *   readLog(path: string): string,
  * }} Spawner
- * @typedef {{ alive(pid: number): boolean, kill(pid: number): void }} Procs
+ * @typedef {{ alive(pid: number): boolean, terminate(pid: number): void, kill(pid: number): void }} Procs
+ *   `terminate`: the graceful first step (see {@link stopOverdue}); `kill`: SIGKILL, the whole tree.
+ * @typedef {{
+ *   holders(worktree: string): number[],
+ *   stopNxDaemon(worktree: string): number | null,
+ *   erase(dir: string): void,
+ * }} WorktreeSys
+ *   `holders`: pids with their cwd in the worktree, its nx daemon's tree excluded; `stopNxDaemon`: SIGTERM the
+ *   worktree's own nx daemon, returning its pid; `erase`: delete a directory without waiting for it.
  */
 
 /** The workers' tools. Labels and the issue body are cambium's, so those graft verbs are denied. */
@@ -143,7 +153,7 @@ export function readLogFile(path) {
 
 /**
  * @param {{ config: import('./config.mjs').Config, exec?: import('./github.mjs').Exec,
- *   spawnFn?: typeof spawn, stamp?: () => string }} opts
+ *   spawnFn?: typeof spawn, stamp?: () => string, sys?: WorktreeSys }} opts
  * @returns {Spawner}
  */
 export function processSpawner({
@@ -151,9 +161,37 @@ export function processSpawner({
   exec = defaultExec,
   spawnFn = spawn,
   stamp = () => new Date().toISOString().replace(/[:.]/g, '-'),
+  sys = realWorktreeSys,
 }) {
   const git = (/** @type {string} */ repoPath, /** @type {string[]} */ args) => exec('git', ['-C', repoPath, ...args])
   const graftEnv = { ...process.env, ...(config.graft.app ? { GRAFT_APP: config.graft.app } : {}) }
+  const trash = join(config.paths.home, 'trash')
+  // A previous daemon's erase may have died with it (a reboot): finish the job.
+  if (existsSync(trash)) for (const d of readdirSync(trash)) sys.erase(join(trash, d))
+
+  /**
+   * Take a worktree away without waiting for its bytes to go: stop its nx daemon (left running, it answers the
+   * next client from a tree that no longer exists, until `nx reset`), move it into `<home>/trash` (one rename),
+   * prune git's record of it, and erase the trash in the background. A Pods-sized tree took `git worktree remove`
+   * past the 120 s step timeout. A rename that fails (another volume) falls back to removing it in place.
+   *
+   * @param {import('./config.mjs').Repo} repo @param {string} worktree
+   */
+  async function discard(repo, worktree) {
+    sys.stopNxDaemon(worktree)
+    const to = join(trash, `${basename(worktree)}-${stamp()}`)
+    try {
+      mkdirSync(trash, { recursive: true })
+      renameSync(worktree, to)
+    } catch {
+      if (existsSync(join(worktree, '.git'))) await git(repo.path, ['worktree', 'remove', '--force', worktree])
+      else rmSync(worktree, { recursive: true, force: true })
+      await git(repo.path, ['worktree', 'prune']).catch(() => {})
+      return
+    }
+    await git(repo.path, ['worktree', 'prune']).catch(() => {})
+    sys.erase(to)
+  }
 
   /**
    * Fast-forward the central checkout to the just-fetched base, so the convention
@@ -213,8 +251,12 @@ export function processSpawner({
     }
     const h = await held({ repo, worktree, branch })
     if (!h.clean) return { removed: false, reason: h.reason }
+    // The worker is gone, but a process it left (or a person) may still work in here; removing the tree from
+    // under it is worse than keeping it a while. GC retries later.
+    const busy = sys.holders(worktree)
+    if (busy.length) return { removed: false, reason: `in use by pid ${busy.join(', ')}` }
     const head = (await git(worktree, ['symbolic-ref', '--short', '-q', 'HEAD']).catch(() => '')).trim()
-    await git(repo.path, ['worktree', 'remove', '--force', worktree])
+    await discard(repo, worktree)
     if (head === branch) await git(repo.path, ['branch', '-D', branch]).catch(() => {})
     return { removed: true, reason: null }
   }
@@ -224,11 +266,8 @@ export function processSpawner({
    * @param {import('./config.mjs').Repo} repo @param {string} worktree @returns {Promise<Teardown>}
    */
   async function dispose(repo, worktree) {
-    if (existsSync(join(worktree, '.git'))) await git(repo.path, ['worktree', 'remove', '--force', worktree])
-    else {
-      rmSync(worktree, { recursive: true, force: true })
-      await git(repo.path, ['worktree', 'prune']).catch(() => {})
-    }
+    if (existsSync(worktree)) await discard(repo, worktree)
+    else await git(repo.path, ['worktree', 'prune']).catch(() => {})
     return { removed: true, reason: null }
   }
 
@@ -359,14 +398,62 @@ export function descendants(root, table) {
   return out
 }
 
-/** @param {number} target */
-function sigkill(target) {
+/** @param {number} target @param {NodeJS.Signals} [signal] */
+function sigkill(target, signal = 'SIGKILL') {
   try {
-    process.kill(target, 'SIGKILL')
+    process.kill(target, signal)
     return true
   } catch {
     return false
   }
+}
+
+const psTable = () => {
+  const ps = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' })
+  return ps.status === 0 ? ps.stdout : ''
+}
+
+/** The direct children of `pid` in a `pid ppid` table. @param {number} pid @param {string} table */
+export const childrenOf = (pid, table) =>
+  table
+    .split('\n')
+    .map((l) => l.trim().split(/\s+/).map(Number))
+    .filter(([p, pp]) => pp === pid && p !== pid && Number.isInteger(p))
+    .map(([p]) => p)
+
+/** How long a terminated worker gets to end its spans and exit before SIGKILL. */
+export const KILL_GRACE_MS = 30 * 1000
+const MIN_MS = 60 * 1000
+
+/**
+ * The wall-clock cap, gracefully. Over the cap, {@link Procs.terminate}: the worker's tool processes (a test
+ * run) die at once, so the tool span ends, and Claude Code gets SIGTERM, on which it ends its interaction span
+ * and flushes its exporter (a bare SIGKILL left `claude_code.*` spans orphaned under a root that never came).
+ * Still alive {@link KILL_GRACE_MS} past the cap, and at least one call later: SIGKILL, the whole tree.
+ *
+ * @param {{ procs: Procs, store: { markKilled(repo: string, issue: number, reason: string): void },
+ *   log: (level: any, msg: string, at?: any) => void }} deps
+ * @param {{ repo: string, issue: number, pid: number, startedAt: number, killedReason: string | null }} w
+ * @param {number} wallClockMinutes @param {number} now
+ * @returns {'running' | 'stopping' | 'gone'} `gone`: run the exit check now
+ */
+export function stopOverdue({ procs, store, log }, w, wallClockMinutes, now) {
+  if (!procs.alive(w.pid)) return 'gone'
+  const at = { repo: w.repo, issue: w.issue }
+  const deadline = w.startedAt + wallClockMinutes * MIN_MS
+  if (!w.killedReason) {
+    if (now <= deadline) return 'running'
+    const reason = `killed: over the ${wallClockMinutes} min wall-clock cap`
+    procs.terminate(w.pid)
+    store.markKilled(w.repo, w.issue, reason)
+    w.killedReason = reason
+    log('warn', `${reason} (pid ${w.pid}; SIGTERM, SIGKILL in ${KILL_GRACE_MS / 1000} s)`, at)
+    return procs.alive(w.pid) ? 'stopping' : 'gone'
+  }
+  if (now <= deadline + KILL_GRACE_MS) return 'stopping'
+  procs.kill(w.pid)
+  log('warn', `pid ${w.pid} outlived SIGTERM; SIGKILL`, at)
+  return 'gone'
 }
 
 /** @type {Procs} */
@@ -383,10 +470,86 @@ export const realProcs = {
     // The process group is not enough: Claude Code runs each Bash command in a group of its own, so a test
     // run the worker started outlives the group kill and loads the next attempt. Snapshot the tree first
     // (killed children reparent to launchd and drop out of it), then kill it and the group.
-    const ps = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' })
-    const tree = ps.status === 0 ? descendants(pid, ps.stdout) : []
+    const tree = descendants(pid, psTable())
     // A detached worker leads its own process group: the negative pid takes its children with it.
     if (!sigkill(-pid)) sigkill(pid)
     for (const p of tree) sigkill(p)
+  },
+  terminate(pid) {
+    // `pid` is the prepare step; its child is `claude`, which it exits with. Everything below `claude` (Bash
+    // tools, a test run) is SIGKILLed now, `claude` gets SIGTERM. Signalling `pid` itself would orphan `claude`.
+    const table = psTable()
+    const direct = childrenOf(pid, table)
+    const keep = new Set(direct)
+    for (const p of descendants(pid, table)) if (!keep.has(p)) sigkill(p)
+    if (direct.length) for (const p of direct) sigkill(p, 'SIGTERM')
+    else sigkill(pid, 'SIGTERM')
+  },
+}
+
+const NX_DAEMON_FILE = join('.nx', 'workspace-data', 'd', 'server-process.json')
+
+/** A pid's command line, or '' when it has none (gone). @param {number} pid */
+const commandOf = (pid) => {
+  const ps = spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
+  return ps.status === 0 ? ps.stdout.trim() : ''
+}
+
+/**
+ * The nx daemon serving `worktree`: nx keys each daemon (pid file, socket) to its workspace root, so this one
+ * serves nobody else. Null unless its pid file names a live process whose command runs from this worktree (a
+ * reused pid is not ours).
+ *
+ * @param {string} worktree @param {{ read?: (p: string) => string, command?: (pid: number) => string }} [io]
+ */
+export function nxDaemonOf(worktree, { read = (p) => readFileSync(p, 'utf8'), command = commandOf } = {}) {
+  let pid
+  try {
+    pid = JSON.parse(read(join(worktree, NX_DAEMON_FILE))).processId
+  } catch {
+    return null
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return null
+  return command(pid).includes(`${worktree}/`) ? pid : null
+}
+
+/**
+ * Pids whose cwd is a root or inside it, from `lsof -F pn` output, less `except`.
+ * @param {string} out @param {string[]} roots the worktree, and its realpath if different @param {Set<number>} except
+ */
+export function cwdHolders(out, roots, except) {
+  /** @type {number[]} */
+  const pids = []
+  let pid = 0
+  for (const line of out.split('\n')) {
+    if (line.startsWith('p')) pid = Number(line.slice(1))
+    else if (line.startsWith('n') && pid && !except.has(pid)) {
+      const cwd = line.slice(1)
+      if (roots.some((r) => cwd === r || cwd.startsWith(`${r}/`)) && !pids.includes(pid)) pids.push(pid)
+    }
+  }
+  return pids
+}
+
+/** @type {WorktreeSys} */
+export const realWorktreeSys = {
+  holders(worktree) {
+    const lsof = spawnSync('lsof', ['-a', '-d', 'cwd', '-F', 'pn'], { encoding: 'utf8', timeout: 20_000 })
+    if (!lsof.stdout) return [] // no lsof: no evidence either way, as before this check existed
+    const daemon = nxDaemonOf(worktree)
+    const except = new Set([process.pid, ...(daemon ? [daemon, ...descendants(daemon, psTable())] : [])])
+    let real = worktree
+    try {
+      real = realpathSync(worktree)
+    } catch {}
+    return cwdHolders(lsof.stdout, [...new Set([worktree, real])], except)
+  },
+  stopNxDaemon(worktree) {
+    const pid = nxDaemonOf(worktree)
+    if (pid) sigkill(pid, 'SIGTERM') // nx stops its plugin workers and removes its socket on SIGTERM
+    return pid
+  },
+  erase(dir) {
+    spawn('rm', ['-rf', dir], { detached: true, stdio: 'ignore' }).unref()
   },
 }

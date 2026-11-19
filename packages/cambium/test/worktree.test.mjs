@@ -4,14 +4,14 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolveConfig } from '../src/config.mjs'
 import { branchName, readConvention, resolveConvention, slugify, topicOf } from '../src/convention.mjs'
 import { hydrate, installState, PREPARE_FAILED, prepare } from '../src/prepare.mjs'
-import { GRAFT_CLEAN, processSpawner, workerArgs } from '../src/workers.mjs'
+import { childrenOf, cwdHolders, GRAFT_CLEAN, nxDaemonOf, processSpawner, workerArgs } from '../src/workers.mjs'
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'cambium-'))
 
@@ -92,17 +92,34 @@ test('branch names: slug from the title, kebab, bounded; topic is the branch les
 
 /**
  * A spawner over a fake `exec`: `git worktree add` makes the directory (with
- * an AGENTS.md), `graft status` ends with `status`.
+ * an AGENTS.md), `graft status` ends with `status`. The worktree seams land in `calls` as `['sys', …]`;
+ * `holders` is what the in-use check finds.
  *
- * @param {{ config: import('../src/config.mjs').Config, status?: string }} o
+ * @param {{ config: import('../src/config.mjs').Config, status?: string, holders?: number[] }} o
  */
-function spawnerWith({ config, status = GRAFT_CLEAN }) {
+function spawnerWith({ config, status = GRAFT_CLEAN, holders = [] }) {
   /** @type {string[][]} */
   const calls = []
+  /** @type {import('../src/workers.mjs').WorktreeSys} */
+  const sys = {
+    holders: (wt) => {
+      calls.push(['sys', 'holders', wt])
+      return holders
+    },
+    stopNxDaemon: (wt) => {
+      calls.push(['sys', 'stop-nx', wt])
+      return null
+    },
+    erase: (dir) => {
+      calls.push(['sys', 'erase', dir])
+      rmSync(dir, { recursive: true, force: true })
+    },
+  }
   /** @type {any[]} */
   const spawned = []
   const spawner = processSpawner({
     config,
+    sys,
     stamp: () => '2026-11-16T12-00-00-000Z',
     exec: async (cmd, args) => {
       calls.push([cmd, ...args])
@@ -185,15 +202,85 @@ test('lesson #4382: a worker is a plain detached child — own worktree, own pro
   assert.equal(readFileSync(started.prompt, 'utf8'), 'PROMPT with # contract')
   assert.ok(started.stdout.startsWith(join(home, 'logs', 'o__r', 'issue-5', 'a1-')))
 
-  // Teardown: removed, with its local branch, only once graft status says GitHub has it all.
+  // Teardown: removed, with its local branch, only once graft status says GitHub has it all and nothing
+  // works in it. Its nx daemon is stopped first; the tree is moved to the trash and erased in the background.
   const t = await spawner.cleanup({ repo: config.repos[0], worktree: wt, branch: 'agent/5-fix-it' })
   assert.deepEqual(t, { removed: true, reason: null })
+  const trashed = join(home, 'trash', '5-fix-it-2026-11-16T12-00-00-000Z')
   assert.deepEqual(calls.slice(3), [
     ['graft', 'status', 'agent/5-fix-it', '-C', wt, '--repo', 'o/r'],
+    ['sys', 'holders', wt],
     ['git', '-C', wt, 'symbolic-ref', '--short', '-q', 'HEAD'],
-    ['git', '-C', repoPath, 'worktree', 'remove', '--force', wt],
+    ['sys', 'stop-nx', wt],
+    ['git', '-C', repoPath, 'worktree', 'prune'],
+    ['sys', 'erase', trashed],
     ['git', '-C', repoPath, 'branch', '-D', 'agent/5-fix-it'],
   ])
+  assert.ok(!existsSync(wt), 'gone from the worktree root at once')
+})
+
+test('teardown keeps a worktree something still works in, and leaves its nx daemon alone', async () => {
+  const repoPath = tmp()
+  const config = resolveConfig({
+    repos: [{ slug: 'o/r', path: repoPath }],
+    paths: { home: tmp() },
+    worker: { fetch: false },
+  })
+  const { spawner, calls } = spawnerWith({ config, holders: [321, 654] })
+  const { worktree } = await spawner.start(startSpec(config))
+  const t = await spawner.cleanup({ repo: config.repos[0], worktree, branch: 'agent/5-fix-it' })
+  assert.deepEqual(t, { removed: false, reason: 'in use by pid 321, 654' })
+  assert.ok(existsSync(worktree))
+  assert.ok(!calls.some((c) => c.includes('stop-nx') || c.includes('prune')))
+})
+
+test('a trash left by an earlier daemon is erased when the next one starts', () => {
+  const home = tmp()
+  mkdirSync(join(home, 'trash', 'old-wt-stamp'), { recursive: true })
+  const config = resolveConfig({ repos: [{ slug: 'o/r', path: tmp() }], paths: { home } })
+  const { calls } = spawnerWith({ config })
+  assert.deepEqual(calls, [['sys', 'erase', join(home, 'trash', 'old-wt-stamp')]])
+})
+
+test('nxDaemonOf: the pid file’s daemon only when its command runs from this worktree', () => {
+  const file = JSON.stringify({ processId: 77, socketPath: '/tmp/.nx/x/d.sock' })
+  const at = (/** @type {string} */ cmd) => nxDaemonOf('/r/wt', { read: () => file, command: () => cmd })
+  assert.equal(at('node /r/wt/node_modules/nx/dist/src/daemon/server/start.js'), 77)
+  assert.equal(at('node /r/wt-other/node_modules/nx/dist/src/daemon/server/start.js'), null, 'a sibling worktree')
+  assert.equal(at(''), null, 'gone, or the pid was reused')
+  assert.equal(
+    nxDaemonOf('/r/wt', {
+      read: () => {
+        throw new Error('ENOENT')
+      },
+      command: () => 'x',
+    }),
+    null,
+  )
+  assert.equal(nxDaemonOf('/r/wt', { read: () => '{"processId":"x"}', command: () => '/r/wt/' }), null)
+})
+
+test('cwdHolders: pids whose cwd is in the worktree, less the excepted ones', () => {
+  const out = [
+    'p10',
+    'fcwd',
+    'n/r/wt',
+    'p11',
+    'fcwd',
+    'n/r/wt/apps/mobile',
+    'p12',
+    'fcwd',
+    'n/r/wt-2',
+    'p13',
+    'n/private/r/wt',
+    'p14',
+    'n/r/wt',
+  ].join('\n')
+  assert.deepEqual(cwdHolders(out, ['/r/wt', '/private/r/wt'], new Set([14])), [10, 11, 13])
+})
+
+test('childrenOf: direct children only', () => {
+  assert.deepEqual(childrenOf(1, ' 2 1\n 3 2\n 4 1\n 1 1\n'), [2, 4])
 })
 
 test('the central checkout is fast-forwarded to the fetched base before a worktree is cut, and its convention re-read', async () => {
@@ -278,11 +365,20 @@ test('a read-only (triage) worker: a detached checkout, no install, no Edit/Writ
   // Teardown ignores graft status: nothing in a read-only checkout is kept.
   const t = await spawner.cleanup({ repo: config.repos[0], worktree: wt, branch: 'cambium/triage-5', readOnly: true })
   assert.deepEqual(t, { removed: true, reason: null })
-  assert.deepEqual(calls.slice(2), [['git', '-C', repoPath, 'worktree', 'remove', '--force', wt]])
+  const trashed = join(config.paths.home, 'trash', 'triage-5-2026-11-16T12-00-00-000Z')
+  assert.deepEqual(calls.slice(2), [
+    ['sys', 'stop-nx', wt],
+    ['git', '-C', repoPath, 'worktree', 'prune'],
+    ['sys', 'erase', trashed],
+  ])
   // A leftover from an earlier attempt is removed before the new checkout.
+  calls.length = 0
+  mkdirSync(wt, { recursive: true })
   await spawner.start(startSpec(config, { branch: 'cambium/triage-5', phase: 'dispatch', readOnly: true, attempt: 2 }))
-  assert.deepEqual(calls.slice(3), [
-    ['git', '-C', repoPath, 'worktree', 'remove', '--force', wt],
+  assert.deepEqual(calls, [
+    ['sys', 'stop-nx', wt],
+    ['git', '-C', repoPath, 'worktree', 'prune'],
+    ['sys', 'erase', trashed],
     ['git', '-C', repoPath, 'worktree', 'add', '--detach', wt, 'origin/main'],
   ])
 })
@@ -320,12 +416,17 @@ test('a clean leftover worktree is replaced fresh; a stray directory is cleared'
   const second = await spawner.start(startSpec(config, { attempt: 2 }))
   assert.equal(second.reused, null)
   const verbs = (/** @type {string[][]} */ cs) =>
-    cs.map((c) => (c[0] === 'graft' ? 'status' : c[3] === 'worktree' ? `worktree ${c[4]}` : c[3]))
+    cs.map((c) =>
+      c[0] === 'graft' ? 'status' : c[0] === 'sys' ? c[1] : c[3] === 'worktree' ? `worktree ${c[4]}` : c[3],
+    )
   assert.deepEqual(verbs(calls), [
     'worktree add',
     'status',
+    'holders',
     'symbolic-ref',
-    'worktree remove',
+    'stop-nx',
+    'worktree prune',
+    'erase',
     'branch',
     'worktree add',
   ])
