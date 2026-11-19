@@ -683,6 +683,29 @@ test('hooks: a failing hook refuses the publish and nothing reaches GitHub', asy
   }
 })
 
+test('hooks: a hook that exits without reading its stdin (EPIPE) is judged by its exit status', () => {
+  const s = hookScenario({ 'pre-push': 'exit 0' })
+  try {
+    const config = merge(DEFAULTS, { hooks: { path: '.githooks' } })
+    const epipe = Object.assign(new Error('spawnSync .githooks/pre-push EPIPE'), { code: 'EPIPE' })
+    const runner = (/** @type {number | null} */ status) =>
+      hookRunner({ git: s.git, root: s.wt, config, spawn: () => ({ status, error: epipe }) })
+    const push = { branch: 'agent/e', localSha: run(s.wt, ['rev-parse', 'HEAD']).trim(), remoteSha: null }
+    runner(0).prePush(push)
+    assert.throws(
+      () => runner(1).prePush(push),
+      (err) => err instanceof PublishError && /`pre-push` hook exited 1/.test(err.message),
+    )
+    assert.throws(
+      () => runner(null).prePush(push),
+      (err) => err instanceof PublishError && /could not run: .*EPIPE/.test(err.message),
+      'no exit status: it really could not run',
+    )
+  } finally {
+    s.cleanup()
+  }
+})
+
 test('hooks: a required hook that is missing refuses; a skipped runner runs nothing', async () => {
   const s = hookScenario({})
   try {

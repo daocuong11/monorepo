@@ -112,7 +112,9 @@ export function hookRunner({ git, root, config, skip = false, report = () => {},
       stdio: [input === undefined ? 'ignore' : 'pipe', 2, 2],
     })
     ran.push(name)
-    if (res.error)
+    // A hook that exits without reading its stdin (pre-push's ref lines) makes the write fail with EPIPE. That is
+    // not a failure to run: as git does, judge the hook by its exit status.
+    if (res.error && !(epipe(res.error) && res.status !== null))
       throw new PublishError(`refusing to publish: the \`${name}\` hook could not run: ${res.error.message}`)
     if (res.status !== 0)
       throw new PublishError(
@@ -229,6 +231,9 @@ export function previewCommit({ git, tree, parents, message }) {
     },
   }).trim()
 }
+
+/** @param {Error} err */
+const epipe = (err) => /** @type {NodeJS.ErrnoException} */ (err).code === 'EPIPE'
 
 function defaultSpawn(file, args, opts) {
   return spawnSync(file, args, { ...opts, encoding: 'utf8' })
