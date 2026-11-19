@@ -270,3 +270,9 @@ test('config: gc defaults and validation', () => {
   assert.throws(() => resolveConfig({ gc: { everyMinutes: -1 } }), /gc\.everyMinutes/)
   assert.throws(() => resolveConfig({ gc: { staleDays: '7' } }), /gc\.staleDays/)
 })
+
+test('exec: a child that exits without reading its stdin is judged by its exit code, not EPIPE', async () => {
+  const input = 'x'.repeat(4 * 1024 * 1024)
+  assert.equal(await realExec('true', [], { input }), '')
+  await assert.rejects(realExec('false', [], { input }), /false undefined exited 1/)
+})
