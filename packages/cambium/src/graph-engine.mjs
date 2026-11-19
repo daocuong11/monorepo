@@ -1,27 +1,28 @@
 // @ts-check
 /**
- * `engine: "graph"`: the Task-phase steps of the tick, driven through the `task` graph (graphs/task.mjs).
+ * `engine: "graph"`: the Task-phase steps of the tick, driven through the `task` graph (graphs/task.mjs) and the
+ * `pr` graph (graphs/pr.mjs).
  *
- * The tick keeps its shape (Reconcile → Watch → Sweep → Schedule) so both engines make the same moves in the
- * same order; each step only chooses where an issue's turn starts:
+ * The tick keeps its shape (Reconcile → Watch → Sweep → Schedule); each step only chooses where a turn starts:
  *
- * - Reconcile: every tracked worker's issue at `worker-running`.
- * - Watch: issues resting at `ci-running` / `merge-queue` (from the marker), and any task issue in no queue with
- *   an open PR (a queue label removed by hand), which starts at `ci-running` (`merge-queue` if `queued`); a
- *   merged PR goes to `close-out` from wherever the issue is.
+ * - Reconcile: every tracked worker's issue at `worker-running` (task graph, which ends at `submit`).
+ * - Watch: every agent PR paired with a cambium-owned issue, at the PR graph's `assess`: a merged one (its issue
+ *   open) to close out, an open one once its CI has settled and its issue has no Task queued or running.
  * - Sweep: a stale `running` lease runs its node's `recover` (default: `requeue`).
- * - Schedule: the gate on the entry node. Caps and priority pick the issues; each starts at `start-worker`.
+ * - Schedule: the gate on the task entry. Caps and priority pick the issues; each starts at `start-worker`.
  *
  * A turn ({@link drive}) advances one transition at a time and stops when it reaches the entry node again (only
  * Schedule admits entries), when it enters a wait (polled next tick, unless the wait is `pollOnEntry`), at END,
  * or at a wait that is not ready.
  */
 import { advance, END } from './graph/index.mjs'
-import { deleteMergedBranch, inputFor, lostLeaseOf, nodeOf, task, TASK_QUEUES, TERMINAL } from './graphs/task.mjs'
+import { deleteMergedBranch, prGraph } from './graphs/pr.mjs'
+import { HANDED_OFF, inputFor, lostLeaseOf, task, TASK_QUEUES, TERMINAL } from './graphs/task.mjs'
+import { prFor } from './phases/task.mjs'
 import { iso, key, markerOf, setLabels, setMarker } from './issue-state.mjs'
 import { effectivePosition, graphVersionDecision, withHistory } from './marker.mjs'
-import { each, newCtx, staleLeases, taskCandidates, watched, watchPairs } from './tick.mjs'
-import { move, Q } from './labels.mjs'
+import { each, newCtx, staleLeases, taskCandidates, watchPairs } from './tick.mjs'
+import { move, Q, RUNNING } from './labels.mjs'
 import { markerTrace, turnTracer } from './tracing.mjs'
 import { DISPATCH_STEPS } from './dispatch-engine.mjs'
 import { trackPromotion } from './promotion.mjs'
@@ -39,18 +40,27 @@ import { trackBaseHealth } from './base-health.mjs'
 /** @param {Deps} deps @param {Ctx} ctx @param {Subject} subject @returns {import('./graphs/task.mjs').TaskCtx} */
 const taskCtx = (deps, ctx, subject) => ({ ...deps, tick: ctx, subject })
 
+/** @param {import('./graph/define.mjs').Graph} g @param {string} name @returns {import('./graphs/task.mjs').TaskNode} */
+function nodeIn(g, name) {
+  const node = g.nodes.find((n) => n.name === name)
+  if (!node) throw new Error(`${g.name} graph has no node "${name}"`)
+  return /** @type {import('./graphs/task.mjs').TaskNode} */ (node)
+}
+
 /**
- * One issue's turn from `at`. A node error is rethrown as the node's own error (the step logs it, as the legacy
- * tick does); a worker whose `worker-running` was left is torn down only after the turn's writes succeeded.
+ * One issue's turn from `at` in graph `g` (the task graph unless given). A node error is rethrown as the node's own
+ * error (the step logs it, as the legacy tick does); a worker whose `worker-running` was left is torn down only
+ * after the turn's writes succeeded.
  *
  * @param {Deps} deps @param {Ctx} ctx @param {Subject} subject @param {Position} at
+ * @param {import('./graph/define.mjs').Graph} [g]
  * @returns {Promise<Turn>}
  */
-export async function drive(deps, ctx, subject, at) {
+export async function drive(deps, ctx, subject, at, g = task) {
   const c = taskCtx(deps, ctx, subject)
   const traced = turnTracer(deps.telemetry, subject, {
-    graph: task.name,
-    graphVersion: task.version,
+    graph: g.name,
+    graphVersion: g.version,
     repo: subject.slug,
     issue: subject.number,
     issueBody: subject.issue?.body ?? null,
@@ -62,22 +72,22 @@ export async function drive(deps, ctx, subject, at) {
   /** @type {Turn['reason']} */
   let reason
   for (;;) {
-    const r = await advance(task, pos, c, { maxTransitions: 1, instrument: traced.instrument })
+    const r = await advance(g, pos, c, { maxTransitions: 1, instrument: traced.instrument })
     if (r.error) throw r.error.cause instanceof Error ? r.error.cause : r.error
     transitions.push(...r.transitions)
     const t = r.transitions[0]
     traced.sync()
-    if (t && t.to !== END) await nodeOf(t.to).enter?.(t.next, c)
+    if (t && t.to !== END) await nodeIn(g, t.to).enter?.(t.next, c)
     pos = { node: r.node, input: r.input }
     if (r.reason !== 'limit') {
       reason = r.reason === 'waiting' ? 'waiting' : 'end'
       break
     }
-    if (r.node === task.entry.node) {
+    if (r.node === g.entry.node) {
       reason = 'gated'
       break
     }
-    const next = nodeOf(r.node)
+    const next = nodeIn(g, r.node)
     if (next.kind === 'wait' && !next.pollOnEntry) {
       reason = 'waiting'
       break
@@ -100,8 +110,9 @@ async function releaseWorker(deps, s) {
 
 /**
  * Where an issue rests in the task graph, from its labels and marker: the label wins (marker.mjs
- * `effectivePosition`), a stage-era `submitted` that the merge queue holds is `merge-queue`, and a node the
- * current graph version no longer has restarts at the entry (with a `graph-changed` history note).
+ * `effectivePosition`), a node the PR graph now owns (v1's `ci-running` … `close-out`, a stage-era `submitted`)
+ * is not the task graph's, and any other node the current graph version no longer has restarts at the entry (with
+ * a `graph-changed` history note).
  *
  * @param {import('./github.mjs').Issue} issue @param {number} now
  * @returns {(Position & { note?: import('./marker.mjs').HistoryEntry }) | null} null: not in the task graph
@@ -111,6 +122,7 @@ export function locate(issue, now) {
   const pos = effectivePosition(issue.labels, marker, TASK_QUEUES)
   if (!pos || pos.graph !== task.name) return null
   if (pos.reset || !marker) return { node: task.entry.node, input: {} }
+  if (!issue.labels.includes(Q.task) && HANDED_OFF.has(pos.node)) return null
   const v = graphVersionDecision(marker, {
     version: task.version,
     nodes: task.nodes.map((n) => n.name),
@@ -118,8 +130,7 @@ export function locate(issue, now) {
     at: iso(now),
   })
   if (v.action === 'restart') return { node: v.node, input: {}, note: v.note }
-  const node = pos.node === 'ci-running' && marker.queued ? 'merge-queue' : pos.node
-  return { node, input: inputFor(node, marker) }
+  return { node: pos.node, input: inputFor(pos.node, marker) }
 }
 
 /**
@@ -160,8 +171,20 @@ async function reconcile(deps, ctx) {
   )
 }
 
-/** The waits Watch drives: an open PR on its way to a merge. */
-const WATCHED = new Set(['ci-running', 'merging', 'merge-queue'])
+/** Queues that mean a Task is still to run (or a triage, or a promotion): the PR graph leaves the PR alone. */
+const BUSY = new Set([Q.task, Q.intake, Q.promote])
+
+/**
+ * The PR graph may assess this pair: its CI has settled and its issue has no Task queued or running (no lease, no
+ * tracked worker). `q:human` is allowed; `assess` only takes such an issue back to merge a green PR.
+ * @param {Deps} deps @param {string} slug @param {import('./github.mjs').PullRequest} pr @param {import('./github.mjs').Issue} issue
+ */
+export const assessable = (deps, slug, pr, issue) =>
+  pr.state === 'OPEN' &&
+  pr.checks !== 'PENDING' &&
+  pr.checks !== 'EXPECTED' &&
+  !issue.labels.some((l) => BUSY.has(l) || l === RUNNING) &&
+  !deps.store.worker(slug, issue.number)
 
 /** @param {Deps} deps @param {Ctx} ctx */
 async function watch(deps, ctx) {
@@ -175,20 +198,13 @@ async function watch(deps, ctx) {
         if (ctx.touched.has(key(slug, issue.number))) return
         /** @type {Subject} */
         const subject = { slug, number: issue.number, snap, issue, pr, deleted }
+        const entry = { node: prGraph.entry.node, input: {} }
         if (pr.state === 'MERGED') {
-          if (issue.state === 'OPEN') await drive(deps, ctx, subject, { node: 'close-out', input: { pr: pr.number } })
+          if (issue.state === 'OPEN') await drive(deps, ctx, subject, entry, prGraph)
           else await deleteMergedBranch(taskCtx(deps, ctx, subject), pr)
           return
         }
-        if (pr.state !== 'OPEN' || issue.state !== 'OPEN' || !watched(deps, slug, issue)) return
-        const at = locate(issue, ctx.now)
-        if (!at) return
-        if (at.note) return restart(deps, ctx, slug, issue, at.note)
-        if (WATCHED.has(at.node)) return drive(deps, ctx, subject, at)
-        // Out of every queue with an open PR, but resting elsewhere (a queue label removed by hand): watch the PR
-        // from where it is, as the legacy Watch does.
-        const node = markerOf(issue).queued ? 'merge-queue' : 'ci-running'
-        await drive(deps, ctx, subject, { node, input: { pr: pr.number, branch: pr.branch } })
+        if (assessable(deps, slug, pr, issue)) await drive(deps, ctx, subject, entry, prGraph)
       },
       ([, issue]) => ({ repo: slug, issue: issue.number }),
     )
@@ -205,7 +221,7 @@ async function sweep(deps, ctx) {
         const subject = { slug, number: issue.number, snap, issue }
         const c = taskCtx(deps, ctx, subject)
         const at = locate(issue, ctx.now)
-        const recover = (at && nodeOf(at.node).recover) || defaultRecover
+        const recover = (at && nodeIn(task, at.node).recover) || defaultRecover
         await drive(deps, ctx, subject, recover(c))
       },
       (issue) => ({ repo: slug, issue: issue.number }),
@@ -247,7 +263,9 @@ export const GRAPH_ENGINE = {
 // ---- `cambium run <graph> --issue <n> [--follow]`
 
 /** Graphs `cambium run` knows, by name. */
-export const GRAPHS = { [task.name]: task }
+export const GRAPHS = { [task.name]: task, [prGraph.name]: prGraph }
+
+export { prGraph }
 
 /**
  * The graph runtime in the foreground for one issue. A `q:task` issue without a lease starts at the entry with a
@@ -264,6 +282,7 @@ export const GRAPHS = { [task.name]: task }
 export async function runIssue(deps, { graph, slug, number, follow = false, out, sleep = delay, signal }) {
   if (!Object.hasOwn(GRAPHS, graph))
     return { ok: false, error: `unknown graph "${graph}"; known: ${Object.keys(GRAPHS).join(', ')}` }
+  if (graph === prGraph.name) return runPr(deps, { slug, number, follow, out, sleep, signal })
   /** @type {Set<number>} */
   const reaped = new Set()
   let first = true
@@ -284,7 +303,13 @@ export async function runIssue(deps, { graph, slug, number, follow = false, out,
         ? { node: 'worker-running', input: { branch: worker.branch, attempt: worker.attempt } }
         : locate(issue, ctx.now)
     if (!located || TERMINAL.has(located.node)) {
-      if (first) return { ok: false, error: `${slug}#${number} has nothing to run in the ${graph} graph` }
+      if (first)
+        return {
+          ok: false,
+          error: `${slug}#${number} has nothing to run in the ${graph} graph${
+            located ? '' : `; a submitted PR is the pr graph's: cambium run pr --issue ${number}`
+          }`,
+        }
       return report(out, slug, number, issue)
     }
     if (located.note) await restart(deps, ctx, slug, issue, located.note)
@@ -304,6 +329,37 @@ export async function runIssue(deps, { graph, slug, number, follow = false, out,
       return { ok: false, error: `${slug}#${number} was not started; see its state comment` }
     first = false
     if (turn?.reason === 'end' || !follow || signal?.aborted) return report(out, slug, number, issue)
+    await sleep(deps.config.tickSeconds * 1000)
+    if (signal?.aborted) return report(out, slug, number, issue)
+  }
+}
+
+/**
+ * `cambium run pr --issue N [--follow]`: the PR graph for the issue's agent PR, as Watch would run it: one turn
+ * when its CI has settled and no Task is queued or running, else a report. `--follow` re-reads every `tickSeconds`
+ * until the issue is closed.
+ * @param {Deps} deps
+ * @param {{ slug: string, number: number, follow: boolean, out: (line: string) => void, sleep: (ms: number) => Promise<void>, signal?: AbortSignal }} o
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+async function runPr(deps, { slug, number, follow, out, sleep, signal }) {
+  for (let first = true; ; first = false) {
+    const ctx = newCtx(deps)
+    const snap = await deps.github.read(slug)
+    ctx.snaps.set(slug, snap)
+    const issue = snap.issues.get(number)
+    const pr = issue ? prFor(snap, { issue: number, branch: issue.stateComment?.marker.branch ?? null }) : null
+    if (first && (!issue || !pr)) return { ok: false, error: `${slug}#${number} has no agent PR to assess` }
+    if (issue && pr && issue.stateComment) {
+      /** @type {Subject} */
+      const subject = { slug, number, snap, issue, pr }
+      const entry = { node: prGraph.entry.node, input: {} }
+      if ((pr.state === 'MERGED' && issue.state === 'OPEN') || assessable(deps, slug, pr, issue)) {
+        const turn = await drive(deps, ctx, subject, entry, prGraph)
+        out(`PR #${pr.number}: ${turn.transitions.map((t) => String(t.to)).join(' → ') || 'assessed'}`)
+      } else out(`PR #${pr.number}: not assessed (CI ${pr.checks ?? 'none'}, ${pr.state.toLowerCase()})`)
+    }
+    if (!follow || issue?.state !== 'OPEN' || signal?.aborted) return report(out, slug, number, issue)
     await sleep(deps.config.tickSeconds * 1000)
     if (signal?.aborted) return report(out, slug, number, issue)
   }

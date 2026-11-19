@@ -1,16 +1,17 @@
 // @ts-check
 /**
- * The Task phase as a graph: the same transitions the legacy stage tick makes (tick.mjs), expressed as typed
- * nodes. Each node declares the queue label it sits in and whether it holds `running`; every label change goes
- * through `move()` from that declaration (see {@link land}).
+ * The Task phase as a graph: a worker turns a `q:task` issue into a published PR, and the graph ends there
+ * (`submit`). What happens to the PR after that (merge, rework, close, the Human Queue) is the PR graph's
+ * (graphs/pr.mjs); a rework comes back here through `q:task`. Each node declares the queue label it sits in and
+ * whether it holds `running`; every label change goes through `move()` from that declaration (see {@link landAt}).
  *
- * Step nodes write their own transition (marker, then labels) before or after their side effect, exactly where
- * the legacy tick does. A wait node with `enter` is written by the runtime when an edge lands on it.
+ * Step nodes write their own transition (marker, then labels) before or after their side effect. A wait node
+ * with `enter` is written by the runtime when an edge lands on it.
  */
 import { z } from 'zod'
 import { defineGraph, defineNode, defineWait, END } from '../graph/index.mjs'
 import { branchName } from '../convention.mjs'
-import { failureSummary, iso, key, markerOf, MIN, setLabels, setMarker } from '../issue-state.mjs'
+import { iso, key, markerOf, MIN, setLabels, setMarker } from '../issue-state.mjs'
 import { move, Q, WHY } from '../labels.mjs'
 import { withHistory } from '../marker.mjs'
 import { linkIssue, prFor, taskExit, taskPrompt } from '../phases/task.mjs'
@@ -51,17 +52,17 @@ import { baseRed, isRepair } from '../base-health.mjs'
  * @template {import('../graph/define.mjs').GraphNode} N @param {N} node @param {Declared} decl
  * @returns {N & Declared}
  */
-const declare = (node, decl) => Object.freeze({ ...node, ...decl })
+export const declare = (node, decl) => Object.freeze({ ...node, ...decl })
 
 /** @param {TaskCtx} ctx */
-function issueOf(ctx) {
+export function issueOf(ctx) {
   const { issue } = ctx.subject
   if (!issue) throw new Error(`${ctx.subject.slug}#${ctx.subject.number} is not in the snapshot`)
   return issue
 }
 
 /** @param {TaskCtx} ctx */
-function snapOf(ctx) {
+export function snapOf(ctx) {
   const { snap } = ctx.subject
   if (!snap) throw new Error(`${ctx.subject.slug} has no snapshot this tick`)
   return snap
@@ -71,20 +72,21 @@ function snapOf(ctx) {
 const graphMarker = (m) => /** @type {Marker} */ (Object.fromEntries(Object.entries(m).filter(([k]) => k !== 'stage')))
 
 /**
- * Put the issue at `node`: the marker first, then the labels `node` declares, via `move()`. A half-applied
- * transition is re-done (and over-counted) on the next tick, never under-counted.
+ * Put the issue at `node` of graph `g`: the marker first, then the labels `node` declares, via `move()`. A
+ * half-applied transition is re-done (and over-counted) on the next tick, never under-counted.
  *
- * @param {TaskCtx} ctx @param {string} node @param {Marker} marker
+ * @param {import('../graph/define.mjs').Graph} g @param {TaskCtx} ctx @param {string} node @param {Marker} marker
  * @param {{ extra?: string[], status?: Marker['status'] }} [opts]
  */
-async function land(ctx, node, marker, { extra = [], status = 'waiting' } = {}) {
+export async function landAt(g, ctx, node, marker, { extra = [], status = 'waiting' } = {}) {
   const { slug } = ctx.subject
   const issue = issueOf(ctx)
-  const decl = nodeOf(node)
+  const decl = /** @type {Declared | undefined} */ (g.nodes.find((n) => n.name === node))
+  if (!decl) throw new Error(`${g.name} graph has no node "${node}"`)
   await setMarker(ctx, slug, issue, {
     ...graphMarker(marker),
-    graph: task.name,
-    graphVersion: task.version,
+    graph: g.name,
+    graphVersion: g.version,
     node,
     status,
     enteredAt: iso(ctx.tick.now),
@@ -93,9 +95,12 @@ async function land(ctx, node, marker, { extra = [], status = 'waiting' } = {}) 
   ctx.tick.touched.add(key(slug, issue.number))
 }
 
+/** {@link landAt} in the task graph. @param {TaskCtx} ctx @param {string} node @param {Marker} marker @param {{ extra?: string[], status?: Marker['status'] }} [opts] */
+const land = (ctx, node, marker, opts) => landAt(task, ctx, node, marker, opts)
+
 // ---- Schemas
 
-const failure = {
+export const failure = {
   reason: z.string(),
   outcome: z.string(),
   pr: z.number().int().optional(),
@@ -107,88 +112,18 @@ const failure = {
 const Failure = z.object(failure)
 const Empty = z.object({})
 const WorkerIn = z.object({ branch: z.string().nullable(), attempt: z.number().int() })
-const PrIn = z.object({ pr: z.number().int().nullable(), branch: z.string().nullable(), log: z.string().optional() })
-const PrOut = z.discriminatedUnion('to', [
-  z.object({ to: z.literal('merged'), pr: z.number().int() }),
-  z.object({ to: z.literal('queued'), pr: z.number().int(), branch: z.string() }),
-  z.object({ to: z.literal('merge'), pr: z.number().int(), branch: z.string() }),
-  z.object({ to: z.literal('human'), ...failure }),
-  z.object({ to: z.literal('requeue'), ...failure }),
-])
-
 // ---- Edge predicates (their names label the Mermaid edges)
 
 const started = (/** @type {{ to: string }} */ o) => o.to === 'running'
 const budgetSpent = (/** @type {{ to: string }} */ o) => o.to === 'human'
 const issueGone = (/** @type {{ exit: string }} */ o) => o.exit === 'gone'
 const submitted = (/** @type {{ exit: string }} */ o) => o.exit === 'submitted'
-const merged = (/** @type {{ to: string }} */ o) => o.to === 'merged'
-const inMergeQueue = (/** @type {{ to: string }} */ o) => o.to === 'queued'
-const green = (/** @type {{ to: string }} */ o) => o.to === 'merge'
-const stalled = (/** @type {{ to: string }} */ o) => o.to === 'human'
 const attemptsLeft = (/** @type {{ to: string }} */ o) => o.to === 'start'
 
 // ---- Shared checks
 
 /** A history entry's `node` from a failure's `at`, when it names one. @param {{ at?: string }} what */
-const nodeAt = (what) => (what.at ? { node: what.at } : {})
-
-/** The PR a wait is watching: Watch's pair, else the marker's PR, else the issue's. @param {TaskCtx} ctx @param {{ pr: number | null, branch: string | null }} input */
-function prOf(ctx, input) {
-  if (ctx.subject.pr) return ctx.subject.pr
-  const snap = snapOf(ctx)
-  return (
-    (input.pr !== null && snap.prs.find((p) => p.number === input.pr)) ||
-    prFor(snap, { issue: ctx.subject.number, branch: input.branch })
-  )
-}
-
-/** Red on a commit CI has not already failed on. @param {PullRequest} pr @param {Marker} m */
-const redCi = (pr, m) =>
-  (pr.checks === 'FAILURE' || pr.checks === 'ERROR') && pr.headSha !== m.failedSha
-    ? /** @type {const} */ ({
-        to: 'requeue',
-        reason: failureSummary(pr),
-        outcome: 'ci-red',
-        pr: pr.number,
-        failedSha: pr.headSha,
-      })
-    : null
-
-/** Not merged within `mergeQueueMinutes` of submission. @param {TaskCtx} ctx @param {PullRequest} pr @param {Marker} m */
-function stall(ctx, pr, m) {
-  const cap = ctx.config.mergeQueueMinutes
-  if (!m.submittedAt || ctx.tick.now - Date.parse(m.submittedAt) <= cap * MIN) return null
-  return /** @type {const} */ ({
-    to: 'human',
-    reason: `PR #${pr.number} not merged within ${cap} min of submission`,
-    outcome: 'stalled',
-    pr: pr.number,
-  })
-}
-
-/** How long a refused merge holds before cambium asks again on the same head (a red base clears without a push). */
-export const MERGE_RETRY_MINUTES = 10
-
-/**
- * Green, and cambium merges this repo's PRs (`merge: "green"`): nothing armed yet, and no refusal on this head
- * within {@link MERGE_RETRY_MINUTES}.
- * @param {TaskCtx} ctx @param {PullRequest} pr @param {Marker} m
- */
-function mergeDue(ctx, pr, m) {
-  const repo = ctx.config.repos.find((r) => r.slug === ctx.subject.slug)
-  if (repo?.merge !== 'green' || pr.checks !== 'SUCCESS' || pr.autoMerge || pr.inMergeQueue) return false
-  const r = m.mergeRefusal
-  return !r || r.sha !== pr.headSha || ctx.tick.now - Date.parse(r.at) > MERGE_RETRY_MINUTES * MIN
-}
-
-/** Delete a merged PR's branch once per tick. @param {TaskCtx} ctx @param {PullRequest} pr */
-export async function deleteMergedBranch(ctx, pr) {
-  const deleted = ctx.subject.deleted ?? new Set()
-  if (!pr.branchExists || deleted.has(pr.branch)) return
-  deleted.add(pr.branch)
-  await ctx.github.deleteBranch(ctx.subject.slug, pr.branch)
-}
+export const nodeAt = (what) => (what.at ? { node: what.at } : {})
 
 // ---- Nodes
 
@@ -381,219 +316,39 @@ export const lostLeaseOf = (ctx) => ({
   outcome: 'lost',
 })
 
-const ciRunning = declare(
-  defineWait({
-    name: 'ci-running',
-    input: PrIn,
-    output: PrOut,
-    /** @param {z.infer<typeof PrIn>} input @param {TaskCtx} ctx */
-    poll: async (input, ctx) => {
-      const issue = issueOf(ctx)
-      const pr = prOf(ctx, input)
-      if (!pr) return { ready: false }
-      if (pr.state === 'MERGED') return { ready: true, output: { to: 'merged', pr: pr.number } }
-      if (pr.state !== 'OPEN' || issue.state !== 'OPEN') return { ready: false }
-      const m = markerOf(issue)
-      const red = redCi(pr, m)
-      if (red) return { ready: true, output: red }
-      if (pr.inMergeQueue) return { ready: true, output: { to: 'queued', pr: pr.number, branch: pr.branch } }
-      if (mergeDue(ctx, pr, m)) return { ready: true, output: { to: 'merge', pr: pr.number, branch: pr.branch } }
-      const late = stall(ctx, pr, m)
-      return late ? { ready: true, output: late } : { ready: false }
-    },
-  }),
-  {
-    queue: null,
-    running: false,
-    /** @param {z.infer<typeof PrIn> & { pr: number, branch: string, log?: string }} input @param {TaskCtx} ctx */
-    enter: async (input, ctx) => {
+const SubmitIn = z.object({ pr: z.number().int(), branch: z.string(), log: z.string().optional() })
+
+const submit = declare(
+  defineNode({
+    name: 'submit',
+    input: SubmitIn,
+    output: Empty,
+    /**
+     * The worker published its PR: the task graph ends. The issue leaves every queue and the PR graph takes the PR
+     * from the next tick (graphs/pr.mjs). A PR found only by its branch gets `Closes #n`, so it can be paired.
+     * @param {z.infer<typeof SubmitIn>} input @param {TaskCtx} ctx
+     */
+    run: async (input, ctx) => {
       const m = markerOf(issueOf(ctx))
       const at = iso(ctx.tick.now)
-      await land(ctx, 'ci-running', {
-        ...withHistory(m, { at, attempt: m.attempt, outcome: 'submitted', pr: input.pr, log: input.log }),
-        pr: input.pr,
-        branch: input.branch,
-        submittedAt: at,
-        queued: false,
-        lastFailure: null,
-        input: { pr: input.pr, branch: input.branch },
-      })
-      ctx.log('info', `submitted PR #${input.pr}; watching CI`, { repo: ctx.subject.slug, issue: ctx.subject.number })
-      await linkIssue(ctx, ctx.subject.slug, prOf(ctx, input), ctx.subject.number)
-    },
-  },
-)
-
-const MergeIn = z.object({ pr: z.number().int(), branch: z.string() })
-
-const merge = declare(
-  defineNode({
-    name: 'merge',
-    input: MergeIn,
-    output: z.object({
-      pr: z.number().int(),
-      branch: z.string(),
-      refused: z.string().nullable(),
-      updated: z.string().nullable().optional(),
-    }),
-    /**
-     * Green: merge through `graft pr merge --auto` (a merge now when the PR is clean, else auto-merge), so graft's
-     * merge policy decides. A refusal is not a failure of the work: `merging` holds and asks again later.
-     *
-     * Behind its base (read live, so a merge earlier in this tick counts): update the branch instead. Its green
-     * was earned against an older base, and two PRs green on the same base can be red together (no merge queue,
-     * and the base does not require up-to-date branches). `merging` holds on the old head and merges once the
-     * updated head is green; red goes back to a worker like any red CI.
-     * @param {z.infer<typeof MergeIn>} input @param {TaskCtx} ctx
-     */
-    run: async (input, ctx) => {
-      const { slug } = ctx.subject
-      try {
-        const { behind, base } = await ctx.github.behindBase(slug, input.pr)
-        if (behind > 0) {
-          await ctx.github.updatePull(slug, input.pr)
-          const commits = `${behind} commit${behind === 1 ? '' : 's'}`
-          const updated = `PR #${input.pr} was ${commits} behind ${base}; updated it, merging once CI is green on the new head`
-          return { ...input, refused: null, updated }
-        }
-        await ctx.github.mergePull(slug, input.pr)
-        return { ...input, refused: null, updated: null }
-      } catch (err) {
-        return { ...input, refused: `merge refused: ${/** @type {Error} */ (err)?.message ?? err}`, updated: null }
-      }
-    },
-  }),
-  { queue: null, running: false },
-)
-
-const MergingIn = PrIn.extend({ refused: z.string().nullable().optional() })
-
-const merging = declare(
-  defineWait({
-    name: 'merging',
-    input: MergingIn,
-    output: PrOut,
-    /**
-     * Merged → close out. Red → requeue. Due again (a refusal on an older head, or one past the retry window) →
-     * merge. Otherwise hold until `mergeQueueMinutes` after submission.
-     * @param {z.infer<typeof MergingIn>} input @param {TaskCtx} ctx
-     */
-    poll: async (input, ctx) => {
-      const issue = issueOf(ctx)
-      const pr = prOf(ctx, input)
-      if (!pr) return { ready: false }
-      if (pr.state === 'MERGED') return { ready: true, output: { to: 'merged', pr: pr.number } }
-      if (pr.state !== 'OPEN' || issue.state !== 'OPEN') return { ready: false }
-      const m = markerOf(issue)
-      const red = redCi(pr, m)
-      if (red) return { ready: true, output: red }
-      if (m.mergeRefusal && mergeDue(ctx, pr, m))
-        return { ready: true, output: { to: 'merge', pr: pr.number, branch: pr.branch } }
-      const late = stall(ctx, pr, m)
-      return late ? { ready: true, output: late } : { ready: false }
-    },
-  }),
-  {
-    queue: null,
-    running: false,
-    /** @param {z.infer<typeof MergeIn> & { refused: string | null, updated?: string | null }} input @param {TaskCtx} ctx */
-    enter: async (input, ctx) => {
-      const { slug } = ctx.subject
-      const issue = issueOf(ctx)
-      const m = markerOf(issue)
-      const pr = prOf(ctx, input)
-      const at = iso(ctx.tick.now)
-      const { refused } = input
-      const updated = input.updated ?? null
-      // An update holds like a refusal on the head it replaced: the new head is due as soon as it is green.
-      const hold = refused ?? updated
-      await land(ctx, 'merging', {
-        ...withHistory(m, {
-          at,
-          attempt: m.attempt,
-          outcome: refused ? 'merge-refused' : updated ? 'branch-updated' : 'merge-armed',
+      await land(
+        ctx,
+        'submit',
+        {
+          ...withHistory(m, { at, attempt: m.attempt, outcome: 'submitted', pr: input.pr, log: input.log }),
           pr: input.pr,
-          ...(hold ? { reason: hold } : {}),
-        }),
-        mergeRefusal: hold ? { sha: pr?.headSha ?? null, at, reason: hold } : null,
-        lastFailure: refused ?? m.lastFailure ?? null,
-        input: { pr: input.pr, branch: input.branch },
-      })
-      if (refused) ctx.log('warn', refused.split('\n')[0], { repo: slug, issue: issue.number })
-      else if (updated) ctx.log('info', updated, { repo: slug, issue: issue.number })
-      else ctx.log('info', `merging PR #${input.pr}`, { repo: slug, issue: issue.number })
-    },
-  },
-)
-
-const mergeQueue = declare(
-  defineWait({
-    name: 'merge-queue',
-    input: PrIn,
-    output: PrOut,
-    /** @param {z.infer<typeof PrIn>} input @param {TaskCtx} ctx */
-    poll: async (input, ctx) => {
-      const issue = issueOf(ctx)
-      const pr = prOf(ctx, input)
-      if (!pr) return { ready: false }
-      if (pr.state === 'MERGED') return { ready: true, output: { to: 'merged', pr: pr.number } }
-      if (pr.state !== 'OPEN' || issue.state !== 'OPEN') return { ready: false }
-      const m = markerOf(issue)
-      const red = redCi(pr, m)
-      if (red) return { ready: true, output: red }
-      const settled = pr.checks !== 'PENDING' && pr.checks !== 'EXPECTED'
-      if (!pr.inMergeQueue && !pr.autoMerge && settled)
-        return {
-          ready: true,
-          output: {
-            to: 'requeue',
-            reason: `PR #${pr.number} left the merge queue without merging`,
-            outcome: 'dequeued',
-            pr: pr.number,
-          },
-        }
-      const late = stall(ctx, pr, m)
-      return late ? { ready: true, output: late } : { ready: false }
-    },
-  }),
-  {
-    queue: null,
-    running: false,
-    pollOnEntry: true,
-    /** @param {{ pr: number, branch: string }} input @param {TaskCtx} ctx */
-    enter: async (input, ctx) => {
-      await land(ctx, 'merge-queue', {
-        ...markerOf(issueOf(ctx)),
-        queued: true,
-        input: { pr: input.pr, branch: input.branch },
-      })
-    },
-  },
-)
-
-const closeOut = declare(
-  defineNode({
-    name: 'close-out',
-    input: z.object({ pr: z.number().int() }),
-    output: Empty,
-    /** Merged: done, out of every queue, issue closed, branch deleted. @param {{ pr: number }} input @param {TaskCtx} ctx */
-    run: async (input, ctx) => {
-      const { slug } = ctx.subject
-      const issue = issueOf(ctx)
-      const pr = prOf(ctx, { pr: input.pr, branch: null })
-      if (issue.state === 'OPEN') {
-        const m = markerOf(issue)
-        await land(
-          ctx,
-          'close-out',
-          withHistory(m, { at: iso(ctx.tick.now), attempt: m.attempt, outcome: 'merged', pr: input.pr }),
-          { status: 'done' },
-        )
-        await ctx.github.close(slug, issue.number, `Merged in #${input.pr}. Closed by cambium.`)
-        issue.state = 'CLOSED'
-        ctx.log('info', `PR #${input.pr} merged; closed`, { repo: slug, issue: issue.number })
-      }
-      if (pr) await deleteMergedBranch(ctx, pr)
+          branch: input.branch,
+          submittedAt: at,
+          queued: false,
+          lastFailure: null,
+          input: null,
+        },
+        { status: 'done' },
+      )
+      ctx.log('info', `submitted PR #${input.pr}; watching CI`, { repo: ctx.subject.slug, issue: ctx.subject.number })
+      const snap = ctx.subject.snap
+      const pr = snap?.prs.find((p) => p.number === input.pr) ?? null
+      await linkIssue(ctx, ctx.subject.slug, pr, ctx.subject.number)
       return {}
     },
   }),
@@ -678,38 +433,32 @@ const toHuman = declare(
   { queue: Q.human, running: false },
 )
 
-/** The Task phase. Bump `version` when a node is removed or renamed (see marker.mjs `graphVersionDecision`). */
+/**
+ * The Task phase. Bump `version` when a node is removed or renamed (see marker.mjs `graphVersionDecision`).
+ * v2: the PR nodes (`ci-running`, `merge`, `merging`, `merge-queue`, `close-out`) moved to the PR graph; a
+ * marker resting at one of them is the PR graph's (graph-engine.mjs `locate`), not a restart.
+ */
 export const task = defineGraph({
   name: 'task',
-  version: 1,
+  version: 2,
   entry: { queue: Q.task, node: 'start-worker', input: () => ({}) },
-  nodes: [startWorker, workerRunning, ciRunning, merge, merging, mergeQueue, closeOut, requeue, toHuman],
+  nodes: [startWorker, workerRunning, submit, requeue, toHuman],
   edges: [
     ['start-worker', 'worker-running', started],
     ['start-worker', 'to-human', budgetSpent],
     ['start-worker', 'requeue'],
     ['worker-running', END, issueGone],
-    ['worker-running', 'ci-running', submitted],
+    ['worker-running', 'submit', submitted],
     ['worker-running', 'requeue'],
-    ['ci-running', 'close-out', merged],
-    ['ci-running', 'merge-queue', inMergeQueue],
-    ['ci-running', 'merge', green],
-    ['ci-running', 'to-human', stalled],
-    ['ci-running', 'requeue'],
-    ['merge', 'merging'],
-    ['merging', 'close-out', merged],
-    ['merging', 'merge', green],
-    ['merging', 'to-human', stalled],
-    ['merging', 'requeue'],
-    ['merge-queue', 'close-out', merged],
-    ['merge-queue', 'to-human', stalled],
-    ['merge-queue', 'requeue'],
+    ['submit', END],
     ['requeue', 'start-worker', attemptsLeft],
     ['requeue', 'to-human'],
-    ['close-out', END],
     ['to-human', END],
   ],
 })
+
+/** Task-graph nodes of v1 (and stage-era `submitted`/`done`) that the PR graph now owns: an issue resting at one has a PR. */
+export const HANDED_OFF = new Set(['submit', 'ci-running', 'merge', 'merging', 'merge-queue', 'close-out'])
 
 /** @param {string} name @returns {TaskNode} */
 export function nodeOf(name) {
@@ -734,6 +483,5 @@ export const TASK_QUEUES = {
 /** The input a resting node resumes with, rebuilt from the marker. @param {string} node @param {Marker} m */
 export function inputFor(node, m) {
   if (node === 'worker-running') return { branch: m.branch, attempt: m.attempt }
-  if (node === 'ci-running' || node === 'merging' || node === 'merge-queue') return { pr: m.pr, branch: m.branch }
   return {}
 }

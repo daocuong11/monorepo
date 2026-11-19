@@ -5,7 +5,9 @@
  *
  * Every scenario runs on both engines (`engine: "legacy"` and `"graph"`): its
  * own assertions must hold on each, and then the differential check compares
- * what the two did (see `trace` in fakes.mjs).
+ * what the two did (see `trace` in fakes.mjs). Past a PR's submission the
+ * engines differ by design (the graph engine's PR graph), so those scenarios
+ * are legacy only (`legacyScenario`); test/pr-graph.test.mjs is the graph side.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -52,6 +54,22 @@ function scenario(name, fn) {
       traces[engine] = made.map(trace)
     }
     assert.deepEqual(traces.graph, traces.legacy, 'the graph engine makes the same moves as the legacy tick')
+  })
+}
+
+/**
+ * Legacy only: after a PR is submitted the graph engine runs the PR graph (merge, rework, close, human), which
+ * the stage tick does not; test/pr-graph.test.mjs covers the graph side.
+ * @param {string} name @param {() => Promise<void>} fn
+ */
+function legacyScenario(name, fn) {
+  test(`${name} (legacy)`, async () => {
+    harness = (seed = {}) => baseHarness({ ...seed, config: { ...seed.config, engine: 'legacy' } })
+    try {
+      await fn()
+    } finally {
+      harness = baseHarness
+    }
   })
 }
 
@@ -131,7 +149,7 @@ scenario('reconcile: a finished worker with an open PR → submitted, out of eve
   assert.equal(new Set(h.gh.calls.filter((c) => c.op === 'writeState').map((c) => c.args[2] ?? 'new')).size, 2)
 })
 
-scenario('reconcile: a PR found only by its branch gets Closes #n, so Watch can see it', async () => {
+legacyScenario('reconcile: a PR found only by its branch gets Closes #n, so Watch can see it', async () => {
   const h = harness({ issues: [task(9)] })
   await tick(h.deps)
   const w = /** @type {any} */ (h.deps.store.worker(SLUG, 9))
@@ -246,7 +264,7 @@ function renderBack(m) {
   return `<!-- cambium:state ${JSON.stringify(m)} -->`
 }
 
-scenario(
+legacyScenario(
   'lesson #4303: cambium never merges — a green PR waits for the queue; merged → close, delete branch',
   async () => {
     const h = harness({ issues: [task(11)] })
@@ -268,7 +286,7 @@ scenario(
   },
 )
 
-scenario('watch: red CI → requeue with the failing log summary, the next worker resumes the PR', async () => {
+legacyScenario('watch: red CI → requeue with the failing log summary, the next worker resumes the PR', async () => {
   const h = harness({ issues: [task(12)] })
   await tick(h.deps)
   h.procs.live.clear()
@@ -299,7 +317,7 @@ scenario('watch: red CI → requeue with the failing log summary, the next worke
   assert.match(String(h.gh.marker(12)?.lastFailure), /without pushing a fix/)
 })
 
-scenario('watch: the same red commit is not requeued twice', async () => {
+legacyScenario('watch: the same red commit is not requeued twice', async () => {
   const h = harness({
     issues: [{ number: 13, labels: [] }],
     prs: [{ number: 130, closes: [13], checks: 'FAILURE', headSha: 'abc' }],
@@ -313,7 +331,7 @@ scenario('watch: the same red commit is not requeued twice', async () => {
   assert.equal(h.gh.calls.filter((c) => c.op !== 'read').length, 0)
 })
 
-scenario('watch: dequeued from the merge queue → requeue', async () => {
+legacyScenario('watch: dequeued from the merge queue → requeue', async () => {
   const h = harness({ issues: [task(14)], config: { phases: { task: { cap: 1 } } } })
   await tick(h.deps)
   h.procs.live.clear()
@@ -330,7 +348,7 @@ scenario('watch: dequeued from the merge queue → requeue', async () => {
   assert.deepEqual(h.gh.issue(14).labels, ['q:task'])
 })
 
-scenario('watch: not merged within mergeQueueMinutes → q:human', async () => {
+legacyScenario('watch: not merged within mergeQueueMinutes → q:human', async () => {
   const h = harness({ issues: [task(15)] })
   await tick(h.deps)
   h.procs.live.clear()
@@ -641,7 +659,7 @@ scenario('schedule: an issue past its attempt budget goes to q:human without a w
   assert.equal(h.gh.marker(34)?.history.at(-1)?.outcome, 'budget')
 })
 
-scenario('watch: queued in the merge queue, then merged → close from there', async () => {
+legacyScenario('watch: queued in the merge queue, then merged → close from there', async () => {
   const h = harness({ issues: [task(35)] })
   await tick(h.deps)
   h.procs.live.clear()
@@ -657,7 +675,7 @@ scenario('watch: queued in the merge queue, then merged → close from there', a
   assert.equal(stageOf(h.gh.marker(35)), 'done')
 })
 
-scenario('watch: a queued PR that goes red is requeued with its failing sha', async () => {
+legacyScenario('watch: a queued PR that goes red is requeued with its failing sha', async () => {
   const h = harness({ issues: [task(36)], config: { phases: { task: { cap: 1 } } } })
   await tick(h.deps)
   h.procs.live.clear()
@@ -689,7 +707,7 @@ scenario('a human moving q:human back to q:task restarts it at the next attempt'
   assert.deepEqual(h.gh.issue(37).labels.sort(), ['q:task', 'running'])
 })
 
-scenario('a merged PR closes its issue even while the issue sits in q:task', async () => {
+legacyScenario('a merged PR closes its issue even while the issue sits in q:task', async () => {
   const h = harness({ issues: [task(38)], config: { phases: { task: { cap: 0 } } } })
   h.gh.issue(38).comment = {
     id: 11,
@@ -701,7 +719,7 @@ scenario('a merged PR closes its issue even while the issue sits in q:task', asy
   assert.deepEqual(h.gh.issue(38).labels, [])
 })
 
-scenario('watch (#38): q:human removed by hand while its PR is open — red CI is still requeued', async () => {
+legacyScenario('watch (#38): q:human removed by hand while its PR is open — red CI is still requeued', async () => {
   const h = harness({
     issues: [{ number: 39, labels: [] }],
     prs: [{ number: 390, closes: [39], checks: 'FAILURE', headSha: 'f00d000' }],
@@ -718,30 +736,33 @@ scenario('watch (#38): q:human removed by hand while its PR is open — red CI i
   assert.deepEqual(h.gh.issue(39).labels, ['q:task'])
 })
 
-scenario('watch (#38): q:task removed by hand while its PR is open — queued, then stalled → q:human', async () => {
-  const h = harness({
-    issues: [{ number: 40, labels: [] }],
-    prs: [{ number: 400, closes: [40], checks: 'PENDING' }],
-    config: { phases: { task: { cap: 0 } } },
-  })
-  h.gh.issue(40).comment = {
-    id: 13,
-    body: renderBack({
-      v: 1,
-      phase: 'task',
-      stage: 'queued',
-      attempt: 2,
-      submittedAt: new Date(h.clock.now()).toISOString(),
-      history: [],
-    }),
-  }
-  await tick(h.deps)
-  assert.equal(h.gh.calls.filter((c) => c.op !== 'read').length, 0, 'pending CI: nothing to do')
-  Object.assign(h.gh.pr(400), { checks: 'SUCCESS', inMergeQueue: true })
-  await tick(h.deps)
-  assert.equal(h.gh.marker(40)?.queued, true)
-  h.clock.advance(121 * MIN)
-  await tick(h.deps)
-  assert.deepEqual(h.gh.issue(40).labels.sort(), ['q:human', 'why:budget'])
-  assert.match(String(h.gh.marker(40)?.lastFailure), /PR #400 not merged within 120 min/)
-})
+legacyScenario(
+  'watch (#38): q:task removed by hand while its PR is open — queued, then stalled → q:human',
+  async () => {
+    const h = harness({
+      issues: [{ number: 40, labels: [] }],
+      prs: [{ number: 400, closes: [40], checks: 'PENDING' }],
+      config: { phases: { task: { cap: 0 } } },
+    })
+    h.gh.issue(40).comment = {
+      id: 13,
+      body: renderBack({
+        v: 1,
+        phase: 'task',
+        stage: 'queued',
+        attempt: 2,
+        submittedAt: new Date(h.clock.now()).toISOString(),
+        history: [],
+      }),
+    }
+    await tick(h.deps)
+    assert.equal(h.gh.calls.filter((c) => c.op !== 'read').length, 0, 'pending CI: nothing to do')
+    Object.assign(h.gh.pr(400), { checks: 'SUCCESS', inMergeQueue: true })
+    await tick(h.deps)
+    assert.equal(h.gh.marker(40)?.queued, true)
+    h.clock.advance(121 * MIN)
+    await tick(h.deps)
+    assert.deepEqual(h.gh.issue(40).labels.sort(), ['q:human', 'why:budget'])
+    assert.match(String(h.gh.marker(40)?.lastFailure), /PR #400 not merged within 120 min/)
+  },
+)

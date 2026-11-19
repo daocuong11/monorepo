@@ -29,7 +29,7 @@ export const HELP = `cambium ${VERSION} — the scheduler daemon
   cambium drain                         reconcile and watch, start no new workers
   cambium run task --issue <n> [--repo <owner/name>]
                                         claim one q:task issue, run its worker in the foreground, transition
-  cambium run <graph> --issue <n> [--repo <owner/name>] [--follow]
+  cambium run <task|pr> --issue <n> [--repo <owner/name>] [--follow]
                                         engine "graph": advance the issue in the foreground to the first wait
                                         that is not ready; --follow keeps polling until the graph ends
   cambium gc [--dry-run] [--repo <owner/name>]

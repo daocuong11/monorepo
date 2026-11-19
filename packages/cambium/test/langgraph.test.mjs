@@ -119,7 +119,7 @@ async function runLangGraph(sc) {
 
 /** @type {Record<string, Scenario>} */
 const SCENARIOS = {
-  'green path: worker submits, CI green, merge queue, merged → closed': {
+  'green path: worker submits, the task graph ends at submit': {
     number: 11,
     seed: { issues: [{ number: 11, labels: ['q:task'] }] },
     steps: [
@@ -127,41 +127,19 @@ const SCENARIOS = {
         h.procs.live.clear()
         h.gh.addPr({ number: 110, closes: [11], checks: 'SUCCESS' })
       },
-      (h) => Object.assign(h.gh.pr(110), { inMergeQueue: true }),
-      (h) => Object.assign(h.gh.pr(110), { state: 'MERGED', inMergeQueue: false }),
     ],
-    expect: ['start-worker', 'worker-running', 'ci-running', 'merge-queue', 'close-out'],
+    expect: ['start-worker', 'worker-running', 'submit'],
   },
-  'red CI: requeued, the retry exits on the red commit, attempts spent → q:human': {
+  'no PR: requeued, the retry exits without one too, attempts spent → q:human': {
     number: 12,
     seed: { issues: [{ number: 12, labels: ['q:task'] }], config: { phases: { task: { maxAttempts: 2 } } } },
-    steps: [
-      (h) => {
-        h.procs.live.clear()
-        h.gh.addPr({ number: 120, closes: [12], checks: 'PENDING', headSha: 'deadbeef00' })
-      },
-      (h) =>
-        Object.assign(h.gh.pr(120), {
-          checks: 'FAILURE',
-          failing: [{ name: 'verify', url: 'https://ci/run/1', summary: '3 tests red' }],
-        }),
-      (h) => h.procs.live.clear(),
-    ],
-    expect: [
-      'start-worker',
-      'worker-running',
-      'ci-running',
-      'requeue',
-      'start-worker',
-      'worker-running',
-      'requeue',
-      'to-human',
-    ],
+    steps: [(h) => h.procs.live.clear(), (h) => h.procs.live.clear()],
+    expect: ['start-worker', 'worker-running', 'requeue', 'start-worker', 'worker-running', 'requeue', 'to-human'],
   },
   'budget exhausted: past maxAttempts → q:human without a worker': {
     number: 13,
     seed: { issues: [{ number: 13, labels: ['q:task'] }] },
-    marker: { v: 2, graph: 'task', graphVersion: 1, node: 'start-worker', status: 'waiting', attempt: 4, history: [] },
+    marker: { v: 2, graph: 'task', graphVersion: 2, node: 'start-worker', status: 'waiting', attempt: 4, history: [] },
     steps: [],
     expect: ['start-worker', 'to-human'],
   },
@@ -181,7 +159,7 @@ for (const [name, sc] of Object.entries(SCENARIOS))
   })
 
 test('langgraph export: wait nodes interrupt with { waiting, input }; the router follows our edges', async () => {
-  const sc = SCENARIOS['green path: worker submits, CI green, merge queue, merged → closed']
+  const sc = SCENARIOS['green path: worker submits, the task graph ends at submit']
   const { ctx } = await world(sc)
   const app = (await toLangGraph(task, { langgraph })).compile({ checkpointer: new MemorySaver() })
   const config = { configurable: { thread_id: 't' }, context: ctx }

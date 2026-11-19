@@ -19,18 +19,18 @@ cambium status
 
 ## Commands
 
-| Command                                                            | What                                                                                                                                                                                                                                                                                                                                                      |
-| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cambium start [--once]`                                           | Foreground daemon, one tick every `tickSeconds`. SIGTERM/SIGINT stop it after the current tick; workers keep running and are re-adopted on restart. One daemon per database.                                                                                                                                                                              |
-| `cambium status [--json]`                                          | Mode, last tick, queue counts, workers, failed steps. Exit 1 when there is no heartbeat or it is older than 3 ticks.                                                                                                                                                                                                                                      |
-| `cambium pause`                                                    | Read and heartbeat only: no transitions, no starts. Running workers are left alone.                                                                                                                                                                                                                                                                       |
-| `cambium drain`                                                    | Reconcile, watch and sweep as usual; start nothing new.                                                                                                                                                                                                                                                                                                   |
-| `cambium resume`                                                   | Back to `running`.                                                                                                                                                                                                                                                                                                                                        |
-| `cambium run task --issue <n> [--repo <owner/name>]`               | Claim one open `q:task` issue, run its worker in the foreground, then make the same transition the daemon would.                                                                                                                                                                                                                                          |
-| `cambium run <graph> --issue <n> [--repo <owner/name>] [--follow]` | `engine: "graph"` only (`task` is the one graph today). Advance one issue through the graph runtime in the foreground: a `q:task` issue without a lease starts with a foreground worker; anything else resumes where its marker rests. Stops at the first wait that is not ready; `--follow` re-reads and polls every `tickSeconds` until the graph ends. |
-| `cambium gc [--dry-run] [--repo <owner/name>]`                     | Collect worktrees now; `--dry-run` only reports. See [Worktree GC](#worktree-gc).                                                                                                                                                                                                                                                                         |
-| `cambium install [--dry-run]`                                      | Write the launchd agent (`KeepAlive`, `RunAtLoad`) for `start --config <this config>`; `--dry-run` prints it. It does not call `launchctl`; it prints the command.                                                                                                                                                                                        |
-| `cambium update [--check] [--version <v>]`                         | Install the latest version (or `<v>`, even an older one) from npm into this global install, then SIGTERM the launchd agent so it finishes its tick and KeepAlive starts the new version. `--check` only reports. No config file needed. See [Self-update](#self-update).                                                                                  |
+| Command                                              | What                                                                                                                                                                                                                                                                     |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cambium start [--once]`                             | Foreground daemon, one tick every `tickSeconds`. SIGTERM/SIGINT stop it after the current tick; workers keep running and are re-adopted on restart. One daemon per database.                                                                                             |
+| `cambium status [--json]`                            | Mode, last tick, queue counts, workers, failed steps. Exit 1 when there is no heartbeat or it is older than 3 ticks.                                                                                                                                                     |
+| `cambium pause`                                      | Read and heartbeat only: no transitions, no starts. Running workers are left alone.                                                                                                                                                                                      |
+| `cambium drain`                                      | Reconcile, watch and sweep as usual; start nothing new.                                                                                                                                                                                                                  |
+| `cambium resume`                                     | Back to `running`.                                                                                                                                                                                                                                                       |
+| `cambium run task --issue <n> [--repo <owner/name>]` | Claim one open `q:task` issue, run its worker in the foreground, then make the same transition the daemon would.                                                                                                                                                         |
+| `cambium run <task                                   | pr> --issue <n> [--repo <owner/name>] [--follow]`                                                                                                                                                                                                                        | `engine: "graph"` only. `pr`: the [PR graph](#the-pr-graph) for the issue's PR. `task`: Advance one issue through the graph runtime in the foreground: a `q:task` issue without a lease starts with a foreground worker; anything else resumes where its marker rests. Stops at the first wait that is not ready; `--follow` re-reads and polls every `tickSeconds` until the graph ends. |
+| `cambium gc [--dry-run] [--repo <owner/name>]`       | Collect worktrees now; `--dry-run` only reports. See [Worktree GC](#worktree-gc).                                                                                                                                                                                        |
+| `cambium install [--dry-run]`                        | Write the launchd agent (`KeepAlive`, `RunAtLoad`) for `start --config <this config>`; `--dry-run` prints it. It does not call `launchctl`; it prints the command.                                                                                                       |
+| `cambium update [--check] [--version <v>]`           | Install the latest version (or `<v>`, even an older one) from npm into this global install, then SIGTERM the launchd agent so it finishes its tick and KeepAlive starts the new version. `--check` only reports. No config file needed. See [Self-update](#self-update). |
 
 Every command takes `--config <file>`; the default is `$CAMBIUM_CONFIG`, then `~/.cambium/config.json`.
 
@@ -38,15 +38,15 @@ Every command takes `--config <file>`; the default is `$CAMBIUM_CONFIG`, then `~
 
 Each step is bounded by `stepTimeoutSeconds`. A step that throws or times out is logged and recorded in the heartbeat, and the tick moves on. Nothing waits on a worker.
 
-1. **Read.** One GraphQL query per repo (`graft graphql`): open issues with any `q:` label, open and recently merged PRs on `agent/*` with their check rollup, merge-queue state and the issues they close. GitHub links closing references only for a PR into the default branch, so cambium also reads `Closes/Fixes/Resolves #n` from the PR body, fetching issues the first query did not read in one more. A worker's PR that names no issue (found by its branch) gets `Closes #n` added at submission.
+1. **Read.** One GraphQL query per repo (`graft graphql`): open issues with any `q:` label, open and recently merged PRs on `agent/*` with their check rollup, merge-queue state, `mergeable`, `reviewDecision` and the issues they close. GitHub links closing references only for a PR into the default branch, so cambium also reads `Closes/Fixes/Resolves #n` from the PR body, fetching issues the first query did not read in one more. A worker's PR that names no issue (found by its branch) gets `Closes #n` added at submission.
 2. **Reconcile.** For each tracked worker: alive and under its wall-clock cap → nothing. Over the cap → kill its process group and every descendant (Claude Code runs each Bash command in a group of its own, so a group kill alone left a test run loading the next attempt). Gone → exit check (a PR on its branch, or closing its issue, that is open or merged and not still on the commit CI already failed) → `submitted`; otherwise requeue with the stderr tail (a failed prepare step requeues as `spawn-failed`). Then the worktree is torn down if `graft status` says GitHub holds everything in it, else kept with a `warn` saying why.
-3. **Watch** (no agent), for agent PRs whose issue is in no queue: merged → close the issue, delete the branch; red → requeue with the failing checks' summaries; left the merge queue without merging → requeue; not merged `mergeQueueMinutes` after submission → `q:human`.
+3. **Watch** (no agent). Graph engine: the [PR graph](#the-pr-graph), once per tick for each agent PR whose CI has settled and whose issue has no Task queued or running: merge, rework, close, or `q:human`. Legacy, for agent PRs whose issue is in no queue: merged → close the issue, delete the branch; red → requeue with the failing checks' summaries; left the merge queue without merging → requeue; not merged `mergeQueueMinutes` after submission → `q:human`.
 4. **Sweep.** An issue labelled `running` with this host (or no host) in its marker and no tracked worker → requeue. This is what makes losing the SQLite file cost one requeue.
 5. **Schedule.** Start Task workers for `q:task` issues without `running`, by priority label then age, up to `phases.task.cap` counted from live workers. A task requeued earlier in the same tick can start in that tick. Then, with `engine: "graph"` and `phases.dispatch.cap > 0`, start triage workers for `q:intake` issues the same way ([the dispatch graph](#the-dispatch-graph)).
 6. **Release.** Legacy: once a day at `release.time` when `release.enabled`; the run itself is a seam. Graph: the [release graphs](#the-release-graphs), per repo.
 7. **Heartbeat.** Write the state file.
 
-A requeue is `q:task` with attempt + 1, or, once `maxAttempts` are spent, `q:human` + `why:budget`. Who merges a Task PR is the repo's `merge` setting ([Merging](#merging)): by default not cambium (a merge queue, auto-merge or a human); with `"merge": "green"` cambium merges it once CI is green. The other merge cambium asks for is an approved promotion PR, through `graft pr merge`; see [The release graphs](#the-release-graphs).
+A requeue is `q:task` with attempt + 1, or, once `maxAttempts` are spent, `q:human` + `why:budget`. Who merges a Task PR is the repo's `merge` setting ([The PR graph](#the-pr-graph)): by default not cambium (a merge queue, auto-merge or a human); with `"merge": "green"` cambium merges it once CI is green. The other merge cambium asks for is an approved promotion PR, through `graft pr merge`; see [The release graphs](#the-release-graphs).
 
 ## State on GitHub
 
@@ -100,7 +100,7 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
   "stepTimeoutSeconds": 20,
   "repos": [{ "slug": "oakgreencc/monorepo", "path": "~/OGCC/monorepo", "baseBranch": "main" }],
   "phases": {
-    "task": { "cap": 2, "wallClockMinutes": 60, "maxTurns": 200, "maxAttempts": 3 },
+    "task": { "cap": 2, "wallClockMinutes": 60, "maxTurns": 200, "maxAttempts": 3, "maxReworks": 3 },
     "dispatch": {
       "cap": 0,
       "wallClockMinutes": 15,
@@ -134,7 +134,7 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
 - The daemon re-reads the file before every tick, so caps, limits, `tickSeconds`, `repos`, priority labels, `release` and `worker` take effect without a restart (logged as `config reloaded: <keys>`). `host`, `engine`, `paths`, `logs` and `graft` are baked in at start: a change to them logs `restart cambium to apply` once and is not applied. A file that does not load, or has no `repos`, keeps the running config and logs one warning until it is fixed.
 - `repos[].path` is a local clone; worktrees are added from it and `graft` runs in it.
 - `graft.app` is the App cambium acts as (`GRAFT_APP` for its own `graft` calls); `worker.graftApp` the one workers act as. Neither leaks into the other.
-- `merge` (top level, or per repo in `repos[]`): who merges a Task PR. See [Merging](#merging).
+- `merge` (top level, or per repo in `repos[]`): who merges a Task PR. See [The PR graph](#the-pr-graph).
 - `repos[].requiredCheck` (default `"ci"`): the check whose runs on `baseBranch` say whether the base is green; `null` turns the [red-base](#red-base) gate and repair off for that repo.
 - `engine` picks how the Task phase runs: `"legacy"` (the stage tick, the default) or `"graph"` (the [`task` graph](#the-task-graph)). Both make the same moves; see [The task graph](#the-task-graph). Only `"graph"` runs the [`dispatch` graph](#the-dispatch-graph) (gated by `phases.dispatch.cap`); legacy leaves `q:intake` alone.
 - Setting `paths.home` moves every default path under it.
@@ -261,45 +261,28 @@ The mode lives in the SQLite file (`paths.db`, table `control`), so `cambium sta
 
 ## The task graph
 
-With `"engine": "graph"` the tick's Task-phase steps (Reconcile, Watch, Sweep, Schedule) drive the `task` graph (`src/graphs/task.mjs`) instead of the stage tick in `src/tick.mjs`. The default stays `"legacy"`; flipping it and deleting the legacy path is a follow-up.
+With `"engine": "graph"` the tick's Task-phase steps (Reconcile, Sweep, Schedule) drive the `task` graph (`src/graphs/task.mjs`) instead of the stage tick in `src/tick.mjs`. The default stays `"legacy"`; flipping it and deleting the legacy path is a follow-up. The task graph turns a `q:task` issue into a published PR and **ends there** (`submit`); the PR is then the [PR graph](#the-pr-graph)'s.
 
 ```mermaid
 flowchart TD
   start_(["q:task"])
   n0["start-worker"]
   n1{{"worker-running"}}
-  n2{{"ci-running"}}
-  n3["merge"]
-  n4{{"merging"}}
-  n5{{"merge-queue"}}
-  n6["close-out"]
-  n7["requeue"]
-  n8["to-human"]
+  n2["submit"]
+  n3["requeue"]
+  n4["to-human"]
   end_(("end"))
   start_ --> n0
   n0 -->|"started"| n1
-  n0 -->|"budgetSpent"| n8
-  n0 --> n7
+  n0 -->|"budgetSpent"| n4
+  n0 --> n3
   n1 -->|"issueGone"| end_
   n1 -->|"submitted"| n2
-  n1 --> n7
-  n2 -->|"merged"| n6
-  n2 -->|"inMergeQueue"| n5
-  n2 -->|"green"| n3
-  n2 -->|"stalled"| n8
-  n2 --> n7
+  n1 --> n3
+  n2 --> end_
+  n3 -->|"attemptsLeft"| n0
   n3 --> n4
-  n4 -->|"merged"| n6
-  n4 -->|"green"| n3
-  n4 -->|"stalled"| n8
-  n4 --> n7
-  n5 -->|"merged"| n6
-  n5 -->|"stalled"| n8
-  n5 --> n7
-  n7 -->|"attemptsLeft"| n0
-  n7 --> n8
-  n6 --> end_
-  n8 --> end_
+  n4 --> end_
 ```
 
 Generated by `toMermaid(task)`; a test keeps this copy current. Boxes are step nodes, hexagons are waits.
@@ -308,29 +291,67 @@ Generated by `toMermaid(task)`; a test keeps this copy current. Boxes are step n
 | ---------------- | ---- | ----------- | --------------- |
 | `start-worker`   | step | `q:task`    | no              |
 | `worker-running` | wait | `q:task`    | yes             |
-| `ci-running`     | wait | none        | no              |
-| `merge`          | step | none        | no              |
-| `merging`        | wait | none        | no              |
-| `merge-queue`    | wait | none        | no              |
-| `close-out`      | step | none        | no              |
+| `submit`         | step | none        | no              |
 | `requeue`        | step | `q:task`    | no              |
 | `to-human`       | step | `q:human`   | no              |
 
 - **Labels are a projection.** Each node declares its queue label and whether it holds `running`. When an issue lands on a node, the marker is written first, then the labels come from `move()` (`labels.mjs`) with that declaration.
-- **Where a turn starts.** Reconcile polls `worker-running` for every tracked worker. Watch polls `ci-running` / `merging` / `merge-queue` for agent PRs whose issue is in no queue; a merged PR goes to `close-out` wherever the issue is, as in the stage tick. Sweep sends a stale `running` lease to its node's `recover` (default: `requeue`). Schedule is the gate on the entry node: caps and priority pick the issues, each starts at `start-worker`.
-- **Where a turn stops.** At a wait that is not ready, on entering a wait (it is polled next tick; `merge-queue` is polled on entry, so a stall is caught in the same pass), on reaching `start-worker` again (only Schedule admits it), or at the end.
-- **Markers.** The graph writes marker v2 without `stage`: `node` is where the issue rests. `merge-queue` is the stage tick's `submitted` with `queued: true`, and a stage-era marker in that state resumes at `merge-queue`. A marker whose node the current graph version no longer has restarts at `start-worker` with a `graph-changed` history entry.
-- **Same moves.** Every scenario in `test/tick.test.mjs` runs on both engines; the test compares their GitHub calls in order (markers semantically, not by rendered text), worker starts with their prompts, kills, teardowns and logs.
+- **Where a turn starts.** Reconcile polls `worker-running` for every tracked worker. Sweep sends a stale `running` lease to its node's `recover` (default: `requeue`). Schedule is the gate on the entry node: caps and priority pick the issues, each starts at `start-worker`.
+- **Where a turn stops.** At a wait that is not ready, on entering a wait (it is polled next tick), on reaching `start-worker` again (only Schedule admits it), or at the end.
+- **`submit`.** The worker exited with an open (or merged) PR: history `submitted`, `submittedAt`, the PR on the marker (`status: done`), the issue out of every queue, and `Closes #n` added to a PR found only by its branch. A worker that exits without one, or is killed at `wallClockMinutes`, is a `requeue` (attempt + 1, then `q:human` + `why:budget`).
+- **Markers.** The graph writes marker v2 without `stage`: `node` is where the issue rests. v2 of the graph moved `ci-running`, `merge`, `merging`, `merge-queue` and `close-out` to the PR graph: a marker resting at one of them (or a stage-era `submitted`) is the PR graph's, not a restart. A marker at any other node the current version no longer has restarts at `start-worker` with a `graph-changed` history entry.
+- **Same moves.** Every scenario in `test/tick.test.mjs` up to a PR's submission runs on both engines; the test compares their GitHub calls in order (markers semantically, not by rendered text), worker starts with their prompts, kills, teardowns and logs. Past submission the engines differ by design; those scenarios are legacy only, and `test/pr-graph.test.mjs` is the graph side.
 
-## Merging
+## The PR graph
 
-Neither of our repos runs a GitHub merge queue (it costs), so `merge` says who merges a Task PR, per repo (`repos[].merge`, falling back to the top-level `merge`):
+Every tick, Watch starts one turn of the `pr` graph (`src/graphs/pr.mjs`) at `assess` for each agent PR (head `agent/*`) that closes a cambium-owned issue, when
 
-- `"none"` (default): not cambium. A merge queue, auto-merge or a human merges it; `mergeQueueMinutes` after submission an unmerged PR sends its issue to `q:human` (`stalled`).
-- `"green"`: cambium merges it. Needs `engine: "graph"` (config refuses it on legacy). When `ci-running` sees the PR's checks `SUCCESS`, with no auto-merge armed and not in a merge queue, it goes to `merge`: `graft pr merge <n> --auto`, so graft's merge policy (bases, protected paths, a red base) still decides: a clean PR merges now, otherwise auto-merge is armed. Then `merging` waits for the merge. A refusal is recorded in the marker (`mergeRefusal`, history `merge-refused`) and asked again on a new head or after 10 minutes. Red CI still requeues, and `mergeQueueMinutes` still stalls to `q:human`.
-  - **Up to date first.** Before merging, `merge` asks GitHub live how far the PR's head is behind its base (`compare`, so a merge earlier in the same tick counts). Behind → `graft pr update <n>` instead of the merge (history `branch-updated`, held like a refusal on the old head), and the updated head merges once its CI is green; red there requeues like any red CI. This is a merge queue without the cost: two PRs green on the same base can be red together (sektorapp/monorepo#4624 + #4625 broke develop 8 s apart), and the base does not require up-to-date branches. An update GitHub refuses (a conflict) is a `merge-refused` and stalls to `q:human` like any other.
+- the PR is merged and its issue still open (→ `close-out`), or
+- the PR is open, its CI has settled (not `PENDING`/`EXPECTED`), and its issue has no Task queued or running: no `q:task`, `q:intake` or `q:promote`, no `running`, no tracked worker.
 
-The worker prompt says which: "Green: stop; cambium merges the PR once CI is green" or "…the PR is merged outside this session".
+`assess` decides from the PR as the snapshot reads it, one step acts, and the turn ends. There are no waits: the next tick assesses again.
+
+```mermaid
+flowchart TD
+  start_(["start"])
+  n0["assess"]
+  n1["merge"]
+  n2["rework"]
+  n3["close-pr"]
+  n4["close-out"]
+  n5["to-human"]
+  end_(("end"))
+  start_ --> n0
+  n0 -->|"merged"| n4
+  n0 -->|"toMerge"| n1
+  n0 -->|"toRework"| n2
+  n0 -->|"toClose"| n3
+  n0 -->|"toHumanInbox"| n5
+  n0 --> end_
+  n1 -->|"needsApproval"| n5
+  n1 --> end_
+  n2 -->|"reworksSpent"| n5
+  n2 --> end_
+  n3 --> end_
+  n4 --> end_
+  n5 --> end_
+```
+
+| Node        | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `assess`    | In order: merged → `close-out`; issue closed → `close-pr`; a newer open agent PR closes the same issue → `close-pr` (superseded); red CI, a conflict (`mergeable: CONFLICTING`) or `CHANGES_REQUESTED` → `rework`; green, clean and the repo's `merge` is `"green"`, nothing armed, no refusal on this head within 10 min → `merge`; not merged `mergeQueueMinutes` after submission → `to-human` (`why:approve`); else nothing this tick.                                                                                                         |
+| `merge`     | Behind its base (read live, so a merge earlier in the tick counts) → `graft pr update` instead (history `branch-updated`, held like a refusal on the old head; the new head merges once its CI is green). Otherwise `graft pr merge --auto` (history `merge-armed`), so graft's merge policy decides. A refusal is recorded (`mergeRefusal`, history `merge-refused`) and asked again on a new head or after 10 min; one only a human can clear (protected paths, a base agents may not merge into, a broken policy) → `to-human` (`why:approve`). |
+| `rework`    | Back to the task graph at `start-worker` in `q:task`: attempt 1 of a fresh `maxAttempts`, `reworks` + 1, the reason (the failing checks, the conflict, the review) as `lastFailure`, the head as `failedSha` (a worker that pushes nothing new has not reworked it). The worker's prompt names the rework and the PR; it resumes the branch. Past `phases.task.maxReworks` (default 3) → `to-human` (`why:budget`).                                                                                                                                |
+| `close-pr`  | Closes the PR with the reason and `Closed by cambium.`; an open issue gets a `pr-closed` history entry.                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `close-out` | Merged: marker done, out of every queue, the issue closed (`Merged in #n. Closed by cambium.`), the branch deleted.                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `to-human`  | `q:human` with the `why:` label and the reason as the last failure.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+
+- **The Human Queue is the human's.** For an issue in `q:human` the PR graph only merges a PR that is green and clean (e.g. a worker's PR published after its issue was handed over, as sektorapp/monorepo#4627 was), and not on a head a human-only refusal sent there. It never reworks or closes one.
+- **State.** The PR graph's state is the issue's marker (`graph: "pr"`), like the task graph's; `rework` writes a task-graph marker.
+- **Who merges.** `repos[].merge` (falling back to the top-level `merge`): `"none"` (default) leaves a green PR to a merge queue, auto-merge or a human, and stalls it to `q:human` after `mergeQueueMinutes`; `"green"` lets the PR graph merge it (needs `engine: "graph"`). Neither of our repos runs a GitHub merge queue (it costs); updating a PR that is behind before merging is the merge queue without the cost: two PRs green on the same base can be red together (sektorapp/monorepo#4624 + #4625 broke develop 8 s apart).
+- **Foreground.** `cambium run pr --issue <n> [--follow]` runs the same turn for one issue's PR; `--follow` repeats it every `tickSeconds` until the issue is closed.
+
+The worker prompt says who merges: "Green: stop; cambium merges the PR once CI is green" or "…the PR is merged outside this session".
 
 ## Red base
 

@@ -23,13 +23,16 @@ import { join, resolve } from 'node:path'
  *   `requiredCheck` (default `ci`): the check whose runs on `baseBranch` say whether the base is green (see
  *   base-health.mjs); `null` turns the red-base gate and repair off for the repo.
  * @typedef {{ cap: number, wallClockMinutes: number, maxTurns: number, maxAttempts: number }} PhaseCaps
+ * @typedef {PhaseCaps & { maxReworks: number }} TaskCaps
+ *   `maxReworks`: how many times the PR graph sends one PR back to a worker (red CI, a conflict, changes
+ *   requested) before it goes to `q:human`. Each rework gets a fresh `maxAttempts`.
  * @typedef {{
  *   host: string,
  *   engine: 'legacy' | 'graph',
  *   tickSeconds: number,
  *   stepTimeoutSeconds: number,
  *   repos: Repo[],
- *   phases: { task: PhaseCaps, dispatch: PhaseCaps & { maxRounds: number, deferHours: number, maxDefers: number } },
+ *   phases: { task: TaskCaps, dispatch: PhaseCaps & { maxRounds: number, deferHours: number, maxDefers: number } },
  *   mergeQueueMinutes: number,
  *   merge: MergePolicy,
  *   priorityLabels: string[],
@@ -61,7 +64,7 @@ export function defaults(home = DEFAULT_HOME) {
     stepTimeoutSeconds: 20,
     repos: [],
     phases: {
-      task: { cap: 2, wallClockMinutes: 60, maxTurns: 200, maxAttempts: 3 },
+      task: { cap: 2, wallClockMinutes: 60, maxTurns: 200, maxAttempts: 3, maxReworks: 3 },
       dispatch: {
         cap: 0,
         wallClockMinutes: 15,
