@@ -47,11 +47,13 @@
  *   defers?: number,
  *   deferUntil?: string | null,
  *   deferReason?: string | null,
+ *   blockedBy?: number[] | null,
  * }} Marker
  *   `mergeRefusal`: the last `graft pr merge` cambium was refused (PR graph `merge`), and on which head.
  *   `reworks`: how many times the PR graph sent this issue's PR back to a worker.
  *   `defers`, `deferUntil`, `deferReason`: the dispatch graph's `deferred` node: how many times triage deferred, until
- *   when, and what the next triage should check.
+ *   when, and what the next triage should check. At the `blocked` node `deferReason` is why and `blockedBy` the open
+ *   GitHub `blockedBy` issues it waits on (no `deferUntil`).
  *   `triage`: what the dispatch graph's triage added when it handed the issue to `q:task`; the task prompt shows it.
  * @typedef {{ graph: string, entryNode: string, nodes?: Iterable<string> }} QueueOwner
  */
@@ -180,7 +182,10 @@ export function renderMarker(input, { maxAttempts } = {}) {
       (marker.pr ? ` · PR #${marker.pr}` : '') +
       (marker.host ? ` · host \`${marker.host}\`` : '') +
       (marker.start ? ` · started ${marker.start}` : '') +
-      (marker.node === 'deferred' && marker.deferUntil ? ` · re-triage after ${marker.deferUntil}` : ''),
+      (marker.node === 'deferred' && marker.deferUntil ? ` · re-triage after ${marker.deferUntil}` : '') +
+      (marker.node === 'blocked' && marker.blockedBy?.length
+        ? ` · re-triage once ${marker.blockedBy.map((n) => `#${n}`).join(', ')} close`
+        : ''),
   ]
   if (marker.lastFailure)
     lines.push(

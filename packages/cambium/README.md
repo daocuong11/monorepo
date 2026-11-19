@@ -395,7 +395,8 @@ flowchart TD
   n4["to-human"]
   n5["close-duplicate"]
   n6["deferred"]
-  n7["close-obsolete"]
+  n7["blocked"]
+  n8["close-obsolete"]
   end_(("end"))
   start_ --> n0
   n0 -->|"started"| n1
@@ -406,7 +407,8 @@ flowchart TD
   n1 -->|"actionable"| n3
   n1 -->|"duplicate"| n5
   n1 -->|"defer"| n6
-  n1 -->|"obsolete"| n7
+  n1 -->|"blocked"| n7
+  n1 -->|"obsolete"| n8
   n1 -->|"needsHuman"| n4
   n1 --> n4
   n2 -->|"attemptsLeft"| n0
@@ -416,7 +418,9 @@ flowchart TD
   n5 --> end_
   n6 -->|"budgetSpent"| n4
   n6 --> end_
+  n7 -->|"noneOpen"| n6
   n7 --> end_
+  n8 --> end_
 ```
 
 | Node              | Kind | Queue label | Holds `running` |
@@ -428,13 +432,16 @@ flowchart TD
 | `to-human`        | step | `q:human`   | no              |
 | `close-duplicate` | step | none        | no              |
 | `deferred`        | step | `q:intake`  | no              |
+| `blocked`         | step | `q:intake`  | no              |
 | `close-obsolete`  | step | none        | no              |
 
-- **The verdict.** The worker's final message must end with a JSON block, validated by zod (`TriageResult`): `{ verdict: 'actionable' | 'needs-human' | 'duplicate' | 'obsolete' | 'defer', duplicateOf?, recheckHours?, reason, title?, acceptance? }` (`duplicateOf` is required on a duplicate and cannot be the issue itself). cambium reads it from the worker's stdout log: the last `result` event's `result` text, its last fenced block (else the bare JSON).
-- **Outcomes.** `actionable` → a comment with the reason, the task title and acceptance checks (when given), then `q:task` with a task-graph marker at `start-worker`, attempt 1, history kept; the checks also ride in the marker (`triage`) into the task worker's prompt. The issue body is never rewritten: cambium's write path has no issue edit, and the author's text stays as written. `needs-human` → `q:human` + `why:triage`, the reason as the state comment's last failure. `duplicate` → closed with reason `duplicate` and `Duplicate of #n (<link>). <reason>`. `obsolete` (the work no longer applies, verified: the code path is gone, already fixed, its check already passed) → closed as `not_planned` with `Obsolete: <reason>`. `defer` → stays in `q:intake` at `deferred` (see below). A missing or invalid verdict (no `result` event, no JSON, a schema error) or a worker killed at `wallClockMinutes` (the unlabelled `triaging → to-human` edge) → `q:human` + `why:triage` with the error.
+- **The verdict.** The worker's final message must end with a JSON block, validated by zod (`TriageResult`): `{ verdict: 'actionable' | 'needs-human' | 'duplicate' | 'obsolete' | 'defer' | 'blocked', duplicateOf?, blockedBy?, recheckHours?, reason, title?, acceptance? }` (`duplicateOf` is required on a duplicate and cannot be the issue itself; `blockedBy`, issue numbers, likewise on blocked). cambium reads it from the worker's stdout log: the last `result` event's `result` text, its last fenced block (else the bare JSON).
+- **Outcomes.** `actionable` → a comment with the reason, the task title and acceptance checks (when given), then `q:task` with a task-graph marker at `start-worker`, attempt 1, history kept; the checks also ride in the marker (`triage`) into the task worker's prompt. The issue body is never rewritten: cambium's write path has no issue edit, and the author's text stays as written. `needs-human` → `q:human` + `why:triage`, the reason as the state comment's last failure. `duplicate` → closed with reason `duplicate` and `Duplicate of #n (<link>). <reason>`. `obsolete` (the work no longer applies, verified: the code path is gone, already fixed, its check already passed) → closed as `not_planned` with `Obsolete: <reason>`. `defer` → stays in `q:intake` at `deferred`, `blocked` → stays in `q:intake` at `blocked` (see below). A missing or invalid verdict (no `result` event, no JSON, a schema error) or a worker killed at `wallClockMinutes` (the unlabelled `triaging → to-human` edge) → `q:human` + `why:triage` with the error.
 - **Read-only checkout.** Triage reads code to judge feasibility and duplicates, so it gets a checkout, but a disposable one: a detached worktree at `<root>/triage-<n>` on `origin/<base>` (the repo's worktree root), no install, hydrate or `prepare`, tools `Read,Glob,Grep,Bash` with Edit/Write and every graft/git write verb denied. It is removed outright after the verdict (no `graft status`: nothing in it is worth keeping).
 - **Retries.** A worker that cannot start, or a lost `running` lease on a `q:intake` issue (Sweep), goes back to `q:intake` with attempt + 1, then to `q:human` once `phases.dispatch.maxAttempts` are spent. A marker from another graph or a finished triage starts over at attempt 1.
-- **Defer, not a human.** A verdict that hangs on something a machine can check later (a CD run that has not happened, a release, a merge, a deploy) is `defer`, never `needs-human`: asking a human to verify what a machine can is what the factory exists to avoid. The issue rests at `deferred` with `deferUntil` (now + `recheckHours`, else `phases.dispatch.deferHours`, default 6) and `deferReason` in its marker; Schedule skips it until then, and the next triage gets the reason in its prompt ("check it now"). A defer is not a failed attempt. A deferred issue whose GitHub "blocked by" issues are all closed, at least one after it was deferred, is triaged again at the next tick instead of waiting for `deferUntil`. After `phases.dispatch.maxDefers` (default 8) it goes to `q:human` + `why:triage` with the last reason.
+- **Defer, not a human.** A verdict that hangs on something a machine can check later (a CD run that has not happened, a release, a merge, a deploy) is `defer`, never `needs-human`: asking a human to verify what a machine can is what the factory exists to avoid. The issue rests at `deferred` with `deferUntil` (now + `recheckHours`, else `phases.dispatch.deferHours`, default 6) and `deferReason` in its marker; Schedule skips it until then, and the next triage gets the reason in its prompt ("check it now"). A defer is not a failed attempt. A deferred issue whose GitHub "blocked by" issues are all closed, at least one after it was deferred, is triaged again at the next tick instead of waiting for `deferUntil`. After `phases.dispatch.maxDefers` (default 8) it goes to `q:human` + `why:triage` with the last reason. While it waits it carries `wait:deferred`.
+- **Blocked by issues, not a timer.** A verdict that waits on other issues is `blocked` with `blockedBy: [n, …]`. cambium adds each as a GitHub "blocked by" link on the issue when it is missing, then parks it at `blocked` with `wait:blocked`, the open blockers in the marker's `blockedBy` and no `deferUntil`. Schedule never triages an intake issue with an open `blockedBy` issue, whoever linked it: one not yet at `blocked` (new, or deferred) is parked there first. The tick after the last blocker closes, the label comes off and the issue is triaged again, its earlier reason in the prompt. A blocked wait is not a defer and does not count toward `maxDefers`; a `blocked` verdict none of whose issues is open (closed, or the link failed) is a defer.
+- **`wait:*` labels.** Intake holds two kinds of issue: awaiting triage, and parked by it. `wait:deferred` and `wait:blocked` mark the parked ones (canopy shows them apart from Intake); Schedule adds or removes them each tick to match the marker and the blockers, and any queue move drops them.
 - **Leaving intake.** If the issue is closed or relabelled while triage runs, the verdict is dropped and the checkout removed.
 - **Tracing.** Wired as in the task graph (see [Tracing](#tracing)): the driver's node and wait spans under a `cambium.issue` root that continues mycelium's intake span from the issue body, the triage worker's `TRACEPARENT` (its `start-triage` span), and its stream-json spans when `triaging` ends.
 

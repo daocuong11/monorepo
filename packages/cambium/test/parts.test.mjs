@@ -166,6 +166,12 @@ test('labels: exactly one q:*, running only while leased, why:* only in the Huma
   assert.deepEqual(move(['q:human', 'why:budget'], 'q:task'), { add: ['q:task'], remove: ['q:human', 'why:budget'] })
   assert.deepEqual(move(['q:task'], 'q:task', { running: true }), { add: ['running'], remove: [] })
   assert.deepEqual(move(['q:task', 'running'], null), { add: [], remove: ['q:task', 'running'] })
+  assert.deepEqual(move(['q:intake'], 'q:intake', { extra: ['wait:blocked'] }), { add: ['wait:blocked'], remove: [] })
+  assert.deepEqual(
+    move(['q:intake', 'wait:deferred'], 'q:intake', { running: true }),
+    { add: ['running'], remove: ['wait:deferred'] },
+    'any move drops wait:* unless it names it again',
+  )
   const sort = byPriorityThenAge(['priority:high', 'priority:low'])
   const items = [
     { n: 1, labels: [], createdAt: '2026-01-01' },
@@ -205,6 +211,12 @@ const graphqlAnswer = {
           createdAt: '2026-11-01T00:00:00Z',
           body: 'b',
           labels: { nodes: [{ name: 'q:task' }] },
+          blockedBy: {
+            nodes: [
+              { number: 3, state: 'OPEN' },
+              { number: 4, state: 'CLOSED' },
+            ],
+          },
           comments: {
             nodes: [
               { databaseId: 1, body: '<!-- cambium:state {"attempt":9} -->', author: { login: 'impostor' } },
@@ -281,6 +293,11 @@ test('normalize: issues, agent PRs only, failing checks, markers from the bot on
   assert.equal(snap.issues.get(5)?.stateComment?.id, 2)
   assert.equal(snap.issues.get(5)?.stateComment?.marker.attempt, 2)
   assert.ok(snap.issues.has(6), 'issues a PR closes are in the snapshot too')
+  assert.deepEqual(snap.issues.get(5)?.blockedBy, [
+    { number: 3, state: 'OPEN', closedAt: null },
+    { number: 4, state: 'CLOSED', closedAt: null },
+  ])
+  assert.deepEqual(snap.issues.get(6)?.blockedBy, [], 'no dependencies read as none')
   assert.equal(normalize({ data: graphqlAnswer }).issues.get(5)?.stateComment?.id, 1)
   assert.throws(() => normalize({}), /no repository/)
 })
@@ -307,6 +324,8 @@ test('graft client: every call is one graft invocation, as the Clock App, in the
   await gh.close('o/r', 6, 'dup', { reason: 'duplicate' })
   await gh.comment('o/r', 5, 'hello')
   await gh.deleteBranch('o/r', 'agent/issue-5')
+  answers.splice(0, answers.length, JSON.stringify({ id: 4242, state: 'closed' }), '{}')
+  assert.deepEqual(await gh.addBlockedBy('o/r', 5, 9), { state: 'CLOSED' })
   const argv = calls.map((c) => c.args)
   assert.equal(argv[0][0], 'graphql')
   assert.equal(argv[0][1], SNAPSHOT_QUERY)
@@ -329,6 +348,8 @@ test('graft client: every call is one graft invocation, as the Clock App, in the
     ['issue', 'close', '6', '--body-file', '-', '--reason', 'duplicate', '--repo', 'o/r'],
     ['issue', 'comment', '5', '--body-file', '-', '--repo', 'o/r'],
     ['api', 'DELETE', '/repos/o/r/git/refs/heads/agent/issue-5', '--repo', 'o/r'],
+    ['api', 'GET', '/repos/o/r/issues/9', '--repo', 'o/r'],
+    ['api', 'POST', '/repos/o/r/issues/5/dependencies/blocked_by', '--body', '{"issue_id":4242}', '--repo', 'o/r'],
   ])
   assert.ok(calls.every((c) => c.cmd === 'graft' && c.opts.cwd === '/src/r' && c.opts.env.GRAFT_APP === 'clock-app'))
   assert.equal(calls[2].opts.input, 'BODY')

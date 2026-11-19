@@ -281,7 +281,11 @@ test('/api/state carries the trace index; /api/traces lists; /api/traces/<id> de
   const statePath = join(dir, 'state.json')
   writeFileSync(statePath, JSON.stringify(heartbeat()))
   const queues = {
-    get: async () => ({ repos: [], columns: { intake: [], task: [], running: [], human: [], promote: [] }, prs: [] }),
+    get: async () => ({
+      repos: [],
+      columns: { intake: [], waiting: [], task: [], running: [], human: [], promote: [] },
+      prs: [],
+    }),
   }
   const opts = {
     statePath,

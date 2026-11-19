@@ -5,15 +5,19 @@
  *
  * - Reconcile: every tracked triage worker's issue at `triaging`.
  * - Sweep: a stale `running` lease on a `q:intake` issue runs `retry-triage`.
- * - Schedule: `q:intake` issues without a lease, by priority then age, up to `phases.dispatch.cap` counted from
- *   live triage workers, skipping one deferred until later; each starts at `start-triage`.
+ * - Schedule: first parks: a `q:intake` issue without a lease that has an open GitHub `blockedBy` issue goes to the
+ *   `blocked` node (`wait:blocked`) if it is not there yet, and every other one gets the `wait:*` label its marker
+ *   calls for (`wait:deferred` while its `deferUntil` is ahead, none once due or unblocked). Then `q:intake` issues
+ *   without a lease, by priority then age, up to `phases.dispatch.cap` counted from live triage workers, skipping
+ *   one deferred until later or blocked; each starts at `start-triage`.
  *
  * A turn advances one transition at a time and stops on entering a wait, at the entry node again (only Schedule
  * admits entries), at a wait that is not ready, or at the end.
  */
 import { advance } from './graph/index.mjs'
-import { dispatch, lostLeaseOf, nodeOf } from './graphs/dispatch.mjs'
-import { byPriorityThenAge, Q, RUNNING } from './labels.mjs'
+import { dispatch, lostLeaseOf, nodeOf, openBlockers } from './graphs/dispatch.mjs'
+import { setLabels } from './issue-state.mjs'
+import { byPriorityThenAge, Q, RUNNING, WAIT } from './labels.mjs'
 import { each, staleLeases } from './tick.mjs'
 import { markerTrace, turnTracer } from './tracing.mjs'
 
@@ -120,7 +124,8 @@ export function intakeCandidates(deps, ctx) {
         issue.labels.includes(Q.intake) &&
         !issue.labels.includes(RUNNING) &&
         !store.worker(slug, issue.number) &&
-        !deferredPast(issue, ctx.now)
+        !deferredPast(issue, ctx.now) &&
+        !openBlockers(issue).length
       )
         candidates.push({ slug, issue, snap })
   const order = byPriorityThenAge(config.priorityLabels)
@@ -142,6 +147,67 @@ const deferredPast = (issue, now) => {
 }
 
 /**
+ * The `q:intake` issues at rest (no `running`, no tracked worker), whatever the cap: these are parked or unparked.
+ * @param {Deps} deps @param {Ctx} ctx
+ */
+function restingIntake(deps, ctx) {
+  /** @type {{ slug: string, issue: import('./github.mjs').Issue, snap: import('./github.mjs').Snapshot }[]} */
+  const out = []
+  for (const [slug, snap] of ctx.snaps)
+    for (const issue of snap.issues.values())
+      if (
+        issue.state === 'OPEN' &&
+        issue.labels.includes(Q.intake) &&
+        !issue.labels.includes(RUNNING) &&
+        !deps.store.worker(slug, issue.number)
+      )
+        out.push({ slug, issue, snap })
+  return out
+}
+
+/**
+ * The `wait:*` label a resting `q:intake` issue should carry, open blockers aside: `wait:deferred` while its
+ * `deferUntil` is ahead, else none (it awaits triage).
+ * @param {import('./github.mjs').Issue} issue @param {number} now
+ */
+const waitLabelOf = (issue, now) => (deferredPast(issue, now) ? WAIT.deferred : null)
+
+/**
+ * Park and unpark: an issue with an open `blockedBy` goes to the `blocked` node unless it rests there already with
+ * `wait:blocked`; any other gets the `wait:*` label {@link waitLabelOf} says, and loses the rest.
+ * @param {Deps} deps @param {Ctx} ctx
+ */
+async function park(deps, ctx) {
+  await each(
+    deps,
+    restingIntake(deps, ctx),
+    async (c) => {
+      const { issue } = c
+      const open = openBlockers(issue)
+      const m = issue.stateComment?.marker
+      const atBlocked = m?.graph === dispatch.name && m.node === 'blocked'
+      if (open.length) {
+        if (atBlocked && issue.labels.includes(WAIT.blocked)) return
+        const subject = { slug: c.slug, number: issue.number, snap: c.snap, issue }
+        const reason =
+          m?.graph === dispatch.name && m.node === 'deferred' && m.deferReason
+            ? m.deferReason
+            : `GitHub shows it blocked by ${open.map((n) => `#${n}`).join(', ')}.`
+        await driveDispatch(deps, ctx, subject, { node: 'blocked', input: { blockedBy: open, reason } })
+        return
+      }
+      const want = waitLabelOf(issue, ctx.now)
+      const has = issue.labels.filter((l) => l.startsWith('wait:'))
+      await setLabels(deps, c.slug, issue, {
+        add: want && !has.includes(want) ? [want] : [],
+        remove: has.filter((l) => l !== want),
+      })
+    },
+    (c) => ({ repo: c.slug, issue: c.issue.number }),
+  )
+}
+
+/**
  * All blockers closed, at least one after `since`.
  * @param {import('./github.mjs').Blocker[]} blockers @param {string | null} since
  */
@@ -152,6 +218,8 @@ const unblockedSince = (blockers, since) =>
 
 /** @param {Deps} deps @param {Ctx} ctx */
 async function schedule(deps, ctx) {
+  if (deps.config.phases.dispatch.cap <= 0) return
+  await park(deps, ctx)
   await each(
     deps,
     intakeCandidates(deps, ctx),

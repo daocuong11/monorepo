@@ -15,6 +15,78 @@ test('columnOf: running wins over q:task; unqueued is null', () => {
   assert.equal(columnOf(['bug']), null)
 })
 
+test('columnOf: a q:intake issue with wait:deferred or wait:blocked is waiting, not intake', () => {
+  assert.equal(columnOf(['q:intake']), 'intake')
+  assert.equal(columnOf(['q:intake', 'wait:deferred']), 'waiting')
+  assert.equal(columnOf(['q:intake', 'wait:blocked']), 'waiting')
+  assert.equal(columnOf(['q:intake', 'wait:deferred', 'running']), 'running', 'a running triage is running')
+  assert.equal(columnOf(['q:task', 'wait:blocked']), 'task', 'wait:* only parks intake')
+})
+
+test('group: parked intake issues go to waiting with the defer reason and due time, or the open blockers', () => {
+  const marker = { node: 'deferred', deferUntil: '2026-11-20T05:01:00.000Z', deferReason: 'next cd run on main' }
+  const answer = {
+    repository: {
+      issues: {
+        nodes: [
+          { number: 1, title: 'untriaged', labels: { nodes: [{ name: 'q:intake' }] } },
+          { number: 2, title: 'deferred', labels: { nodes: [{ name: 'q:intake' }, { name: 'wait:deferred' }] } },
+          {
+            number: 3,
+            title: 'blocked',
+            labels: { nodes: [{ name: 'q:intake' }, { name: 'wait:blocked' }] },
+            blockedBy: {
+              nodes: [
+                { number: 8, title: 'API', url: 'https://github.com/o/r/issues/8', state: 'OPEN' },
+                { number: 9, title: 'old', url: 'https://github.com/o/r/issues/9', state: 'CLOSED' },
+              ],
+            },
+          },
+        ],
+      },
+      waiting: {
+        nodes: [
+          {
+            number: 2,
+            comments: {
+              nodes: [
+                { body: 'a human comment' },
+                { body: `<!-- cambium:state ${JSON.stringify(marker)} -->\n**cambium** · dispatch · deferred` },
+              ],
+            },
+          },
+          {
+            number: 3,
+            comments: {
+              nodes: [
+                { body: `<!-- cambium:state ${JSON.stringify({ node: 'blocked', deferReason: 'needs the API' })} -->` },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  }
+  const { columns } = group(answer, 'o/r')
+  assert.deepEqual(nums(columns.intake), [1], 'Intake holds only what awaits triage')
+  assert.deepEqual(nums(columns.waiting), [2, 3])
+  assert.equal(columns.intake[0].wait, undefined)
+  assert.deepEqual(columns.waiting[0].wait, {
+    kind: 'deferred',
+    reason: 'next cd run on main',
+    until: '2026-11-20T05:01:00.000Z',
+    blockers: [],
+  })
+  assert.deepEqual(columns.waiting[1].wait, {
+    kind: 'blocked',
+    reason: 'needs the API',
+    until: null,
+    blockers: [{ number: 8, title: 'API', url: 'https://github.com/o/r/issues/8' }],
+  })
+  assert.match(QUEUES_QUERY, /blockedBy\(first: 20\)/)
+  assert.match(QUEUES_QUERY, /waiting: issues\(labels: \["wait:deferred", "wait:blocked"\]/)
+})
+
 test('group: issues into columns, why and priority read, agent PRs only', () => {
   const { columns, prs } = group(graphqlAnswer(), REPO)
   assert.deepEqual(nums(columns.intake), [1])

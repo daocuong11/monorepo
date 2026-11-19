@@ -2,7 +2,7 @@
 /**
  * The Dispatch phase as a graph: a `q:intake` issue is triaged by a one-shot `claude -p` worker whose final
  * message carries a typed verdict ({@link TriageResult}), then moved to `q:task`, moved to `q:human`, or closed as
- * a duplicate or obsolete, or deferred to be triaged again later. Same conventions as the task graph (graphs/task.mjs): each node declares its queue label and
+ * a duplicate or obsolete, deferred to be triaged again later, or parked as blocked until its GitHub `blockedBy` issues close. Same conventions as the task graph (graphs/task.mjs): each node declares its queue label and
  * whether it holds `running`, and a node's write is the marker first, then the labels via `move()`.
  *
  * The triage worker runs in a read-only checkout (workers.mjs `readOnly`): detached at the base branch, no install,
@@ -11,7 +11,7 @@
 import { z } from 'zod'
 import { defineGraph, defineNode, defineWait, END } from '../graph/index.mjs'
 import { iso, key, markerOf, MIN, setLabels, setMarker } from '../issue-state.mjs'
-import { move, Q, WHY } from '../labels.mjs'
+import { move, Q, WAIT, WHY } from '../labels.mjs'
 import { newMarker, withHistory } from '../marker.mjs'
 import { readTriage, TriageResult, triageComment, triagePrompt } from '../phases/dispatch.mjs'
 import { traceWorker } from '../tracing.mjs'
@@ -29,7 +29,10 @@ import { task } from './task.mjs'
  */
 
 /** The nodes an issue in `q:intake` can rest at; a marker elsewhere starts triage over at attempt 1. */
-const INTAKE_NODES = new Set(['start-triage', 'triaging', 'retry-triage', 'deferred'])
+const INTAKE_NODES = new Set(['start-triage', 'triaging', 'retry-triage', 'deferred', 'blocked'])
+
+/** The open issues among `issue`'s GitHub `blockedBy` links. @param {Issue} issue */
+export const openBlockers = (issue) => (issue.blockedBy ?? []).filter((b) => b.state === 'OPEN').map((b) => b.number)
 
 /** The pseudo-branch that names an issue's triage checkout (`<root>/triage-<n>`); never created. @param {number} n */
 export const triageBranch = (n) => `cambium/triage-${n}`
@@ -110,6 +113,8 @@ const needsHuman = (/** @type {Triaged} */ o) => verdictOf(o) === 'needs-human'
 const duplicate = (/** @type {Triaged} */ o) => verdictOf(o) === 'duplicate'
 const obsolete = (/** @type {Triaged} */ o) => verdictOf(o) === 'obsolete'
 const defer = (/** @type {Triaged} */ o) => verdictOf(o) === 'defer'
+const blocked = (/** @type {Triaged} */ o) => verdictOf(o) === 'blocked'
+const noneOpen = (/** @type {{ to: string }} */ o) => o.to === 'defer'
 
 /** @param {DispatchCtx} ctx */
 export const lostLeaseOf = (ctx) => ({
@@ -183,7 +188,9 @@ const startTriage = declare(
               queued,
               agentsMd,
               deferHours: caps.deferHours,
-              deferred: m0.deferReason ? { count: m0.defers ?? 0, reason: m0.deferReason } : null,
+              deferred:
+                m0.deferReason && !m0.blockedBy?.length ? { count: m0.defers ?? 0, reason: m0.deferReason } : null,
+              blocked: m0.blockedBy?.length ? { by: m0.blockedBy, reason: m0.deferReason ?? '' } : null,
             }),
         })
       } catch (err) {
@@ -455,26 +462,103 @@ const deferred = declare(
         }
       const hours = d.recheckHours ?? deferHours
       const until = iso(ctx.tick.now + hours * 60 * MIN)
-      await land(ctx, 'deferred', {
-        ...withHistory(m, {
-          at: iso(ctx.tick.now),
-          attempt: m.attempt,
-          outcome: 'defer',
-          reason: d.reason,
-          log: d.log,
-        }),
-        defers,
-        deferUntil: until,
-        deferReason: d.reason,
-        host: null,
-        start: null,
-        input: null,
-      })
+      await land(
+        ctx,
+        'deferred',
+        {
+          ...withHistory(m, {
+            at: iso(ctx.tick.now),
+            attempt: m.attempt,
+            outcome: 'defer',
+            reason: d.reason,
+            log: d.log,
+          }),
+          defers,
+          deferUntil: until,
+          deferReason: d.reason,
+          blockedBy: null,
+          host: null,
+          start: null,
+          input: null,
+        },
+        { extra: [WAIT.deferred] },
+      )
       ctx.log('info', `triage deferred until ${until} (${defers}/${maxDefers}): ${d.reason.split('\n')[0]}`, {
         repo: ctx.subject.slug,
         issue: issue.number,
       })
       return { to: 'wait', until }
+    },
+  }),
+  { queue: Q.intake, running: false },
+)
+
+const BlockedIn = z.object({
+  blockedBy: z.array(z.number().int().positive()).min(1),
+  reason: z.string(),
+  log: z.string().optional(),
+})
+const blockedNode = declare(
+  defineNode({
+    name: 'blocked',
+    input: BlockedIn,
+    output: z.discriminatedUnion('to', [
+      z.object({ to: z.literal('wait'), blockedBy: z.array(z.number().int()) }),
+      z.object({ to: z.literal('defer'), reason: z.string(), log: z.string() }),
+    ]),
+    /**
+     * Blocked: the issue waits on other issues. Each one triage named that GitHub does not link yet is added as a
+     * `blockedBy` link; then the issue rests here in `q:intake` with `wait:blocked` and no `deferUntil`. Schedule
+     * does not triage it while any `blockedBy` issue is open, and triages it the tick after the last one closes.
+     * Not a defer: `maxDefers` does not count it. Schedule also parks an untriaged issue here that GitHub already
+     * shows blocked. When none of the named issues is open (closed, or the link failed) it is a plain defer.
+     * @param {z.infer<typeof BlockedIn>} b @param {DispatchCtx} ctx
+     */
+    run: async (b, ctx) => {
+      const { slug } = ctx.subject
+      const issue = issueOf(ctx)
+      const m = markerOf(issue)
+      const links = [...(issue.blockedBy ?? [])]
+      for (const n of b.blockedBy) {
+        if (n === issue.number || links.some((l) => l.number === n)) continue
+        try {
+          const { state } = await ctx.github.addBlockedBy(slug, issue.number, n)
+          links.push({ number: n, state, closedAt: null })
+          ctx.log('info', `linked blockedBy #${n}`, { repo: slug, issue: issue.number })
+        } catch (err) {
+          ctx.log('warn', `could not link blockedBy #${n}: ${errText(err)}`, { repo: slug, issue: issue.number })
+        }
+      }
+      issue.blockedBy = links
+      const open = openBlockers(issue)
+      const list = b.blockedBy.map((n) => `#${n}`).join(', ')
+      if (!open.length)
+        return { to: 'defer', reason: `blocked by ${list}, but none is open. ${b.reason}`, log: b.log ?? '' }
+      await land(
+        ctx,
+        'blocked',
+        {
+          ...withHistory(m, {
+            at: iso(ctx.tick.now),
+            attempt: m.attempt,
+            outcome: 'blocked',
+            reason: `${open.map((n) => `#${n}`).join(', ')}: ${b.reason}`,
+            ...(b.log ? { log: b.log } : {}),
+          }),
+          deferUntil: null,
+          deferReason: b.reason,
+          blockedBy: open,
+          host: null,
+          start: null,
+          input: null,
+        },
+        { extra: [WAIT.blocked] },
+      )
+      ctx.log('info', `blocked by ${open.map((n) => `#${n}`).join(', ')}: ${b.reason.split('\n')[0]}`, {
+        repo: slug,
+        issue: issue.number,
+      })
+      return { to: 'wait', blockedBy: open }
     },
   }),
   { queue: Q.intake, running: false },
@@ -527,7 +611,7 @@ export const dispatch = defineGraph({
   name: 'dispatch',
   version: 1,
   entry: { queue: Q.intake, node: 'start-triage', input: () => ({}) },
-  nodes: [startTriage, triaging, retryTriage, toTask, toHuman, closeDuplicate, deferred, closeObsolete],
+  nodes: [startTriage, triaging, retryTriage, toTask, toHuman, closeDuplicate, deferred, blockedNode, closeObsolete],
   edges: [
     ['start-triage', 'triaging', started, (o) => ({ attempt: o.attempt })],
     ['start-triage', 'to-human', budgetSpent],
@@ -537,6 +621,7 @@ export const dispatch = defineGraph({
     ['triaging', 'to-task', actionable, (o) => ({ ...pick(o.result, ['reason', 'title', 'acceptance']), log: o.log })],
     ['triaging', 'close-duplicate', duplicate, (o) => ({ ...pick(o.result, ['duplicateOf', 'reason']), log: o.log })],
     ['triaging', 'deferred', defer, (o) => ({ ...pick(o.result, ['reason', 'recheckHours']), log: o.log })],
+    ['triaging', 'blocked', blocked, (o) => ({ blockedBy: o.result.blockedBy, reason: o.result.reason, log: o.log })],
     ['triaging', 'close-obsolete', obsolete, (o) => ({ reason: o.result.reason, log: o.log })],
     ['triaging', 'to-human', needsHuman, (o) => ({ reason: o.result.reason, outcome: 'needs-human', log: o.log })],
     ['triaging', 'to-human'],
@@ -547,6 +632,8 @@ export const dispatch = defineGraph({
     ['close-duplicate', END],
     ['deferred', 'to-human', budgetSpent],
     ['deferred', END],
+    ['blocked', 'deferred', noneOpen, (o) => ({ reason: o.reason, log: o.log })],
+    ['blocked', END],
     ['close-obsolete', END],
   ],
 })
