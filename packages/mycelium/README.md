@@ -21,7 +21,7 @@ As a service: write the settings to `~/.mycelium/env` (see [Configuration](#conf
 
 ```js
 {
-  (source, externalId, receivedAt, author, title, body, url, meta);
+  source, externalId, receivedAt, author, title, body, url, meta
 }
 ```
 
