@@ -456,6 +456,13 @@ test('launchd plist: KeepAlive, RunAtLoad, start --config, escaped', () => {
   assert.ok(!existsSync('/h'))
 })
 
+test('launchd plist: workers run at Standard priority with a UTF-8 locale', () => {
+  const text = plist({ node: 'n', bin: 'b', configPath: 'c', logsDir: '/l', home: '/h', path: '/usr/bin' })
+  assert.match(text, /<key>ProcessType<\/key>\s*<string>Standard<\/string>/)
+  assert.match(text, /<key>LANG<\/key>\s*<string>en_US.UTF-8<\/string>/)
+  assert.match(text, /<key>LC_ALL<\/key>\s*<string>en_US.UTF-8<\/string>/)
+})
+
 test('snapshot: closing refs from the PR body count, for a PR into a non-default base', async () => {
   const { normalize, bodyCloses, unreadCloses, addIssues } = await import('../src/github.mjs')
   assert.deepEqual(bodyCloses('Closes #12\n\nalso fixes: #13, resolved #12; see #14 and acme/wiki#15'), [12, 13])
