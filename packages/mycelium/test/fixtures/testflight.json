@@ -1,0 +1,371 @@
+{
+  "feedback": {
+    "page1": {
+      "data": [
+        {
+          "type": "betaFeedbackScreenshotSubmissions",
+          "id": "fb-3",
+          "attributes": {
+            "deviceModel": "iPhone16,2",
+            "osVersion": "18.1",
+            "devicePlatform": "IOS",
+            "locale": "en-US",
+            "email": "tester@example.com",
+            "createdDate": "2026-11-01T11:00:00-07:00",
+            "comment": "The save button is hidden behind the keyboard.",
+            "screenshots": [
+              {
+                "url": "https://tf-feedback.itunes.apple.com/eimg/a.jpg?sig=abc",
+                "width": 1179,
+                "height": 2556,
+                "expirationDate": "2026-11-02T20:00:00Z"
+              },
+              {
+                "url": "https://tf-feedback.itunes.apple.com/eimg/b.jpg?sig=abc",
+                "width": 1179,
+                "height": 2556,
+                "expirationDate": "2026-11-02T20:00:00Z"
+              }
+            ]
+          },
+          "relationships": {
+            "build": {
+              "data": {
+                "type": "builds",
+                "id": "build-42"
+              }
+            },
+            "tester": {
+              "data": {
+                "type": "betaTesters",
+                "id": "tester-1"
+              }
+            }
+          }
+        },
+        {
+          "type": "betaFeedbackScreenshotSubmissions",
+          "id": "fb-2",
+          "attributes": {
+            "deviceModel": "iPhone16,2",
+            "osVersion": "18.1",
+            "devicePlatform": "IOS",
+            "locale": "en-US",
+            "email": "tester@example.com",
+            "createdDate": "2026-11-01T10:00:00Z",
+            "comment": "",
+            "screenshots": [
+              {
+                "url": "https://tf-feedback.itunes.apple.com/eimg/c.jpg?sig=abc",
+                "width": 1179,
+                "height": 2556,
+                "expirationDate": "2026-11-02T20:00:00Z"
+              }
+            ]
+          },
+          "relationships": {
+            "build": {
+              "data": {
+                "type": "builds",
+                "id": "build-42"
+              }
+            },
+            "tester": {
+              "data": {
+                "type": "betaTesters",
+                "id": "tester-1"
+              }
+            }
+          }
+        }
+      ],
+      "included": [
+        {
+          "type": "builds",
+          "id": "build-41",
+          "attributes": {
+            "version": "41"
+          }
+        },
+        {
+          "type": "builds",
+          "id": "build-42",
+          "attributes": {
+            "version": "42"
+          }
+        }
+      ],
+      "links": {
+        "self": "https://api.appstoreconnect.apple.com/v1/apps/1000000001/betaFeedbackScreenshotSubmissions",
+        "next": "https://api.appstoreconnect.apple.com/v1/apps/1000000001/betaFeedbackScreenshotSubmissions?cursor=PAGE2"
+      }
+    },
+    "page2": {
+      "data": [
+        {
+          "type": "betaFeedbackScreenshotSubmissions",
+          "id": "fb-1",
+          "attributes": {
+            "deviceModel": "iPhone16,2",
+            "osVersion": "18.1",
+            "devicePlatform": "IOS",
+            "locale": "en-US",
+            "email": "tester@example.com",
+            "createdDate": "2026-10-31T12:00:00Z",
+            "comment": "Map tiles load slowly on cellular.",
+            "screenshots": []
+          },
+          "relationships": {
+            "build": {
+              "data": {
+                "type": "builds",
+                "id": "build-41"
+              }
+            },
+            "tester": {
+              "data": {
+                "type": "betaTesters",
+                "id": "tester-1"
+              }
+            }
+          }
+        },
+        {
+          "type": "betaFeedbackScreenshotSubmissions",
+          "id": "fb-0",
+          "attributes": {
+            "deviceModel": "iPhone16,2",
+            "osVersion": "18.1",
+            "devicePlatform": "IOS",
+            "locale": "en-US",
+            "email": "tester@example.com",
+            "createdDate": "2026-10-01T12:00:00Z",
+            "comment": "Old feedback.",
+            "screenshots": []
+          },
+          "relationships": {
+            "build": {
+              "data": {
+                "type": "builds",
+                "id": "build-41"
+              }
+            },
+            "tester": {
+              "data": {
+                "type": "betaTesters",
+                "id": "tester-1"
+              }
+            }
+          }
+        }
+      ],
+      "included": [
+        {
+          "type": "builds",
+          "id": "build-41",
+          "attributes": {
+            "version": "41"
+          }
+        },
+        {
+          "type": "builds",
+          "id": "build-42",
+          "attributes": {
+            "version": "42"
+          }
+        }
+      ],
+      "links": {
+        "self": "https://api.appstoreconnect.apple.com/v1/apps/1000000001/betaFeedbackScreenshotSubmissions?cursor=PAGE2",
+        "next": "https://api.appstoreconnect.apple.com/v1/apps/1000000001/betaFeedbackScreenshotSubmissions?cursor=PAGE3"
+      }
+    }
+  },
+  "crash": {
+    "page1": {
+      "data": [
+        {
+          "type": "betaFeedbackCrashSubmissions",
+          "id": "cr-3",
+          "attributes": {
+            "deviceModel": "iPhone16,2",
+            "osVersion": "18.1",
+            "devicePlatform": "IOS",
+            "locale": "en-US",
+            "email": "tester@example.com",
+            "createdDate": "2026-11-01T19:00:00Z",
+            "comment": ""
+          },
+          "relationships": {
+            "build": {
+              "data": {
+                "type": "builds",
+                "id": "build-42"
+              }
+            },
+            "tester": {
+              "data": {
+                "type": "betaTesters",
+                "id": "tester-1"
+              }
+            }
+          }
+        },
+        {
+          "type": "betaFeedbackCrashSubmissions",
+          "id": "cr-2",
+          "attributes": {
+            "deviceModel": "iPhone15,3",
+            "osVersion": "18.0.1",
+            "devicePlatform": "IOS",
+            "locale": "en-US",
+            "email": "tester@example.com",
+            "createdDate": "2026-11-01T15:00:00Z",
+            "comment": "It crashed again while syncing."
+          },
+          "relationships": {
+            "build": {
+              "data": {
+                "type": "builds",
+                "id": "build-42"
+              }
+            },
+            "tester": {
+              "data": {
+                "type": "betaTesters",
+                "id": "tester-1"
+              }
+            }
+          }
+        }
+      ],
+      "included": [
+        {
+          "type": "builds",
+          "id": "build-41",
+          "attributes": {
+            "version": "41"
+          }
+        },
+        {
+          "type": "builds",
+          "id": "build-42",
+          "attributes": {
+            "version": "42"
+          }
+        }
+      ],
+      "links": {
+        "self": "https://api.appstoreconnect.apple.com/v1/apps/1000000001/betaFeedbackCrashSubmissions",
+        "next": "https://api.appstoreconnect.apple.com/v1/apps/1000000001/betaFeedbackCrashSubmissions?cursor=PAGE2"
+      }
+    },
+    "page2": {
+      "data": [
+        {
+          "type": "betaFeedbackCrashSubmissions",
+          "id": "cr-1",
+          "attributes": {
+            "deviceModel": "iPhone16,2",
+            "osVersion": "18.1",
+            "devicePlatform": "IOS",
+            "locale": "en-US",
+            "email": "tester@example.com",
+            "createdDate": "2026-10-31T08:00:00Z",
+            "comment": "Crashed when I tapped sync."
+          },
+          "relationships": {
+            "build": {
+              "data": {
+                "type": "builds",
+                "id": "build-41"
+              }
+            },
+            "tester": {
+              "data": {
+                "type": "betaTesters",
+                "id": "tester-1"
+              }
+            }
+          }
+        },
+        {
+          "type": "betaFeedbackCrashSubmissions",
+          "id": "cr-0",
+          "attributes": {
+            "deviceModel": "iPhone16,2",
+            "osVersion": "18.1",
+            "devicePlatform": "IOS",
+            "locale": "en-US",
+            "email": "tester@example.com",
+            "createdDate": "2026-09-30T08:00:00Z",
+            "comment": ""
+          },
+          "relationships": {
+            "build": {
+              "data": {
+                "type": "builds",
+                "id": "build-41"
+              }
+            },
+            "tester": {
+              "data": {
+                "type": "betaTesters",
+                "id": "tester-1"
+              }
+            }
+          }
+        }
+      ],
+      "included": [
+        {
+          "type": "builds",
+          "id": "build-41",
+          "attributes": {
+            "version": "41"
+          }
+        },
+        {
+          "type": "builds",
+          "id": "build-42",
+          "attributes": {
+            "version": "42"
+          }
+        }
+      ],
+      "links": {
+        "self": "https://api.appstoreconnect.apple.com/v1/apps/1000000001/betaFeedbackCrashSubmissions?cursor=PAGE2",
+        "next": "https://api.appstoreconnect.apple.com/v1/apps/1000000001/betaFeedbackCrashSubmissions?cursor=PAGE3"
+      }
+    }
+  },
+  "crashLogs": {
+    "cr-1": {
+      "data": {
+        "type": "betaCrashLogs",
+        "id": "log-1",
+        "attributes": {
+          "logText": "Incident Identifier: aa11-INCIDENT\nHardware Model:      iPhone16,2\nProcess:             SeKtor [148]\nVersion:             1.0 (42)\nOS Version:          iPhone OS 18.1 (22B83)\n\nException Type:  EXC_CRASH (SIGABRT)\nException Codes: 0x0000000000000000, 0x0000000000000000\nException Reason: *** -[__NSArrayM objectAtIndex:]: index 7 beyond bounds [0 .. 3]\nTermination Reason: SIGNAL 6 Abort trap: 6\n\nLast Exception Backtrace:\n0   CoreFoundation                \t0x00000001aa110a1c __exceptionPreprocess + 164\n1   libobjc.A.dylib               \t0x00000001aa118564 objc_exception_throw + 88\n2   SeKtor                        \t0x0000000102aa11c0 SyncEngine.flush() + 120 (SyncEngine.swift:42)\n3   SeKtor                        \t0x0000000102aa11f0 0x102000000 + 61680\n\nThread 0 Crashed:\n0   libsystem_kernel.dylib        \t0x00000001aa111d4 __pthread_kill + 8\n1   libsystem_pthread.dylib       \t0x00000001aa11ef8 pthread_kill + 268\n"
+        }
+      }
+    },
+    "cr-2": {
+      "data": {
+        "type": "betaCrashLogs",
+        "id": "log-2",
+        "attributes": {
+          "logText": "Incident Identifier: bb22-INCIDENT\nHardware Model:      iPhone16,2\nProcess:             SeKtor [148]\nVersion:             1.0 (42)\nOS Version:          iPhone OS 18.1 (22B83)\n\nException Type:  EXC_CRASH (SIGABRT)\nException Codes: 0x0000000000000000, 0x0000000000000000\nException Reason: *** -[__NSArrayM objectAtIndex:]: index 12 beyond bounds [0 .. 9]\nTermination Reason: SIGNAL 6 Abort trap: 6\n\nLast Exception Backtrace:\n0   CoreFoundation                \t0x00000001bb220a1c __exceptionPreprocess + 164\n1   libobjc.A.dylib               \t0x00000001bb228564 objc_exception_throw + 88\n2   SeKtor                        \t0x0000000102bb22c0 SyncEngine.flush() + 120 (SyncEngine.swift:42)\n3   SeKtor                        \t0x0000000102bb22f0 0x102000000 + 61680\n\nThread 0 Crashed:\n0   libsystem_kernel.dylib        \t0x00000001bb221d4 __pthread_kill + 8\n1   libsystem_pthread.dylib       \t0x00000001bb22ef8 pthread_kill + 268\n"
+        }
+      }
+    },
+    "cr-3": {
+      "data": {
+        "type": "betaCrashLogs",
+        "id": "log-3",
+        "attributes": {
+          "logText": "Incident Identifier: cc33-INCIDENT\nHardware Model:      iPhone16,2\nProcess:             SeKtor [148]\nVersion:             1.0 (42)\nOS Version:          iPhone OS 18.1 (22B83)\n\nException Type:  EXC_CRASH (SIGABRT)\nException Codes: 0x0000000000000000, 0x0000000000000000\nException Reason: Unexpectedly found nil while unwrapping an Optional value\nTermination Reason: SIGNAL 6 Abort trap: 6\n\nLast Exception Backtrace:\n0   CoreFoundation                \t0x00000001cc330a1c swift_unexpectedError + 164\n1   libobjc.A.dylib               \t0x00000001cc338564 objc_exception_throw + 88\n2   SeKtor                        \t0x0000000102cc33c0 SyncEngine.flush() + 120 (SyncEngine.swift:42)\n3   SeKtor                        \t0x0000000102cc33f0 0x102000000 + 61680\n\nThread 0 Crashed:\n0   libsystem_kernel.dylib        \t0x00000001cc331d4 __pthread_kill + 8\n1   libsystem_pthread.dylib       \t0x00000001cc33ef8 pthread_kill + 268\n"
+        }
+      }
+    }
+  }
+}
