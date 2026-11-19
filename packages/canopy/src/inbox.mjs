@@ -105,3 +105,72 @@ export function viewOf(items, { sort, tags }) {
         : byTime,
   )
 }
+
+/**
+ * @typedef {{ key: string, label: string, n: number, tag: string | null }} Part
+ *   One slice of the inbox; `tag` is the filter that selects it, when one exists.
+ * @typedef {{ total: number, reasons: Part[], priorities: Part[], opened: Part[], oldest: string | null,
+ *   repos: Part[] }} InboxStats
+ */
+
+/**
+ * The whole inbox at a glance: why items are there, how urgent, and how long ago their issues were opened.
+ * Parts come in a fixed order (never by size), so a slice keeps its place and color as the counts move:
+ * reasons alphabetically by `why:` value, then items with no `why:` label, then stranded issues;
+ * priorities most urgent first, then unranked, then none. Empty parts are left out, except age buckets.
+ * Age is from the issue's creation: GitHub's answer doesn't say when an item entered q:human.
+ *
+ * @param {InboxItem[]} items
+ * @param {number} now
+ * @returns {InboxStats}
+ */
+export function inboxStats(items, now) {
+  /** @type {Map<string, Part>} */
+  const parts = new Map()
+  const bump = (/** @type {string} */ key, /** @type {string} */ label, /** @type {string | null} */ tag) => {
+    const p = parts.get(key) || { key, label, n: 0, tag }
+    p.n += 1
+    parts.set(key, p)
+  }
+  const DAY = 86_400_000
+  const AGES = [
+    ['age:0', 'under 1d', DAY],
+    ['age:1', '1–7d', 7 * DAY],
+    ['age:2', '1–4w', 28 * DAY],
+    ['age:3', 'over 4w', Infinity],
+  ]
+  let oldest = /** @type {string | null} */ (null)
+  for (const it of items) {
+    if (it.kind === 'stranded') bump('why:~stranded', 'PR closed', 'kind:stranded')
+    else if (it.why) bump(`why:${it.why}`, it.why, `why:${it.why}`)
+    else bump('why:~none', 'no why:', null)
+    if (it.priority) bump(`priority:${it.priority}`, it.priority, `priority:${it.priority}`)
+    else bump('priority:~none', 'none', null)
+    const born = it.createdAt ? Date.parse(it.createdAt) : NaN
+    if (Number.isFinite(born)) {
+      const age = now - born
+      const [key, label] = /** @type {[string, string, number]} */ (
+        AGES.find((a) => age < /** @type {number} */ (a[2]))
+      )
+      bump(key, label, null)
+      if (!oldest || born < Date.parse(oldest)) oldest = it.createdAt
+    }
+    bump(`repo:${it.repo}`, it.repo, `repo:${it.repo}`)
+  }
+  const of = (/** @type {string} */ facet) => [...parts.values()].filter((p) => p.key.startsWith(`${facet}:`))
+  const rank = (/** @type {Part} */ p) => (p.key === 'priority:~none' ? 6 : priorityRank(p.label))
+  return {
+    total: items.length,
+    reasons: of('why').sort((a, b) => {
+      const last = (/** @type {Part} */ p) => ['why:~none', 'why:~stranded'].indexOf(p.key)
+      return last(a) - last(b) || a.label.localeCompare(b.label)
+    }),
+    priorities: of('priority').sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label)),
+    opened: AGES.map(
+      ([key, label]) =>
+        parts.get(/** @type {string} */ (key)) || { key: String(key), label: String(label), n: 0, tag: null },
+    ),
+    oldest,
+    repos: of('repo').sort((a, b) => b.n - a.n || a.label.localeCompare(b.label)),
+  }
+}

@@ -56,7 +56,7 @@ export async function buildState({
       : [...notes, 'no repositories to read: pass --repo owner/name or set repos in cambium config'],
     heartbeat,
     github,
-    traces: traceFile ? traceIndex(traceFile) : null,
+    traces: traceFile ? traceIndex(traceFile, now()) : null,
   }
 }
 
