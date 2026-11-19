@@ -18,6 +18,13 @@ import {
   parsePs,
   watch,
   STALE_MS,
+  RESTART_COOLDOWN_MS,
+  UNPOLLED_MS,
+  assessListener,
+  countLsofConnections,
+  isListener,
+  serviceLabel,
+  watchListener,
 } from '../src/runner-watchdog.mjs'
 
 const PLIST_URL = new URL('../launchd/com.oakgreencc.runner-watchdog.plist', import.meta.url)
@@ -427,4 +434,177 @@ test('an unreadable binary does not throw', () => {
   const f = archPorts({ out: new Error('ENOENT') })
   assert.equal(checkArch(f.ports), false)
   assert.deepEqual(f.lines, [])
+})
+
+// --- the Listener ------------------------------------------------------------
+
+const idle = [listener]
+const busy = [listener, worker]
+const conns = (n) => () => n
+
+test('isListener matches the Listener executable only', () => {
+  assert.equal(isListener(LISTENER_PATH), true)
+  assert.equal(isListener(WORKER_PATH), false)
+})
+
+test('an idle Listener holding a connection is healthy', () => {
+  const a = assessListener({ processes: idle, connections: conns(1), unpolledSince: null, now: NOW })
+  assert.equal(a.verdict, 'healthy')
+})
+
+test('a Listener with a Worker alive is never unpolled, connections or not', () => {
+  const a = assessListener({
+    processes: busy,
+    connections: conns(0),
+    unpolledSince: { pid: 100, sinceMs: NOW - UNPOLLED_MS * 10 },
+    now: NOW,
+  })
+  assert.equal(a.verdict, 'healthy')
+})
+
+test('no connection starts a pending clock; past UNPOLLED_MS it is unpolled', () => {
+  const first = assessListener({ processes: idle, connections: conns(0), unpolledSince: null, now: NOW })
+  assert.equal(first.verdict, 'pending')
+  assert.equal(first.sinceMs, NOW)
+  const later = assessListener({
+    processes: idle,
+    connections: conns(0),
+    unpolledSince: { pid: 100, sinceMs: NOW - UNPOLLED_MS },
+    now: NOW,
+  })
+  assert.equal(later.verdict, 'unpolled')
+})
+
+test('a record for another pid does not carry over to a new Listener', () => {
+  const a = assessListener({
+    processes: idle,
+    connections: conns(0),
+    unpolledSince: { pid: 999, sinceMs: NOW - UNPOLLED_MS * 10 },
+    now: NOW,
+  })
+  assert.equal(a.verdict, 'pending')
+})
+
+test('an lsof that fails is not evidence', () => {
+  const a = assessListener({
+    processes: idle,
+    connections: () => {
+      throw new Error('lsof: not found')
+    },
+    unpolledSince: { pid: 100, sinceMs: NOW - UNPOLLED_MS * 10 },
+    now: NOW,
+  })
+  assert.equal(a.verdict, 'healthy')
+})
+
+test('no Listener, or two, is never unpolled', () => {
+  assert.equal(assessListener({ processes: [], connections: conns(0), unpolledSince: null, now: NOW }).verdict, 'none')
+  const two = [listener, { pid: 101, ppid: 1, command: LISTENER_PATH }]
+  assert.equal(
+    assessListener({ processes: two, connections: conns(0), unpolledSince: null, now: NOW }).verdict,
+    'ambiguous',
+  )
+})
+
+function listenerPorts({ processes = idle, open = 0, state = null, lastRestart = null, restart } = {}) {
+  /** @type {string[]} */
+  const lines = []
+  const f = {
+    lines,
+    state,
+    restarts: 0,
+    marked: /** @type {number | null} */ (null),
+  }
+  f.ports = {
+    listProcesses: () => processes,
+    connections: conns(open),
+    readUnpolled: () => f.state,
+    writeUnpolled: (s) => {
+      f.state = s
+    },
+    lastRestartMs: () => lastRestart,
+    markRestarted: (ms) => {
+      f.marked = ms
+    },
+    restart:
+      restart ??
+      (() => {
+        f.restarts++
+        return 'launchctl kickstart -k gui/501/actions.runner.x'
+      }),
+    now: () => NOW,
+    log: (l) => lines.push(l),
+  }
+  return f
+}
+
+test('pending records when the silence began and does nothing else', () => {
+  const f = listenerPorts()
+  const { assessment, actions } = watchListener(f.ports)
+  assert.equal(assessment.verdict, 'pending')
+  assert.deepEqual(f.state, { pid: 100, sinceMs: NOW })
+  assert.deepEqual(actions, [])
+  assert.deepEqual(f.lines, [])
+})
+
+test('unpolled → restart, logged, stamped, and the clock cleared', () => {
+  const f = listenerPorts({ state: { pid: 100, sinceMs: NOW - UNPOLLED_MS } })
+  const { actions } = watchListener(f.ports)
+  assert.deepEqual(actions, ['restart'])
+  assert.equal(f.restarts, 1)
+  assert.equal(f.marked, NOW)
+  assert.equal(f.state, null)
+  assert.match(f.lines[0], /unpolled/)
+  assert.match(f.lines[1], /restarted .*launchctl kickstart -k/)
+})
+
+test('a restart inside the cooldown is skipped', () => {
+  const f = listenerPorts({
+    state: { pid: 100, sinceMs: NOW - UNPOLLED_MS },
+    lastRestart: NOW - RESTART_COOLDOWN_MS + 1000,
+  })
+  watchListener(f.ports)
+  assert.equal(f.restarts, 0)
+  assert.deepEqual(f.lines, [])
+})
+
+test('a connection coming back clears the clock', () => {
+  const f = listenerPorts({ open: 1, state: { pid: 100, sinceMs: NOW - 60_000 } })
+  assert.equal(watchListener(f.ports).assessment.verdict, 'healthy')
+  assert.equal(f.state, null)
+})
+
+test('dry run logs the verdict and restarts nothing', () => {
+  const f = listenerPorts({ state: { pid: 100, sinceMs: NOW - UNPOLLED_MS } })
+  watchListener(f.ports, { dryRun: true })
+  assert.equal(f.restarts, 0)
+  assert.equal(f.marked, null)
+  assert.match(f.lines[0], /unpolled .*\(dry run\)/)
+})
+
+test('a failed restart is logged, and still starts the cooldown', () => {
+  const f = listenerPorts({
+    state: { pid: 100, sinceMs: NOW - UNPOLLED_MS },
+    restart: () => {
+      throw new Error('Could not find service')
+    },
+  })
+  const { actions } = watchListener(f.ports)
+  assert.deepEqual(actions, [])
+  assert.equal(f.marked, NOW)
+  assert.match(f.lines[1], /error .*restart failed: Could not find service/)
+})
+
+test('countLsofConnections counts n lines of lsof -Fn output', () => {
+  assert.equal(countLsofConnections('p52898\nf12\nn192.168.86.22:54390->20.85.130.105:443\n'), 1)
+  assert.equal(countLsofConnections('p1\nf3\nna->b\nf4\nnc->d\n'), 2)
+  assert.equal(countLsofConnections(''), 0)
+})
+
+test('serviceLabel is the plist basename that svc.sh wrote to .service', () => {
+  assert.equal(
+    serviceLabel('/Users/x/Library/LaunchAgents/actions.runner.sektorapp.Jamess-MacBook-Pro.plist\n'),
+    'actions.runner.sektorapp.Jamess-MacBook-Pro',
+  )
+  assert.throws(() => serviceLabel('  '))
 })

@@ -4,8 +4,9 @@
   minute, kills a `Runner.Worker` wedged spawning a step's bash
   (sektorapp/monorepo#1739), so the one self-hosted runner is freed in ~5-6
   minutes instead of waiting out `timeout-minutes` + 5. It takes rung 2 of the
-  runbook in `docs/guidelines/running-ci.md` (in sektorapp/monorepo) and never
-  touches the Listener.
+  runbook in `docs/guidelines/running-ci.md` (in sektorapp/monorepo). It also
+  restarts the runner service (`launchctl kickstart -k`) when an idle Listener
+  has held no broker connection for 5 minutes, at most once per 30.
 
   User-domain launchd: no sudo. The script must already exist in the OGCC
   monorepo checkout at the path in ProgramArguments, or every tick fails with
