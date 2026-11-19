@@ -43,6 +43,7 @@ Read path:
   graft ci wait <sha|ref> [--check c]  one check's verdict: exit 0 green, 1 red, 2 unknowable
   graft issue read <n>                 an issue as JSON (with the etag \`issue edit\` needs)
   graft status [<branch>]              what this worktree holds that GitHub does not (run before removing it)
+  graft worktree done [<branch>]       all on GitHub? rewind so ExitWorktree remove passes; ff local base
   graft credential get                 git credential helper (git runs this)
 
 Gates and grants:
