@@ -52,7 +52,7 @@ import { stopOverdue } from './workers.mjs'
 
 /**
  * @typedef {(deps: Deps, ctx: Ctx) => Promise<void>} StepFn
- * @typedef {{ reconcile: StepFn, watch: StepFn, sweep: StepFn, scheduleTasks: StepFn, scheduleDispatch?: StepFn }} Engine
+ * @typedef {{ reconcile: StepFn, watch: StepFn, sweep: StepFn, scheduleTasks: StepFn, scheduleDispatch?: StepFn, upkeep?: StepFn }} Engine
  *   The Task-phase steps. `config.engine` picks the legacy stage tick (this file) or the `task` graph
  *   (graph-engine.mjs). The graph engine also folds the Dispatch phase into reconcile and sweep and brings its own
  *   `scheduleDispatch` (without one, the dispatch stub runs). Read and Heartbeat are shared.
@@ -95,6 +95,7 @@ export async function tick(deps) {
         ])),
     ...(ctx.mode === 'running' ? /** @type {[string, StepFn][]} */ ([['schedule', schedule]]) : []),
     ...(paused ? [] : /** @type {[string, any][]} */ ([['release', release]])),
+    ...(paused || !engine.upkeep ? [] : /** @type {[string, StepFn][]} */ ([['upkeep', engine.upkeep]])),
     ...(paused || !deps.gc ? [] : /** @type {[string, StepFn][]} */ ([['gc', gc]])),
   ]
   for (const [name, fn] of steps) await runStep(deps, ctx, name, () => fn(deps, ctx))
@@ -104,7 +105,7 @@ export async function tick(deps) {
 }
 
 /** @type {Engine} */
-const LEGACY = { reconcile, watch, sweep, scheduleTasks }
+const LEGACY = { reconcile, watch, sweep, scheduleTasks, upkeep: async () => {} }
 
 /** @param {Deps} deps @returns {Engine} */
 export const engineOf = (deps) => (deps.config.engine === 'graph' ? GRAPH_ENGINE : LEGACY)
