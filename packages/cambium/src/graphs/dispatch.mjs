@@ -15,6 +15,7 @@ import { move, Q, WHY } from '../labels.mjs'
 import { newMarker, withHistory } from '../marker.mjs'
 import { readTriage, TriageResult, triageComment, triagePrompt } from '../phases/dispatch.mjs'
 import { traceWorker } from '../tracing.mjs'
+import { stopOverdue } from '../workers.mjs'
 import { task } from './task.mjs'
 
 /**
@@ -242,14 +243,11 @@ const triaging = declare(
         return { ready: true, output: { exit: 'lost', ...lostLeaseOf(ctx) } }
       }
       const caps = config.phases.dispatch
-      if (procs.alive(w.pid) && !reaped?.has(w.pid)) {
-        if (!w.killedReason && ctx.tick.now - w.startedAt <= caps.wallClockMinutes * MIN) return { ready: false }
-        const reason = w.killedReason ?? `killed: over the ${caps.wallClockMinutes} min wall-clock cap`
-        procs.kill(w.pid)
-        store.markKilled(w.repo, w.issue, reason)
-        w.killedReason = reason
-        ctx.log('warn', `${reason} (pid ${w.pid})`, { repo: w.repo, issue: w.issue })
-      }
+      if (
+        !reaped?.has(w.pid) &&
+        stopOverdue({ procs, store, log: ctx.log }, w, caps.wallClockMinutes, ctx.tick.now) !== 'gone'
+      )
+        return { ready: false }
       if (!snap) return { ready: false }
       if (issue?.state !== 'OPEN' || !issue.labels.includes(Q.intake)) {
         ctx.log('info', 'triage worker gone; issue is closed or left q:intake', { repo: w.repo, issue: w.issue })

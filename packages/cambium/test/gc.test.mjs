@@ -82,7 +82,16 @@ function gcDeps(repo, home, o) {
   return {
     config,
     store: { workers: () => (o.workers ?? []).map((worktree) => /** @type {any} */ ({ repo: 'o/r', worktree })) },
-    spawner: processSpawner({ config, exec }),
+    spawner: processSpawner({
+      config,
+      exec,
+      // No lsof over the host's processes, no signals: nothing works in these temp worktrees.
+      sys: {
+        holders: () => [],
+        stopNxDaemon: () => null,
+        erase: (dir) => rmSync(dir, { recursive: true, force: true }),
+      },
+    }),
     procs: { alive: (/** @type {number} */ pid) => o.alive?.has(pid) ?? false },
     now: () => o.now ?? T0 + 30 * DAY,
     exec,

@@ -292,7 +292,7 @@ test('a triage worker over its wall-clock cap is killed and its issue goes to a 
   const w = h.deps.store.worker(SLUG, 7)
   h.clock.advance(16 * MIN)
   await tick(h.deps)
-  assert.deepEqual(h.procs.killed, [w?.pid])
+  assert.deepEqual(h.procs.terminated, [w?.pid])
   assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:human', 'why:triage'])
   assert.equal(h.gh.marker(7)?.history.at(-1)?.outcome, 'killed')
 })

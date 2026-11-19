@@ -207,14 +207,24 @@ export function fakeProcs() {
   const alive = new Set()
   /** @type {number[]} */
   const killed = []
+  /** @type {number[]} */
+  const terminated = []
+  /** Pids that ignore SIGTERM (a wedged worker); every other pid exits on it, as Claude Code does. */
+  const stubborn = new Set()
   return {
     alive: (/** @type {number} */ pid) => alive.has(pid),
+    terminate(/** @type {number} */ pid) {
+      terminated.push(pid)
+      if (!stubborn.has(pid)) alive.delete(pid)
+    },
     kill(/** @type {number} */ pid) {
       killed.push(pid)
       alive.delete(pid)
     },
     live: alive,
     killed,
+    terminated,
+    stubborn,
   }
 }
 

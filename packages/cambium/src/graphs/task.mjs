@@ -11,13 +11,14 @@
 import { z } from 'zod'
 import { defineGraph, defineNode, defineWait, END } from '../graph/index.mjs'
 import { branchName } from '../convention.mjs'
-import { iso, key, markerOf, MIN, setLabels, setMarker } from '../issue-state.mjs'
+import { iso, key, markerOf, setLabels, setMarker } from '../issue-state.mjs'
 import { move, Q, WHY } from '../labels.mjs'
 import { withHistory } from '../marker.mjs'
 import { linkIssue, prFor, taskExit, taskPrompt } from '../phases/task.mjs'
 import { PREPARE_FAILED_LINE } from '../prepare.mjs'
 import { traceWorker } from '../tracing.mjs'
 import { baseRed, isRepair } from '../base-health.mjs'
+import { stopOverdue } from '../workers.mjs'
 
 /**
  * @typedef {import('../github.mjs').Issue} Issue
@@ -266,14 +267,11 @@ const workerRunning = declare(
         return { ready: true, output: { exit: 'failed', ...lostLeaseOf(ctx) } }
       }
       const caps = config.phases[/** @type {'task'} */ (w.phase)] ?? config.phases.task
-      if (procs.alive(w.pid) && !reaped?.has(w.pid)) {
-        if (!w.killedReason && ctx.tick.now - w.startedAt <= caps.wallClockMinutes * MIN) return { ready: false }
-        const reason = w.killedReason ?? `killed: over the ${caps.wallClockMinutes} min wall-clock cap`
-        procs.kill(w.pid)
-        store.markKilled(w.repo, w.issue, reason)
-        w.killedReason = reason
-        ctx.log('warn', `${reason} (pid ${w.pid})`, { repo: w.repo, issue: w.issue })
-      }
+      if (
+        !reaped?.has(w.pid) &&
+        stopOverdue({ procs, store, log: ctx.log }, w, caps.wallClockMinutes, ctx.tick.now) !== 'gone'
+      )
+        return { ready: false }
       if (!snap) return { ready: false } // a dead worker waits for a readable snapshot
       if (issue?.state !== 'OPEN') {
         ctx.log('info', 'worker gone; issue is closed or no longer queued', { repo: w.repo, issue: w.issue })

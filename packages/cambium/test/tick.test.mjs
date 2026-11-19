@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openStore } from '../src/store.mjs'
 import { tick } from '../src/tick.mjs'
+import { KILL_GRACE_MS } from '../src/workers.mjs'
 import { harness as baseHarness, SLUG, stageOf, trace } from './fakes.mjs'
 
 /** The harness the running scenario builds with: {@link baseHarness} pinned to one engine, recorded for tracing. */
@@ -196,22 +197,45 @@ scenario('lesson #4349: a dead worker without a result is requeued with attempt 
   assert.equal(h.deps.store.workers().length, 0, 'the slot is free')
 })
 
-scenario('lesson #4349: over the wall-clock cap → kill the process group, requeue', async () => {
+scenario('lesson #4349: over the wall-clock cap → terminate the worker (it exits), requeue', async () => {
   const h = harness({ issues: [task(9)] })
   await tick(h.deps)
   const w = /** @type {any} */ (h.deps.store.worker(SLUG, 9))
   h.clock.advance(59 * MIN)
   await tick(h.deps)
-  assert.deepEqual(h.procs.killed, [], 'under the cap, untouched')
+  assert.deepEqual(h.procs.terminated, [], 'under the cap, untouched')
   h.clock.advance(2 * MIN)
   h.deps.config.phases.task.cap = 0
   await tick(h.deps)
-  assert.deepEqual(h.procs.killed, [w.pid])
+  assert.deepEqual(h.procs.terminated, [w.pid], 'SIGTERM first, so Claude Code ends and flushes its spans')
+  assert.deepEqual(h.procs.killed, [], 'it exited on SIGTERM: no SIGKILL')
   const m = h.gh.marker(9)
   assert.equal(m?.attempt, 2)
   assert.equal(m?.history.at(-1)?.outcome, 'killed')
   assert.match(String(m?.lastFailure), /60 min wall-clock cap/)
   assert.deepEqual(h.gh.issue(9).labels, ['q:task'])
+})
+
+scenario('a worker that ignores SIGTERM is held through the grace, then SIGKILLed and requeued', async () => {
+  const h = harness({ issues: [task(9)] })
+  await tick(h.deps)
+  const w = /** @type {any} */ (h.deps.store.worker(SLUG, 9))
+  h.procs.stubborn.add(w.pid)
+  h.deps.config.phases.task.cap = 0
+  h.clock.advance(61 * MIN)
+  await tick(h.deps)
+  assert.deepEqual(h.procs.terminated, [w.pid])
+  assert.deepEqual(h.procs.killed, [], 'within the grace: no SIGKILL yet')
+  assert.equal(h.gh.marker(9)?.attempt, 1, 'held: no transition while it may still be flushing')
+  assert.ok(h.deps.store.worker(SLUG, 9), 'still tracked')
+  h.clock.advance(KILL_GRACE_MS - 60 * 1000 + 1)
+  await tick(h.deps)
+  assert.deepEqual(h.procs.killed, [w.pid], 'past the cap + grace: SIGKILL')
+  assert.deepEqual(h.procs.terminated, [w.pid], 'terminated once')
+  const m = h.gh.marker(9)
+  assert.equal(m?.attempt, 2)
+  assert.equal(m?.history.at(-1)?.outcome, 'killed')
+  assert.match(String(m?.lastFailure), /60 min wall-clock cap/)
 })
 
 scenario('attempts spent → q:human + why:budget, and nothing restarts it', async () => {
