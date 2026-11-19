@@ -8,6 +8,7 @@
 import { spawn } from 'node:child_process'
 import { parseMarker } from './marker.mjs'
 import { Q, QUEUE_LABELS } from './labels.mjs'
+import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
 
 /**
  * @typedef {{
@@ -35,13 +36,18 @@ import { Q, QUEUE_LABELS } from './labels.mjs'
  *   The repo's promotion state (when its `release` is on): how far `from` is ahead of `to` (null: `to` does not
  *   exist), the PRs merged into `from` since `to` (oldest first, from the last 100 commits ahead), and the
  *   promotion PRs: open ones from `from` to `to` plus any (open, merged or closed) still labelled `q:promote`.
- * @typedef {{ issues: Map<number, Issue>, prs: PullRequest[], release?: Release | null }} Snapshot
+ * @typedef {{
+ *   issues: Map<number, Issue>, prs: PullRequest[], release?: Release | null,
+ *   base?: import('./base-health.mjs').BaseHealth,
+ * }} Snapshot
+ *   `base`: the base branch's health, when the repo has a `requiredCheck`.
  * @typedef {{
  *   read(slug: string): Promise<Snapshot>,
  *   label(slug: string, number: number, change: { add: string[], remove: string[] }): Promise<void>,
  *   writeState(slug: string, number: number, commentId: number | null, body: string): Promise<number>,
  *   close(slug: string, number: number, body: string, opts?: { reason?: 'completed' | 'not_planned' | 'duplicate' }): Promise<void>,
  *   comment(slug: string, number: number, body: string): Promise<void>,
+ *   createIssue(slug: string, issue: { title: string, body: string, labels: string[] }): Promise<{ number: number, url: string }>,
  *   deleteBranch(slug: string, branch: string): Promise<void>,
  *   openPull(slug: string, pr: { head: string, base: string, title: string, body: string }): Promise<{ number: number, url: string }>,
  *   editPull(slug: string, number: number, change: { title: string, body: string }): Promise<void>,
@@ -70,7 +76,7 @@ const PR_FIELDS = `number url headRefName state headRefOid isInMergeQueue body
  * One query per repo per tick: the queued issues and the agent PRs with their checks; with `$release`, also the
  * promotion PRs and how far `$from` is ahead of `$to` (see {@link Release}).
  */
-export const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $labels: [String!], $release: Boolean!, $from: String!, $to: String!) {
+export const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $labels: [String!], $release: Boolean!, $from: String!, $to: String!, $health: Boolean!, $baseRef: String!, $check: String!) {
   repository(owner: $owner, name: $name) {
     issues(labels: $labels, states: OPEN, first: 100, orderBy: { field: CREATED_AT, direction: ASC }) { nodes { ...I } }
     open: pullRequests(states: OPEN, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { ${PR_FIELDS} } }
@@ -84,6 +90,7 @@ export const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $labels: [
         commits(last: 100) { nodes { associatedPullRequests(first: 3) { nodes { number title baseRefName state } } } }
       }
     }
+    ${BASE_FIELDS}
   }
 }
 fragment I on Issue {
@@ -222,7 +229,7 @@ export function addIssues(snap, data, asked, botLogin = null) {
  *   `botLogin`: when set, only that login's markers count. `release`: the branches the query asked about.
  * @returns {Snapshot}
  */
-export function normalize(data, { botLogin = null, release = null } = {}) {
+export function normalize(data, { botLogin = null, release = null, health = null } = {}) {
   const repo = (data?.data ?? data)?.repository
   if (!repo) throw new Error('snapshot: no repository in the answer')
   /** @type {Map<number, Issue>} */
@@ -258,7 +265,12 @@ export function normalize(data, { botLogin = null, release = null } = {}) {
       closes: [...new Set([...(p.closingIssuesReferences?.nodes ?? []).map(addIssue), ...bodyCloses(p.body)])],
     })
   }
-  return { issues, prs, ...(release ? { release: normalizeRelease(repo, release, botLogin) } : {}) }
+  return {
+    issues,
+    prs,
+    ...(release ? { release: normalizeRelease(repo, release, botLogin) } : {}),
+    ...(health ? { base: baseHealthOf(repo, health) } : {}),
+  }
 }
 
 /**
@@ -309,9 +321,20 @@ export function graftGitHub({ config, exec: run = exec }) {
       // (promotion.mjs); the release graphs check `enabled` themselves.
       const release = r && r.from !== r.to ? { from: r.from, to: r.to } : null
       const branches = release ?? { from: '', to: '' }
-      const vars = JSON.stringify({ owner, name, labels: QUEUE_LABELS, release: Boolean(release), ...branches })
+      const repo = config.repos.find((x) => x.slug === slug)
+      const health = repo?.requiredCheck ? { branch: repo.baseBranch, check: repo.requiredCheck } : null
+      const vars = JSON.stringify({
+        owner,
+        name,
+        labels: QUEUE_LABELS,
+        release: Boolean(release),
+        ...branches,
+        health: Boolean(health),
+        baseRef: health ? `refs/heads/${health.branch}` : '',
+        check: health?.check ?? '',
+      })
       const data = await json(graft(slug, ['graphql', SNAPSHOT_QUERY, '--vars', vars]))
-      const snap = normalize(data, { botLogin: config.graft.botLogin, release })
+      const snap = normalize(data, { botLogin: config.graft.botLogin, release, health })
       const unread = unreadCloses(snap)
       if (!unread.length) return snap
       // Issues named only in PR bodies (in no queue): one more query, for those.
@@ -352,6 +375,18 @@ export function graftGitHub({ config, exec: run = exec }) {
     },
     async comment(slug, number, body) {
       await graft(slug, ['issue', 'comment', String(number), '--body-file', '-'], body)
+    },
+    async createIssue(slug, { title, body, labels }) {
+      const args = [
+        'issue',
+        'create',
+        '--title',
+        title,
+        '--body-file',
+        '-',
+        ...(labels.length ? ['--labels', labels.join(',')] : []),
+      ]
+      return json(graft(slug, args, body))
     },
     async deleteBranch(slug, branch) {
       await graft(slug, ['api', 'DELETE', `/repos/${slug}/git/refs/heads/${branch}`])

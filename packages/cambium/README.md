@@ -127,6 +127,7 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
 - `repos[].path` is a local clone; worktrees are added from it and `graft` runs in it.
 - `graft.app` is the App cambium acts as (`GRAFT_APP` for its own `graft` calls); `worker.graftApp` the one workers act as. Neither leaks into the other.
 - `merge` (top level, or per repo in `repos[]`): who merges a Task PR. See [Merging](#merging).
+- `repos[].requiredCheck` (default `"ci"`): the check whose runs on `baseBranch` say whether the base is green; `null` turns the [red-base](#red-base) gate and repair off for that repo.
 - `engine` picks how the Task phase runs: `"legacy"` (the stage tick, the default) or `"graph"` (the [`task` graph](#the-task-graph)). Both make the same moves; see [The task graph](#the-task-graph). Only `"graph"` runs the [`dispatch` graph](#the-dispatch-graph) (gated by `phases.dispatch.cap`); legacy leaves `q:intake` alone.
 - Setting `paths.home` moves every default path under it.
 - `release.time` is host-local `HH:MM`.
@@ -322,6 +323,14 @@ Neither of our repos runs a GitHub merge queue (it costs), so `merge` says who m
   - **Up to date first.** Before merging, `merge` asks GitHub live how far the PR's head is behind its base (`compare`, so a merge earlier in the same tick counts). Behind → `graft pr update <n>` instead of the merge (history `branch-updated`, held like a refusal on the old head), and the updated head merges once its CI is green; red there requeues like any red CI. This is a merge queue without the cost: two PRs green on the same base can be red together (sektorapp/monorepo#4624 + #4625 broke develop 8 s apart), and the base does not require up-to-date branches. An update GitHub refuses (a conflict) is a `merge-refused` and stalls to `q:human` like any other.
 
 The worker prompt says which: "Green: stop; cambium merges the PR once CI is green" or "…the PR is merged outside this session".
+
+## Red base
+
+Every Task PR lands on `baseBranch`, so a red base fails every worker for a reason that is not its own. Without a gate each one spends its attempts and lands in `q:human` (sektorapp/monorepo#3972: three attempts killed at the cap while #4624 + #4625, green apart, had broken `develop` together). `src/base-health.mjs`, graph engine:
+
+- **Observe.** The tick's snapshot reads `baseBranch`'s last 20 commits with their `requiredCheck` run. The newest commit with a verdict decides: `green`, `red` (with the last green commit and the merges since it, the suspects), or `unknown` (no completed run in the window; a pending or cancelled run says nothing, so a red base stays red until a run passes). The heartbeat carries it per repo (`repos[].base`). The base needs its check to run on push: a repo whose CI runs only on pull requests is always `unknown`.
+- **Gate.** While red, Schedule starts no Task worker on that repo except the repair, which takes no slot. A failure during a red base requeues at the same attempt (history `base-red`, "not charged") and never goes to `q:human`; it waits in `q:task` for green. `unknown` gates nothing.
+- **Resolve.** Red with no open repair issue → cambium opens one: labelled `red-base`, `q:task` and the first `priorityLabels` entry, its body the worker's spec (the failing run, the suspects, fix forward or revert the culprit, `pnpm verify`). It runs as an ordinary Task issue and is charged like one, so a repair that spends its attempts goes to `q:human`. Its PR merges through graft's red-base rescue (up to date with the base, its own check green). Green again → a repair issue with no open PR and no worker is closed with a comment.
 
 ## The dispatch graph
 

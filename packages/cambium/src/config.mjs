@@ -16,7 +16,12 @@ import { join, resolve } from 'node:path'
  *   Who merges a Task PR. `none`: not cambium (a merge queue, auto-merge, or a human; past `mergeQueueMinutes`
  *   the issue goes to `q:human`). `green`: cambium, once its checks are green, through `graft pr merge --auto`
  *   (so graft's merge policy still decides). `green` needs `engine: "graph"`.
- * @typedef {{ slug: string, path: string, baseBranch: string, release: RepoRelease, merge: MergePolicy }} Repo
+ * @typedef {{
+ *   slug: string, path: string, baseBranch: string, release: RepoRelease, merge: MergePolicy,
+ *   requiredCheck: string | null,
+ * }} Repo
+ *   `requiredCheck` (default `ci`): the check whose runs on `baseBranch` say whether the base is green (see
+ *   base-health.mjs); `null` turns the red-base gate and repair off for the repo.
  * @typedef {{ cap: number, wallClockMinutes: number, maxTurns: number, maxAttempts: number }} PhaseCaps
  * @typedef {{
  *   host: string,
@@ -121,7 +126,10 @@ export function resolveConfig(raw = {}) {
     const merge = r.merge ?? config.merge
     if (!MERGE_POLICIES.includes(merge))
       throw new Error(`config: repo ${r.slug} merge must be "none" or "green", got ${JSON.stringify(merge)}`)
-    return { slug: r.slug, path: untilde(r.path), baseBranch, release, merge }
+    const requiredCheck = r.requiredCheck === undefined ? 'ci' : r.requiredCheck
+    if (requiredCheck !== null && (typeof requiredCheck !== 'string' || !requiredCheck))
+      throw new Error(`config: repo ${r.slug} requiredCheck must be a check name or null`)
+    return { slug: r.slug, path: untilde(r.path), baseBranch, release, merge, requiredCheck }
   })
   if (!MERGE_POLICIES.includes(config.merge))
     throw new Error(`config: merge must be "none" or "green", got ${JSON.stringify(config.merge)}`)
