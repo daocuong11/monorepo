@@ -3,23 +3,32 @@ import { facetsOf, inboxItems, priorityRank, viewOf } from './inbox.mjs'
 import { markdown } from './markdown.mjs'
 
 const CSS = `
-:root{color-scheme:light dark;--bg:#f7f7f5;--panel:#fff;--line:#e4e4e0;--text:#1d1d1b;--muted:#5f5f5a;--faint:#72726c;
---ok:#2f7d4f;--warn:#a5670a;--err:#b42f2f;--accent:#2f5f9e;--chip:#efefeb;--bar:#dcdcd6;
+/* Neutrals carry a trace of canopy green (hue 150); blue is kept for action and selection so green can mean healthy.
+   --flow-* is one hue stepping intake to promote; --fam-* tells cambium, claude and mycelium spans apart. */
+:root{color-scheme:light dark;--bg:oklch(.975 .005 150);--panel:oklch(.997 .002 150);--line:oklch(.91 .008 150);--text:oklch(.24 .012 150);
+--muted:oklch(.46 .014 150);--faint:oklch(.53 .014 150);--chip:oklch(.948 .008 150);--bar:oklch(.875 .01 150);
+--ok:oklch(.52 .12 152);--warn:oklch(.52 .125 62);--err:oklch(.53 .17 26);--accent:oklch(.49 .13 256);
+--flow-1:oklch(.8 .06 256);--flow-2:oklch(.68 .1 256);--flow-3:oklch(.56 .13 256);--flow-4:oklch(.43 .12 256);
+--fam-cambium:oklch(.58 .12 256);--fam-claude:oklch(.57 .15 305);--fam-mycelium:oklch(.6 .1 190);--health:var(--faint);
 --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px}
-@media (prefers-color-scheme:dark){:root{--bg:#141413;--panel:#1c1c1a;--line:#2e2e2b;--text:#e6e6e1;--muted:#b0b0aa;--faint:#8a8a84;
---ok:#6cc08b;--warn:#e0a44a;--err:#ec7b7b;--accent:#86aee6;--chip:#262624;--bar:#353532}}
+@media (prefers-color-scheme:dark){:root{--bg:oklch(.175 .007 150);--panel:oklch(.215 .008 150);--line:oklch(.3 .009 150);--text:oklch(.925 .007 150);
+--muted:oklch(.77 .012 150);--faint:oklch(.65 .012 150);--chip:oklch(.26 .009 150);--bar:oklch(.34 .01 150);
+--ok:oklch(.76 .13 152);--warn:oklch(.79 .12 72);--err:oklch(.73 .14 22);--accent:oklch(.77 .1 256);
+--flow-1:oklch(.42 .06 256);--flow-2:oklch(.54 .09 256);--flow-3:oklch(.66 .11 256);--flow-4:oklch(.8 .1 256);
+--fam-cambium:oklch(.71 .11 256);--fam-claude:oklch(.71 .13 305);--fam-mycelium:oklch(.75 .09 190)}}
+body[data-health=ok]{--health:var(--ok)}body[data-health=warn]{--health:var(--warn)}body[data-health=err]{--health:var(--err)}body.down{--health:var(--faint)}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums}
 ::selection{background:color-mix(in srgb,var(--accent) 28%,transparent)}
 a{color:var(--accent);text-decoration:none;text-underline-offset:2px}a:hover{text-decoration:underline}
 a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
 code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-#top{position:sticky;top:0;z-index:1}
+#top{position:sticky;top:0;z-index:1;border-top:3px solid var(--health);transition:border-color .4s ease-out}
 header{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px var(--s4);padding:10px var(--s4);border-bottom:1px solid var(--line);background:var(--panel)}
 header h1{font-size:14px;margin:0;font-weight:600}
 .tabs{display:flex;gap:var(--s5);padding:0 var(--s4);border-bottom:1px solid var(--line);background:var(--panel);overflow-x:auto;scrollbar-width:none}
 .tab{appearance:none;background:none;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;padding:9px 0 8px;font:inherit;font-weight:500;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
-.tab:hover{color:var(--text)}.tab[aria-selected=true]{color:var(--text);border-bottom-color:var(--text);font-weight:600}
+.tab:hover{color:var(--text)}.tab[aria-selected=true]{color:var(--text);border-bottom-color:var(--accent);font-weight:600}
 .tab:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:3px}
 .tab .count{min-width:18px;padding:0 6px;border-radius:9px;background:var(--chip);color:var(--muted);font-size:12px;font-weight:500;text-align:center}
 .tab .count.attn{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn);font-weight:600}
@@ -105,6 +114,9 @@ h2 .n{color:var(--faint);margin-left:4px}
 .cols{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) minmax(0,1.35fr);gap:var(--s4)}
 .col.prs{border-left:1px solid var(--line);padding-left:var(--s4)}
 .col{min-width:0}.col ul{list-style:none;margin:0;padding:0}
+.col>h2{padding-top:var(--s2);border-top:3px solid var(--line)}.col.prs>h2{border-top-color:transparent}
+.col.l-intake>h2{border-top-color:var(--flow-1)}.col.l-task>h2{border-top-color:var(--flow-2)}.col.l-running>h2{border-top-color:var(--flow-3)}.col.l-promote>h2{border-top-color:var(--flow-4)}
+.col li>a{color:var(--text)}.col li>a:hover{color:var(--accent);text-decoration:none}.col li>a:hover .t{text-decoration:underline}
 .col li{padding:6px 0;border-top:1px solid var(--line)}.col li:first-child{border-top:0}
 .t{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .col .t{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
@@ -129,8 +141,11 @@ a.row-link{color:inherit}a.row-link:hover{text-decoration:none}tr.run:hover td{b
 .sp:hover{background:var(--chip)}.sp:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:3px}
 .sp .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sp .nm .faint{margin-left:6px}
 .sp .track{position:relative;height:12px;background:color-mix(in srgb,var(--bar) 35%,transparent);border-radius:2px}
-.sp .track i{position:absolute;top:2px;height:8px;border-radius:2px;background:var(--accent);min-width:2px}
-.sp .track i.wait{background:var(--faint)}.sp .track i.err{background:var(--err)}
+.sp .track i{position:absolute;top:2px;height:8px;border-radius:2px;background:var(--fam,var(--muted));min-width:2px}
+.f-cambium{--fam:var(--fam-cambium)}.f-claude{--fam:var(--fam-claude)}.f-mycelium{--fam:var(--fam-mycelium)}
+.sp .track i.wait{background:repeating-linear-gradient(135deg,var(--bar) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px var(--bar)}.sp .track i.err{background:var(--err)}
+.legend{display:flex;flex-wrap:wrap;gap:2px var(--s3);margin-bottom:var(--s3);font-size:12px;color:var(--muted)}.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{width:10px;height:8px;border-radius:2px;background:var(--fam,var(--muted))}.legend i.wait{background:repeating-linear-gradient(135deg,var(--bar) 0 3px,transparent 3px 6px);box-shadow:inset 0 0 0 1px var(--bar)}.legend i.err{background:var(--err)}
 .sp .d{text-align:right;color:var(--muted)}
 .attrs{margin:0;padding:var(--s2) 0 var(--s3) var(--s4);display:grid;grid-template-columns:max-content minmax(0,1fr);gap:2px var(--s3);font-size:12px}
 .attrs dt{color:var(--muted)}.attrs dd{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
@@ -444,7 +459,7 @@ function queues(s, now) {
   const col = (title, label, xs, render, cls) => h('div', { class: 'col' + (cls ? ' ' + cls : '') },
     h('h2', {}, title, h('span', { class: 'n' }, xs.length), label ? h('span', { class: 'lane-label mono' }, label) : null), list(xs, render, multi, now))
   return h('section', {}, h('div', { class: 'cols' },
-    LANES.map(([k, title, label]) => col(title, label, gh.columns[k], item)), col('Agent PRs', 'agent/*', gh.prs, pr, 'prs')))
+    LANES.map(([k, title, label]) => col(title, label, gh.columns[k], item, 'l-' + k)), col('Agent PRs', 'agent/*', gh.prs, pr, 'prs')))
 }
 
 function healthOf(s) {
@@ -535,9 +550,20 @@ function spanDetail(sp) {
   if (a['cambium.graph']) return [a['cambium.graph']]
   return []
 }
-const preview = (v) => { const t = String(v).replace(/s+/g, ' ').trim(); return t.length > 120 ? t.slice(0, 119) + '…' : t }
+const preview = (v) => { const t = String(v).replace(/\\s+/g, ' ').trim(); return t.length > 120 ? t.slice(0, 119) + '…' : t }
 const showValue = (v) => (typeof v === 'string' ? v : JSON.stringify(v))
 let openSpans = new Set()
+// Bars are colored by the span name's prefix: which part of the stack did this work.
+const FAMILIES = ['cambium', 'claude', 'mycelium']
+const familyOf = (name) => { const f = String(name).split('.')[0]; return FAMILIES.includes(f) ? f : null }
+function legend(spans) {
+  const fams = FAMILIES.filter((f) => spans.some((sp) => familyOf(sp.name) === f))
+  const key = (cls, label) => h('span', {}, h('i', { class: cls }), label)
+  return h('div', { class: 'legend', 'aria-hidden': 'true' }, fams.map((f) => key('f-' + f, f + '.*')),
+    spans.some((sp) => familyOf(sp.name) === null) ? key('', 'other') : null,
+    spans.some((sp) => sp.name === 'cambium.wait') ? key('wait', 'waiting') : null,
+    spans.some((sp) => sp.status === 'error') ? key('err', 'failed') : null)
+}
 
 function traceView(d) {
   const t = d.summary, span = Math.max(1, t.end - t.start)
@@ -556,7 +582,8 @@ function traceView(d) {
     const left = ((sp.start - t.start) / span) * 100, width = ((sp.end - sp.start) / span) * 100
     const open = openSpans.has(sp.spanId)
     const detail = spanDetail(sp).filter((x) => x != null && x !== '')
-    const bar = [sp.name === 'cambium.wait' ? 'wait' : '', sp.status === 'error' ? 'err' : ''].join(' ').trim()
+    const fam = familyOf(sp.name)
+    const bar = [fam ? 'f-' + fam : '', sp.name === 'cambium.wait' ? 'wait' : '', sp.status === 'error' ? 'err' : ''].join(' ').trim()
     const row = h('button', { type: 'button', class: 'sp', 'data-span': sp.spanId, 'aria-expanded': String(open),
         title: sp.name + ' · at +' + dur(sp.start - t.start) + ' · took ' + dur(sp.end - sp.start) },
       h('span', { class: 'nm', style: 'padding-left:' + sp.depth * 14 + 'px' },
@@ -569,7 +596,7 @@ function traceView(d) {
     for (const e of sp.events) kv.push(['event · ' + e.name, (isFinite(e.at) ? '+' + dur(e.at - sp.start) + ' ' : '') + Object.entries(e.attrs).map(([k, v]) => k + '=' + showValue(v)).join(' ')])
     return [row, h('dl', { class: 'attrs mono' }, kv.map(([k, v]) => [h('dt', {}, k), h('dd', {}, showValue(v))]))]
   })
-  return h('section', {}, head, h('div', { class: 'wf' }, axis, rows), traceFileNote(d))
+  return h('section', {}, head, h('div', { class: 'wf' }, legend(d.spans), axis, rows), traceFileNote(d))
 }
 
 function tracesTab(now) {
@@ -601,8 +628,34 @@ async function loadTraces() {
   }
 }
 
+// The browser tab carries health too, by color and shape: a disc when healthy, a triangle on a warning,
+// a square on a failure, a hollow ring when the canopy server is unreachable.
+const ICON = {
+  ok: ['#2f9a5c', (g) => g.arc(16, 16, 13, 0, 2 * Math.PI)],
+  warn: ['#d08a1c', (g) => { g.moveTo(16, 3); g.lineTo(30, 29); g.lineTo(2, 29); g.closePath() }],
+  err: ['#d64040', (g) => g.roundRect(3, 3, 26, 26, 4)],
+  down: ['#8a8f8a', (g) => g.arc(16, 16, 11, 0, 2 * Math.PI)],
+}
+let iconTone = null
+function setIcon(tone) {
+  if (tone === iconTone || !ICON[tone]) return
+  const cv = Object.assign(document.createElement('canvas'), { width: 32, height: 32 }), g = cv.getContext('2d')
+  if (!g) return
+  iconTone = tone
+  const [c, shape] = ICON[tone]
+  g.beginPath()
+  shape(g)
+  if (tone === 'down') Object.assign(g, { strokeStyle: c, lineWidth: 5 }).stroke()
+  else Object.assign(g, { fillStyle: c }).fill()
+  let el = document.querySelector('link[rel=icon]')
+  if (!el) document.head.append((el = Object.assign(document.createElement('link'), { rel: 'icon' })))
+  el.href = cv.toDataURL('image/png')
+}
+
 function tabs(s) {
   const human = needsYou(s.github), queued = inFlight(s.github), [tone, why] = healthOf(s)
+  document.body.dataset.health = tone
+  setIcon(tone)
   $('n-inbox').textContent = human
   $('n-inbox').className = 'count' + (human ? ' attn' : '')
   $('tab-inbox').setAttribute('aria-label', 'Inbox: ' + plural(human, 'issue needs', 'issues need') + ' you')
@@ -763,6 +816,7 @@ async function poll() {
   } catch (err) {
     $('down')?.remove()
     document.body.classList.add('down')
+    setIcon('down')
     document.title = 'canopy · unreachable'
     $('main').prepend(h('div', { id: 'down', class: 'banner err' }, h('b', {}, "Can't reach the canopy server: "), (err && err.message) || 'no answer',
       '. Showing the last data it sent; retrying every ' + dur(pollMs) + '. Is canopy still running?'))
