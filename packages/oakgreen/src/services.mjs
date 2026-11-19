@@ -2,7 +2,8 @@
 /**
  * The stack's long-running services: launchd user agents (macOS).
  *
- * - `start`: install the agent when its tool can (`cambium install`, `mycelium install`), enable it, load it.
+ * - `start`: install the agent when its tool can (`cambium install`, `mycelium install`, `canopy install`), enable
+ *   it, load it.
  * - `stop`: disable and unload it, so it stays stopped across logins until `start`.
  * - `restart`: a new process on the same agent definition. SIGTERM, then launchd's KeepAlive starts it again
  *   (cambium finishes its current tick first; its workers keep running). Picks up new code after an npm update.
@@ -10,7 +11,8 @@
  *   wait until launchd has let go of it, then `bootstrap`. Waiting matters: bootstrapping while the old process
  *   is still finishing a tick fails with "Bootstrap failed: 5: Input/output error".
  *
- * Order is otelcol, cambium, mycelium, so the first spans have a collector to go to; `stop` goes in reverse.
+ * Order is otelcol, cambium, mycelium, canopy, so the first spans have a collector to go to and the page comes up
+ * over a running stack; `stop` goes in reverse.
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -23,6 +25,7 @@ export const SERVICES = Object.freeze([
   { name: 'otelcol', label: 'com.oakgreencc.otelcol', what: 'OpenTelemetry collector (traces for canopy)' },
   { name: 'cambium', label: 'com.oakgreencc.cambium', what: 'the scheduler daemon', install: 'cambium' },
   { name: 'mycelium', label: 'com.oakgreencc.mycelium', what: 'intake connectors', install: 'mycelium' },
+  { name: 'canopy', label: 'com.oakgreencc.canopy', what: 'the local status page', install: 'canopy' },
 ])
 
 /**

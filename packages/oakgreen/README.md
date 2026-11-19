@@ -12,7 +12,7 @@ oakgreen setup --repo owner/name    # labels + cambium config skeleton, then the
 oakgreen doctor                     # one checklist, exit 1 if a required check fails
 oakgreen graft status               # any tool, args passed through
 oakgreen start                       # install (first time) and start every service that is configured
-oakgreen services                    # are otelcol, cambium and mycelium running?
+oakgreen services                    # are otelcol, cambium, mycelium and canopy running?
 oakgreen restart                     # new processes, e.g. after npm updates
 oakgreen stop mycelium               # stopped until the next start, across logins too
 oakgreen update                      # latest oakgreen and its tools, then restart what runs
@@ -43,10 +43,12 @@ The long-running parts of the stack are launchd user agents (macOS only for now)
 | `otelcol`  | `com.oakgreencc.otelcol`  | The local OpenTelemetry collector (cambium's `otel/`), whose trace file canopy reads |
 | `cambium`  | `com.oakgreencc.cambium`  | The scheduler daemon (`cambium install` writes the agent)                            |
 | `mycelium` | `com.oakgreencc.mycelium` | The intake connectors, `mycelium run` (`mycelium install` writes the agent)          |
+| `canopy`   | `com.oakgreencc.canopy`   | The status page on `http://127.0.0.1:4317/` (`canopy install` writes the agent)      |
 
-- **`start`** leaves a running service alone. A missing agent is written by its tool (`cambium install`, `mycelium install`; otelcol has none, see cambium's [Tracing](../cambium/README.md#tracing)); with no names, one its tool refuses (no cambium config, no mycelium source) is skipped with the reason. Then `launchctl enable` and `bootstrap`, or `kickstart` when it is loaded but idle.
+- **`start`** leaves a running service alone. A missing agent is written by its tool (`cambium install`, `mycelium install`, `canopy install`; otelcol has none, see cambium's [Tracing](../cambium/README.md#tracing)); with no names, one its tool refuses (no cambium config, no mycelium source) is skipped with the reason. Then `launchctl enable` and `bootstrap`, or `kickstart` when it is loaded but idle.
 - **`stop`** is `launchctl disable` then `bootout`, waiting for the process to exit. Disabled, launchd will not start it at login; `start`, `restart` and `reload` all enable it again.
 - **`restart`** sends SIGTERM (`launchctl kill TERM`) and waits for KeepAlive to bring up a new pid. cambium finishes its current tick first; its workers keep running and are re-adopted. Use it after `npm i -g` of a new version (or let `cambium update` do both, see cambium's [Self-update](../cambium/README.md#self-update)). An installed agent that is not loaded is loaded.
+- **canopy** is served with its defaults when `oakgreen start` installs it. For other flags (a port, a repo list), write the agent yourself first, e.g. `canopy install --port 4400`, then `oakgreen reload canopy`; `canopy install --dry-run` prints it.
 - **`reload`** is for a changed plist (an added `OTEL_*` variable, a new Node path): `launchctl bootout`, then it **waits until launchd has let go of the old process** before `launchctl bootstrap` (retried a few times). Bootstrapping while cambium is still finishing a tick is what fails with `Bootstrap failed: 5: Input/output error`.
 - With no names, every service is handled and one that is not installed is skipped; a named one that is not installed fails. Each waits up to 3 minutes for its process; exit 1 if any did not come up.
 - canopy is not a service here: it runs in the foreground (`canopy`, or `pnpm start` in the monorepo).
