@@ -42,12 +42,14 @@
  *   failedSha?: string | null,
  *   lastFailure?: string | null,
  *   mergeRefusal?: { sha: string | null, at: string, reason: string } | null,
+ *   reworks?: number,
  *   triage?: { title?: string, acceptance?: string[] } | null,
  *   defers?: number,
  *   deferUntil?: string | null,
  *   deferReason?: string | null,
  * }} Marker
- *   `mergeRefusal`: the last `graft pr merge` cambium was refused (task graph `merge`), and on which head.
+ *   `mergeRefusal`: the last `graft pr merge` cambium was refused (PR graph `merge`), and on which head.
+ *   `reworks`: how many times the PR graph sent this issue's PR back to a worker.
  *   `defers`, `deferUntil`, `deferReason`: the dispatch graph's `deferred` node: how many times triage deferred, until
  *   when, and what the next triage should check.
  *   `triage`: what the dispatch graph's triage added when it handed the issue to `q:task`; the task prompt shows it.

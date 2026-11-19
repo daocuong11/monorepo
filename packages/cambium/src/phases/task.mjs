@@ -31,6 +31,10 @@ ${
   pr
     ? `\nA PR already exists: #${pr.number} (${pr.url}) on \`${pr.branch}\`. Start from it: \`graft advance ${pr.branch}\`, then fix what failed.\n`
     : ''
+}${
+  marker.reworks
+    ? `\nThis is rework ${marker.reworks} of PR #${marker.pr ?? pr?.number}: cambium's PR graph sent it back (the reason is below). Push the fix to the same branch; the PR graph merges it once it is green.\n`
+    : ''
 }${marker.lastFailure ? `\nWhy the last attempt failed:\n\`\`\`\n${marker.lastFailure}\n\`\`\`\n` : ''}${history ? `\nHistory of this issue:\n${history}\n` : ''}
 --- Issue #${issue.number}: ${issue.title} (${issue.url})
 ${issue.body}

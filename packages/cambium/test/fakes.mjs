@@ -44,6 +44,9 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
     autoMerge: true,
     checks: 'PENDING',
     failing: [],
+    mergeable: 'MERGEABLE',
+    reviewDecision: null,
+    createdAt: new Date(T0).toISOString(),
     ...p,
   }))
   /** @type {{ op: string, args: any[] }[]} */
@@ -131,6 +134,11 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
       calls.push({ op: 'deleteBranch', args: [slug, branch] })
       for (const p of pulls) if (p.branch === branch) p.branchExists = false
     },
+    async closePull(slug, number, comment) {
+      calls.push({ op: 'closePull', args: [slug, number, comment] })
+      const p = pulls.find((x) => x.number === number)
+      if (p) p.state = 'CLOSED'
+    },
     async mergePull(slug, number) {
       calls.push({ op: 'mergePull', args: [slug, number] })
       if (faults.mergeError) throw faults.mergeError
@@ -172,6 +180,9 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
         autoMerge: true,
         checks: 'PENDING',
         failing: [],
+        mergeable: 'MERGEABLE',
+        reviewDecision: null,
+        createdAt: new Date(T0).toISOString(),
         ...p,
       })
     },
@@ -301,6 +312,8 @@ const STAGE_OF = {
   'start-worker': 'queued',
   'worker-running': 'running',
   'ci-running': 'submitted',
+  submit: 'submitted',
+  merge: 'submitted',
   merging: 'submitted',
   'merge-queue': 'submitted',
   'to-human': 'human',
@@ -311,10 +324,11 @@ const STAGE_OF = {
 export const stageOf = (m) => (m ? STAGE_OF[m.node] : undefined)
 
 /**
- * `merge-queue` is the legacy tick's `submitted` with `queued: true`, so both compare as `ci-running`.
+ * `merge-queue` is the legacy tick's `submitted` with `queued: true`, and the graph's `submit` (where the task graph
+ * ends) is the legacy tick's `submitted`, so all compare as `ci-running`.
  * @param {string | null | undefined} node
  */
-const sameNode = (node) => (node === 'merge-queue' ? 'ci-running' : node)
+const sameNode = (node) => (node === 'merge-queue' || node === 'submit' ? 'ci-running' : node)
 
 /**
  * A marker's meaning, without what only one engine writes: `stage` (legacy), `graphVersion`, `enteredAt` and
@@ -324,8 +338,11 @@ const sameNode = (node) => (node === 'merge-queue' ? 'ci-running' : node)
 export function semanticMarker(body) {
   const m = /** @type {Record<string, any>} */ (parseMarker(body))
   const { stage: _stage, graphVersion: _version, enteredAt: _entered, input: _input, ...rest } = m
+  // The task graph ends at `submit` (done, no lease); the legacy tick's `submitted` waits there with its lease.
+  const submitted = rest.node === 'submit'
   return {
     ...rest,
+    ...(submitted ? { status: 'waiting' } : {}),
     node: sameNode(rest.node),
     history: rest.history.map((/** @type {any} */ h) => ({ ...h, node: sameNode(h.node) })),
   }

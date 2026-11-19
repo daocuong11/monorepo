@@ -102,7 +102,7 @@ test('intake → triage → q:task → task worker → PR: one trace, continued 
   await endWorker(h, 7, WORKER_LOG)
   h.gh.addPr({ number: 70, closes: [7] })
   await tick(h.deps)
-  assert.equal(h.gh.marker(7)?.node, 'ci-running')
+  assert.equal(h.gh.marker(7)?.node, 'submit')
   assert.equal(h.gh.marker(7)?.traceparent, issueTp)
 
   const all = await spans()

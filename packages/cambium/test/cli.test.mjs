@@ -99,7 +99,7 @@ test('run task --issue N: claims, runs one worker in the foreground, transitions
   assert.equal(await main(['run', 'task', '--issue', '5', '--repo', 'x/y'], { ...s.io, deps: () => h.deps }), 1)
 })
 
-test('run task --issue N on the graph engine: foreground worker, then the first wait that is not ready', async () => {
+test('run task --issue N on the graph engine: foreground worker, then the task graph ends at submit', async () => {
   const s = setup({ engine: 'graph' })
   const h = harness({ issues: [{ number: 5, labels: ['q:task'] }], config: { engine: 'graph' } })
   const start = h.spawner.start
@@ -110,43 +110,52 @@ test('run task --issue N on the graph engine: foreground worker, then the first 
     return started
   }
   assert.equal(await main(['run', 'task', '--issue', '5'], { ...s.io, deps: () => h.deps }), 0)
-  assert.equal(h.gh.marker(5)?.node, 'ci-running')
+  assert.equal(h.gh.marker(5)?.node, 'submit')
   assert.equal(h.deps.store.worker(SLUG, 5), null, 'the worker row is released')
   const text = s.out.join('\n')
   assert.match(text, /worker pid \d+ in /)
   assert.match(text, /worker exited 0/)
-  assert.match(text, /o\/r#5: ci-running · labels \(none\)/)
+  assert.match(text, /o\/r#5: submit \(done\) · labels \(none\)/)
 
-  // Again: it resumes at ci-running, polls once (CI pending) and stops.
-  s.out.length = 0
-  assert.equal(await main(['run', 'task', '--issue', '5'], { ...s.io, deps: () => h.deps }), 0)
-  assert.match(s.out.join('\n'), /o\/r#5: ci-running/)
+  // Again: the task graph is done; the PR is the pr graph's.
+  assert.equal(await main(['run', 'task', '--issue', '5'], { ...s.io, deps: () => h.deps }), 1)
+  assert.match(s.err.join('\n'), /nothing to run in the task graph; .*cambium run pr --issue 5/)
   assert.equal(h.spawner.started.length, 1)
 
   assert.equal(await main(['run', 'release', '--issue', '5'], { ...s.io, deps: () => h.deps }), 1)
-  assert.match(s.err.join('\n'), /unknown graph "release"; known: task/)
+  assert.match(s.err.join('\n'), /unknown graph "release"; known: task, pr/)
 })
 
-test('run task --issue N --follow on the graph engine polls every tickSeconds until the graph ends', async () => {
+test('run pr --issue N --follow polls every tickSeconds: merges the green PR, then closes out', async () => {
   const s = setup({ engine: 'graph' })
-  const h = harness({ issues: [{ number: 6, labels: ['q:task'] }], config: { engine: 'graph' } })
+  const h = harness({
+    issues: [{ number: 6, labels: ['q:task'] }],
+    config: { engine: 'graph', repos: [{ slug: SLUG, path: '/repo', merge: 'green' }] },
+  })
   const start = h.spawner.start
   h.spawner.start = async (spec) => {
     const started = await start(spec)
-    h.gh.addPr({ number: 66, closes: [6], checks: 'SUCCESS' })
+    h.gh.addPr({ number: 66, closes: [6], checks: 'PENDING', autoMerge: false })
     return started
   }
+  assert.equal(await main(['run', 'task', '--issue', '6', '--follow'], { ...s.io, deps: () => h.deps }), 0)
+  assert.equal(h.gh.marker(6)?.node, 'submit')
   /** @type {number[]} */
   const slept = []
   const sleep = async (/** @type {number} */ ms) => {
     slept.push(ms)
-    if (slept.length === 1) Object.assign(h.gh.pr(66), { inMergeQueue: true })
-    if (slept.length === 2) Object.assign(h.gh.pr(66), { state: 'MERGED', inMergeQueue: false })
+    if (slept.length === 1) h.gh.pr(66).checks = 'SUCCESS'
+    if (slept.length === 2) h.gh.pr(66).state = 'MERGED'
   }
-  assert.equal(await main(['run', 'task', '--issue', '6', '--follow'], { ...s.io, sleep, deps: () => h.deps }), 0)
+  assert.equal(await main(['run', 'pr', '--issue', '6', '--follow'], { ...s.io, sleep, deps: () => h.deps }), 0)
   assert.deepEqual(slept, [30_000, 30_000])
+  assert.deepEqual(
+    h.gh.calls.filter((c) => c.op === 'mergePull').map((c) => c.args),
+    [[SLUG, 66]],
+  )
   assert.equal(h.gh.issue(6).state, 'CLOSED')
   assert.equal(h.gh.marker(6)?.node, 'close-out')
+  assert.match(s.out.join('\n'), /PR #66: not assessed \(CI PENDING, open\)/)
   assert.match(s.out.at(-1) ?? '', /o\/r#6: closed/)
 })
 

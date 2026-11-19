@@ -20,7 +20,11 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
  *   number: number, url: string, branch: string, state: 'OPEN' | 'MERGED' | 'CLOSED', headSha: string | null,
  *   branchExists: boolean, inMergeQueue: boolean, autoMerge: boolean,
  *   checks: 'SUCCESS' | 'FAILURE' | 'ERROR' | 'PENDING' | 'EXPECTED' | null, failing: FailingCheck[], closes: number[],
+ *   mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN' | null,
+ *   reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null, createdAt: string | null,
  * }} PullRequest
+ *   `mergeable`: GitHub's conflict check against the base (UNKNOWN while it computes). `reviewDecision`: null
+ *   when the base requires no review.
  * @typedef {{
  *   number: number, url: string, title: string, state: 'OPEN' | 'MERGED' | 'CLOSED', createdAt: string,
  *   head: string, base: string, headSha: string | null, labels: string[], approved: boolean, autoMerge: boolean,
@@ -62,7 +66,7 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
  *   `linkIssue`: put `Closes #<issue>` at the top of the PR's body, so the PR names the issue it closes.
  */
 
-const PR_FIELDS = `number url headRefName state headRefOid isInMergeQueue body
+const PR_FIELDS = `number url headRefName state headRefOid isInMergeQueue body mergeable reviewDecision createdAt
   headRef { id }
   autoMergeRequest { enabledAt }
   closingIssuesReferences(first: 5) { nodes { ...I } }
@@ -263,6 +267,9 @@ export function normalize(data, { botLogin = null, release = null, health = null
       checks: rollup?.state ?? null,
       failing,
       closes: [...new Set([...(p.closingIssuesReferences?.nodes ?? []).map(addIssue), ...bodyCloses(p.body)])],
+      mergeable: p.mergeable ?? null,
+      reviewDecision: p.reviewDecision ?? null,
+      createdAt: p.createdAt ?? null,
     })
   }
   return {
