@@ -5,7 +5,7 @@
  * group, behind the prepare step, with its output in rotated log files on this
  * host, and {@link Procs} to probe and kill by pid.
  */
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import {
   closeSync,
   existsSync,
@@ -311,6 +311,40 @@ export function processSpawner({
   }
 }
 
+/**
+ * Every pid under `root` in a `pid ppid` process table (`ps -A -o pid=,ppid=`), deepest last.
+ * @param {number} root @param {string} table @returns {number[]}
+ */
+export function descendants(root, table) {
+  /** @type {Map<number, number[]>} */
+  const children = new Map()
+  for (const line of table.split('\n')) {
+    const [pid, ppid] = line.trim().split(/\s+/).map(Number)
+    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || pid === ppid) continue
+    children.set(ppid, [...(children.get(ppid) ?? []), pid])
+  }
+  const out = []
+  const seen = new Set([root])
+  for (let i = -1; i < out.length; i++) {
+    for (const c of children.get(i < 0 ? root : out[i]) ?? []) {
+      if (seen.has(c)) continue
+      seen.add(c)
+      out.push(c)
+    }
+  }
+  return out
+}
+
+/** @param {number} target */
+function sigkill(target) {
+  try {
+    process.kill(target, 'SIGKILL')
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** @type {Procs} */
 export const realProcs = {
   alive(pid) {
@@ -322,12 +356,13 @@ export const realProcs = {
     }
   },
   kill(pid) {
+    // The process group is not enough: Claude Code runs each Bash command in a group of its own, so a test
+    // run the worker started outlives the group kill and loads the next attempt. Snapshot the tree first
+    // (killed children reparent to launchd and drop out of it), then kill it and the group.
+    const ps = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' })
+    const tree = ps.status === 0 ? descendants(pid, ps.stdout) : []
     // A detached worker leads its own process group: the negative pid takes its children with it.
-    for (const target of [-pid, pid]) {
-      try {
-        process.kill(target, 'SIGKILL')
-        return
-      } catch {}
-    }
+    if (!sigkill(-pid)) sigkill(pid)
+    for (const p of tree) sigkill(p)
   },
 }
