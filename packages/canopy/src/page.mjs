@@ -92,7 +92,7 @@ h2.pane-title{font-size:17px;line-height:1.3;text-transform:none;letter-spacing:
 .md blockquote{margin-left:0;padding-left:var(--s3);border-left:2px solid var(--bar);color:var(--muted)}
 .md hr{border:0;border-top:1px solid var(--line);margin:var(--s3) 0}
 .md .md-table{overflow-x:auto;scrollbar-width:thin}.md table{width:auto;overflow-wrap:normal}.md th,.md td{font-size:12px;padding:3px 12px 3px 0}
-.md td:last-child{white-space:normal;min-width:18ch}
+.md td:last-child{white-space:normal;min-width:18ch;overflow-wrap:anywhere}
 .md summary{cursor:pointer;color:var(--muted)}.md summary:hover{color:var(--text)}.md details[open]>summary{margin-bottom:var(--s1)}
 .md summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
 .calm{padding:var(--s5) 0;text-align:center}.calm p{margin:0}.calm p+p{margin-top:var(--s1)}.calm b{font-size:14px;font-weight:600}
@@ -146,7 +146,7 @@ section.lanes{background:none;border-color:transparent}
 .meta{font-size:12px;color:var(--muted);display:flex;flex-wrap:wrap;gap:2px 8px}
 .empty{color:var(--faint);font-size:12px}
 table{border-collapse:collapse;width:100%}th{text-align:left;font-weight:500;color:var(--muted);font-size:12px}
-td,th{padding:4px 10px 4px 0;border-top:1px solid var(--line);vertical-align:top;white-space:nowrap}tr.logs td{border-top:0;padding-top:0;white-space:normal;overflow-wrap:anywhere}.scroll{overflow-x:auto}thead th{border-top:0}
+td,th{padding:4px 10px 4px 0;border-top:1px solid var(--line);vertical-align:top;white-space:nowrap}tr.logs td{border-top:0;padding-top:0;white-space:normal;overflow-wrap:anywhere}td.br{white-space:normal;overflow-wrap:anywhere;min-width:16ch}.scroll{overflow-x:auto}thead th{border-top:0}
 .bar{display:inline-block;width:80px;height:6px;background:var(--bar);border-radius:3px;vertical-align:middle;overflow:hidden;margin-right:6px}
 .bar i{display:block;height:100%;background:var(--ok)}.bar i.warn{background:var(--warn)}.bar i.err{background:var(--err)}
 .events,.scroll{scrollbar-width:thin;scrollbar-color:var(--bar) transparent}
@@ -188,7 +188,10 @@ color:var(--text);background:color-mix(in srgb,var(--fam,var(--muted)) 32%,var(-
 .ib-pane{position:static;max-height:none;padding:var(--s3) var(--s4) var(--s4)}.back{display:inline-block}
 .facets{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding:2px 0}.chip{flex:none}}
 @media (max-width:1100px){.active{grid-template-columns:repeat(2,minmax(0,1fr))}.active>.col{grid-column:auto}.active.has-triage>.l-prs{grid-column:1/-1}.detail{grid-template-columns:1fr}}
-@media (max-width:760px){.grid,.active{grid-template-columns:minmax(0,1fr)}.active>.col,.active.has-triage>.l-prs{grid-column:auto}
+/* Narrow: the status header wraps to three lines, so it scrolls away and only the tabs (which carry the health dot) stay put. */
+@media (max-width:760px){#top{display:contents}header{border-top:3px solid var(--health);transition:border-color .4s ease-out}
+.tabs{position:sticky;top:0;z-index:1}body.down header,body.down .tabs{opacity:.5;transition:opacity .3s ease-out}
+td.br{white-space:nowrap}.grid,.active{grid-template-columns:minmax(0,1fr)}.active>.col,.active.has-triage>.l-prs{grid-column:auto}
 .sp,.wf-axis{grid-template-columns:minmax(0,1fr) 56px}.sp .track,.wf-axis .ticks{grid-column:1/-1;order:3}.wf-axis>span:not(.ticks){display:none}}
 @media (max-width:480px){main{padding:var(--s3) var(--s3) var(--s5);gap:var(--s3)}section{padding:var(--s3)}
 .tabs{padding:0 var(--s3);gap:var(--s4)}}
@@ -550,6 +553,8 @@ const MERGE_STATE = { DIRTY: ['err', 'merge conflicts'], BEHIND: ['warn', 'behin
 function tallyText(p) {
   const t = p.tally, total = t ? t.passed + t.failed + t.pending : 0
   if (!total) { const [cls, word] = CHECK[p.checks] || ['faint', 'no checks reported']; return h('span', { class: cls }, word) }
+  // Nothing finished yet: "0 of 2 checks pass" reads as failure, so say what is happening.
+  if (!t.passed && !t.failed) return h('span', { class: 'muted' }, plural(t.pending, 'check', 'checks') + ' running')
   return [h('span', { class: t.failed ? null : t.pending ? null : 'ok' }, t.passed + ' of ' + total + ' checks pass'),
     t.pending ? h('span', { class: 'muted' }, t.pending + ' running') : null,
     t.failed ? h('span', { class: 'err' }, t.failed + ' failing') : null]
@@ -612,6 +617,9 @@ function healthOf(s) {
   return ['ok', 'healthy']
 }
 
+// Log paths sit under the user's home; ~ keeps them pasteable into a shell at a third of the width.
+const homeless = (p) => String(p).replace(/^\\/(?:Users|home)\\/[^/]+(?=\\/)/, '~')
+
 function workers(d, ageMs) {
   if (!d.workers.length) return section('Workers', 0, h('div', { class: 'empty' }, 'no workers on this host'))
   const rows = d.workers.map((w) => {
@@ -625,8 +633,8 @@ function workers(d, ageMs) {
       h('td', {}, w.phase || '–'), h('td', {}, w.attempt ?? '–'),
       h('td', {}, h('span', { class: 'dot ' + (w.alive ? 'ok' : 'err') }), w.pid ?? '–', w.killedReason ? h('span', { class: 'err' }, ' killed: ' + w.killedReason) : null),
       h('td', {}, h('span', { class: 'bar' }, h('i', { class: tone, style: 'width:' + Math.round(frac * 100) + '%' })), dur(elapsed), h('span', { class: 'faint' }, ' / ' + dur(w.wallClockMs))),
-      h('td', { class: 'mono' }, w.branch || '–')),
-      logs.length ? h('tr', { class: 'logs' }, h('td', { colspan: 6, class: 'mono faint' }, logs.map((l) => h('div', {}, l)))) : null]
+      h('td', { class: 'mono br' }, w.branch || '–')),
+      logs.length ? h('tr', { class: 'logs' }, h('td', { colspan: 6, class: 'mono faint' }, logs.map((l) => h('div', { title: l }, homeless(l))))) : null]
   })
   return section('Workers', d.workers.length, h('div', { class: 'scroll', tabindex: 0, 'aria-label': 'Workers table' }, h('table', {},
     h('thead', {}, h('tr', {}, ['issue', 'phase', 'attempt', 'pid', 'elapsed / cap', 'branch'].map((t) => h('th', {}, t)))),
@@ -1011,8 +1019,10 @@ async function poll() {
     document.body.classList.add('down')
     setIcon('down')
     document.title = 'canopy · unreachable'
-    $('main').prepend(h('div', { id: 'down', class: 'banner err' }, h('b', {}, "Can't reach the canopy server: "), (err && err.message) || 'no answer',
-      '. Showing the last data it sent; retrying every ' + dur(pollMs) + '. Is canopy still running?'))
+    const banner = h('div', { id: 'down', class: 'banner err' }, h('b', {}, "Can't reach the canopy server: "), (err && err.message) || 'no answer',
+      (last ? '. Showing the last data it sent; retrying' : '. Nothing read yet; retrying') + ' every ' + dur(pollMs) + '. Is canopy still running?')
+    if (last) $('main').prepend(banner)
+    else $('main').replaceChildren(banner)
   }
   setTimeout(poll, pollMs)
 }
@@ -1029,14 +1039,14 @@ export const PAGE = `<!doctype html>
 <style>${CSS}</style>
 </head>
 <body>
-<div id="top"><div id="head"><header><h1>canopy</h1><span class="faint">reading cambium and GitHub…</span></header></div>
+<div id="top"><div id="head"><header><h1>canopy</h1></header></div>
 <nav class="tabs" id="tabs" role="tablist" aria-label="Views">
 <button class="tab" role="tab" type="button" id="tab-inbox" data-tab="inbox" aria-controls="main">Inbox <span class="count" id="n-inbox">–</span></button>
 <button class="tab" role="tab" type="button" id="tab-queue" data-tab="queue" aria-controls="main" tabindex="-1">Queue <span class="count" id="n-queue">–</span></button>
 <button class="tab" role="tab" type="button" id="tab-traces" data-tab="traces" aria-controls="main" tabindex="-1">Traces <span class="count" id="n-traces">–</span></button>
 <button class="tab" role="tab" type="button" id="tab-health" data-tab="health" aria-controls="main" tabindex="-1">Health <span class="dot" id="d-health"></span></button>
 </nav></div>
-<main id="main" role="tabpanel" aria-labelledby="tab-inbox"></main>
+<main id="main" role="tabpanel" aria-labelledby="tab-inbox"><section class="calm"><p><b>Reading cambium and GitHub…</b></p><p class="muted">The first read of each repo's queues can take a few seconds.</p></section></main>
 <script>${JS}</script>
 </body>
 </html>
