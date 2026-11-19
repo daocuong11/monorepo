@@ -10,7 +10,7 @@
  *   guard-credentials   PreToolUse Bash                 keep off human credentials
  *   guard-protected     PreToolUse Bash, Write|Edit|…   CODEOWNERS paths need a grant
  *   guard-pr-writes     PreToolUse Bash                 merges go through `graft pr merge`
- *   sync-worktree       PostToolUse EnterWorktree       fast-forward a new worktree
+ *   sync-worktree       PostToolUse EnterWorktree       record the entry commit, fast-forward a new worktree
  *   session-check       SessionStart                    is raw git bound to the App?
  *
  * THE HOST owns what every hook would otherwise repeat: reading the event

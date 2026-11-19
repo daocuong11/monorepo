@@ -44,6 +44,7 @@ export const AGENT_CALLS = Object.freeze([
     why: 'land work as a Verified commit',
   },
   { tool: 'Bash', command: 'graft status agent/topic', why: 'what the worktree holds that GitHub does not' },
+  { tool: 'Bash', command: 'graft worktree done agent/topic', why: 'finish a merged worktree before removing it' },
   { tool: 'Bash', command: 'graft advance agent/topic', why: 'follow a branch that moved' },
   { tool: 'Bash', command: 'graft merge agent/topic', why: 'publish a resolved merge' },
   { tool: 'Bash', command: 'graft api GET /repos/o/r/pulls --paginate', why: 'every read of GitHub' },

@@ -29,6 +29,13 @@
  * Every failure is reported and none is fatal: the hook always exits 0.
  *
  * ---------------------------------------------------------------------------
+ * THE ENTRY COMMIT. Claude Code recorded HEAD before this hook ran, and its
+ * `ExitWorktree remove` counts the branch's commits past that SHA. The hook
+ * writes it to `graft-entered-at` in the worktree's git dir before moving
+ * anything, so `graft worktree done` can rewind there once GitHub holds the
+ * work (src/worktree.mjs).
+ *
+ * ---------------------------------------------------------------------------
  * THE MAIN CHECKOUT TOO. The repository's primary worktree is where a human
  * reads, runs and starts things, and what the next worktree hydrates from. Its
  * base branch is fast-forwarded to the same fetched commit under the same
@@ -38,6 +45,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
 import { resolveContext } from '../context.mjs'
+import { recordEntry } from '../worktree.mjs'
 
 /**
  * The worktree path: from the tool's result text ("Created worktree at <path>
@@ -116,6 +124,9 @@ export function sync(event, { env = process.env } = {}) {
       return `Worktree has uncommitted changes, so it was NOT synced to origin/${base}. If it is behind, publishing would revert files — graft's displacement gate will say so.`
     }
     const before = git(['rev-parse', 'HEAD']).trim()
+    // ExitWorktree counts from `before`, not from where this hook leaves the
+    // branch: `graft worktree done` rewinds to it (src/worktree.mjs).
+    recordEntry(git, before)
     git(['fetch', 'origin', base])
     const target = git(['rev-parse', 'FETCH_HEAD']).trim()
     let main = null
