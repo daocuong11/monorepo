@@ -16,6 +16,7 @@ import { withHistory } from '../marker.mjs'
 import { linkIssue, prFor, taskExit, taskPrompt } from '../phases/task.mjs'
 import { PREPARE_FAILED_LINE } from '../prepare.mjs'
 import { traceWorker } from '../tracing.mjs'
+import { baseRed, isRepair } from '../base-health.mjs'
 
 /**
  * @typedef {import('../github.mjs').Issue} Issue
@@ -607,27 +608,40 @@ const requeue = declare(
       z.object({ to: z.literal('start'), attempt: z.number().int() }),
       z.object({ to: z.literal('human'), ...failure }),
     ]),
-    /** Back to `q:task` with attempt + 1, or to the Human Queue once the attempts are spent. @param {z.infer<typeof Failure>} what @param {TaskCtx} ctx */
+    /**
+     * Back to `q:task` with attempt + 1, or to the Human Queue once the attempts are spent. While the base is red
+     * (base-health.mjs) a failure is not the work's own: it requeues at the same attempt, never to the Human
+     * Queue, and Schedule holds it until the base is green. The repair issue itself is charged as usual.
+     * @param {z.infer<typeof Failure>} what @param {TaskCtx} ctx
+     */
     run: async (what, ctx) => {
       const issue = issueOf(ctx)
       const m = markerOf(issue)
       const max = ctx.config.phases.task.maxAttempts
-      if (m.attempt >= max) return { ...what, to: 'human', reason: `${max} attempts spent. Last: ${what.reason}` }
-      const { reason, outcome, pr, log, failedSha } = what
+      const free = baseRed(ctx.subject.snap) && !isRepair(issue)
+      if (m.attempt >= max && !free)
+        return { ...what, to: 'human', reason: `${max} attempts spent. Last: ${what.reason}` }
+      const { pr, log, failedSha } = what
+      const base = ctx.subject.snap?.base
+      const outcome = free ? 'base-red' : what.outcome
+      const reason = free
+        ? `${base?.branch} is red at ${(base?.red?.sha ?? '').slice(0, 7)}; not charged. ${what.reason}`
+        : what.reason
+      const next = free ? m.attempt : m.attempt + 1
       await land(ctx, 'start-worker', {
         ...withHistory(m, { ...nodeAt(what), at: iso(ctx.tick.now), attempt: m.attempt, outcome, reason, pr, log }),
-        attempt: m.attempt + 1,
+        attempt: next,
         lastFailure: reason,
         host: null,
         start: null,
         input: null,
         ...(failedSha !== undefined ? { failedSha } : {}),
       })
-      ctx.log('info', `requeued (attempt ${m.attempt + 1}/${max}): ${reason.split('\n')[0]}`, {
+      ctx.log('info', `requeued (attempt ${next}/${max}): ${reason.split('\n')[0]}`, {
         repo: ctx.subject.slug,
         issue: issue.number,
       })
-      return { to: 'start', attempt: m.attempt + 1 }
+      return { to: 'start', attempt: next }
     },
   }),
   { queue: Q.task, running: false },

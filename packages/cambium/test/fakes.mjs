@@ -51,6 +51,13 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
   let nextComment = 1000
   /** @type {{ readError: Error | null, labelError: Error | null, hang: boolean, mergeError: Error | null, updateError: Error | null }} */
   const faults = { readError: null, labelError: null, hang: false, mergeError: null, updateError: null }
+  /**
+   * The base's health `read` reports (base-health.mjs), or null for none; `repairs` is filled from the open
+   * issues labelled `red-base`, as the real query does.
+   * @type {{ base: Omit<import('../src/base-health.mjs').BaseHealth, 'repairs'> | null }}
+   */
+  const health = { base: null }
+  let nextIssue = 9000
 
   const toIssue = (/** @type {Required<FakeIssue>} */ i) => ({
     number: i.number,
@@ -75,7 +82,14 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
       for (const p of pulls)
         for (const n of p.closes)
           if (store.has(n) && !issuesOut.has(n)) issuesOut.set(n, toIssue(/** @type {any} */ (store.get(n))))
-      return { issues: issuesOut, prs: pulls.map((p) => ({ ...p, closes: [...p.closes], failing: [...p.failing] })) }
+      const repairs = [...store.values()]
+        .filter((i) => i.state === 'OPEN' && i.labels.includes('red-base'))
+        .map((i) => i.number)
+      return {
+        issues: issuesOut,
+        prs: pulls.map((p) => ({ ...p, closes: [...p.closes], failing: [...p.failing] })),
+        ...(health.base ? { base: { ...health.base, suspects: [...health.base.suspects], repairs } } : {}),
+      }
     },
     async label(slug, number, { add, remove }) {
       calls.push({ op: 'label', args: [slug, number, { add, remove }] })
@@ -95,6 +109,20 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
       calls.push({ op: 'close', args: opts ? [slug, number, body, opts] : [slug, number, body] })
       const i = /** @type {Required<FakeIssue>} */ (store.get(number))
       i.state = 'CLOSED'
+    },
+    async createIssue(slug, { title, body, labels }) {
+      calls.push({ op: 'createIssue', args: [slug, { title, body, labels }] })
+      const number = nextIssue++
+      store.set(number, {
+        number,
+        title,
+        state: 'OPEN',
+        createdAt: new Date(T0).toISOString(),
+        body,
+        labels: [...labels],
+        comment: null,
+      })
+      return { number, url: `https://github.com/${slug}/issues/${number}` }
     },
     async comment(slug, number, body) {
       calls.push({ op: 'comment', args: [slug, number, body] })
@@ -128,6 +156,7 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
     github,
     calls,
     faults,
+    health,
     pulls,
     issue: (/** @type {number} */ n) => /** @type {Required<FakeIssue>} */ (store.get(n)),
     marker: (/** @type {number} */ n) => parseMarker(store.get(n)?.comment?.body),

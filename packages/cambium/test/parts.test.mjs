@@ -317,6 +317,9 @@ test('graft client: every call is one graft invocation, as the Clock App, in the
     release: false,
     from: '',
     to: '',
+    health: true,
+    baseRef: 'refs/heads/main',
+    check: 'ci',
   })
   assert.deepEqual(argv.slice(1), [
     ['issue', 'label', '5', '--add', 'running', '--remove', 'q:human,why:budget', '--repo', 'o/r'],

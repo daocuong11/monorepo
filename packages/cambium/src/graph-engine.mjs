@@ -25,6 +25,7 @@ import { move, Q } from './labels.mjs'
 import { markerTrace, turnTracer } from './tracing.mjs'
 import { DISPATCH_STEPS } from './dispatch-engine.mjs'
 import { trackPromotion } from './promotion.mjs'
+import { trackBaseHealth } from './base-health.mjs'
 
 /**
  * @typedef {import('./tick.mjs').Deps} Deps
@@ -237,7 +238,7 @@ const inOrder =
 /** @type {import('./tick.mjs').Engine} */
 export const GRAPH_ENGINE = {
   reconcile: inOrder(reconcile, DISPATCH_STEPS.reconcile),
-  watch: inOrder(watch, trackPromotion),
+  watch: inOrder(watch, trackPromotion, trackBaseHealth),
   sweep: inOrder(sweep, DISPATCH_STEPS.sweep),
   scheduleTasks,
   scheduleDispatch: DISPATCH_STEPS.schedule,

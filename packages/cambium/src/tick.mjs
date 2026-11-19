@@ -16,6 +16,7 @@ import { PREPARE_FAILED_LINE } from './prepare.mjs'
 import { releaseDue, releaseNotBuilt } from './phases/release.mjs'
 import { releaseGraphs } from './graphs/release.mjs'
 import { DISPATCH_NOT_BUILT, dispatchNotBuilt } from './phases/dispatch.mjs'
+import { isRepair } from './base-health.mjs'
 
 /**
  * @typedef {import('./github.mjs').Issue} Issue
@@ -438,6 +439,10 @@ async function scheduleTasks(deps, ctx) {
 /**
  * The `q:task` issues to start this tick: no `running`, no tracked worker, by priority then age, up to the free
  * slots counted from live task workers.
+ *
+ * The base's health gates it (base-health.mjs): a repo whose base is red starts only its repair issue, which
+ * takes no slot (it is what frees the others); a repair issue on a green base is left for `trackBaseHealth` to
+ * close.
  * @param {Deps} deps @param {Ctx} ctx
  */
 export function taskCandidates(deps, ctx) {
@@ -445,18 +450,27 @@ export function taskCandidates(deps, ctx) {
   const free = config.phases.task.cap - store.workers().filter((w) => w.phase === 'task').length
   /** @type {{ slug: string, issue: Issue, snap: Snapshot }[]} */
   const candidates = []
-  for (const [slug, snap] of ctx.snaps)
-    for (const issue of snap.issues.values())
+  /** @type {{ slug: string, issue: Issue, snap: Snapshot }[]} */
+  const repairs = []
+  for (const [slug, snap] of ctx.snaps) {
+    const health = snap.base?.state ?? 'unknown'
+    for (const issue of snap.issues.values()) {
       if (
-        issue.state === 'OPEN' &&
-        issue.labels.includes(Q.task) &&
-        !issue.labels.includes(RUNNING) &&
-        !store.worker(slug, issue.number)
+        issue.state !== 'OPEN' ||
+        !issue.labels.includes(Q.task) ||
+        issue.labels.includes(RUNNING) ||
+        store.worker(slug, issue.number)
       )
-        candidates.push({ slug, issue, snap })
+        continue
+      if (isRepair(issue)) {
+        if (health !== 'green') repairs.push({ slug, issue, snap })
+      } else if (health !== 'red') candidates.push({ slug, issue, snap })
+    }
+  }
   const order = byPriorityThenAge(config.priorityLabels)
   candidates.sort((a, b) => order(a.issue, b.issue))
-  return candidates.slice(0, Math.max(0, free))
+  repairs.sort((a, b) => order(a.issue, b.issue))
+  return [...repairs, ...candidates.slice(0, Math.max(0, free))]
 }
 
 /** @param {Deps} deps @param {Ctx} ctx */
@@ -624,7 +638,10 @@ async function release(deps, ctx) {
  *   steps: StepResult[],
  *   counts: Counts & { workers: number },
  *   caps: { task: number, dispatch: number },
- *   repos: { slug: string, ok: boolean, error: string | null, counts: Counts | null }[],
+ *   repos: {
+ *     slug: string, ok: boolean, error: string | null, counts: Counts | null,
+ *     base: import('./base-health.mjs').BaseHealth | null,
+ *   }[],
  *   workers: {
  *     repo: string, issue: number, phase: string, pid: number, alive: boolean, attempt: number, branch: string,
  *     worktree: string, startedAt: string, elapsedMs: number, wallClockMs: number, killedReason: string | null,
@@ -665,6 +682,7 @@ export function heartbeatState(deps, ctx) {
       ok: Boolean(snap),
       error: ctx.readErrors.get(r.slug) ?? null,
       counts: snap ? countsOf(snap) : null,
+      base: snap?.base ?? null,
     }
   })
   const total = { intake: 0, task: 0, human: 0, promote: 0, running: 0, review: 0 }
