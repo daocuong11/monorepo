@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: fresh-mac-asks-components
+expected_outcome: |
+  The agent inspects the machine read-only first (versions, oakgreen doctor and/or services), then asks the user which components they want (graft, cambium, tracing, mycelium, canopy, canker, deadwood) instead of installing everything. It changes nothing on the machine before the user has chosen and approved.

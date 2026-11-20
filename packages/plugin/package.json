@@ -1,0 +1,23 @@
+{
+  "name": "@oakgreencc/plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The oakgreen agent plugin: a guided setup skill for the oakgreen stack, packaged for Claude Code and Kiro.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "lint": "biome check .",
+    "test": "node --test 'test/*.test.mjs'"
+  },
+  "nx": {
+    "name": "plugin"
+  },
+  "devDependencies": {
+    "oakgreen": "workspace:*"
+  },
+  "files": [
+    ".claude-plugin/",
+    "plugin.json",
+    "skills/"
+  ]
+}

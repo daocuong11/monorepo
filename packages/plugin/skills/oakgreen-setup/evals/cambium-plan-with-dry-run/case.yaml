@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: cambium-plan-with-dry-run
+expected_outcome: |
+  The agent runs oakgreen setup with --dry-run for the repo, shows its output, and presents an ordered plan that separates agent steps from human steps, fills graft.app/graft.botLogin/worker.graftApp from the App name, starts cambium through oakgreen start, and ends with oakgreen doctor. It asks before applying anything.

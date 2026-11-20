@@ -1,0 +1,82 @@
+[
+  {
+    "query": "just did npm i -g oakgreen on my new macbook. what now? i want agents picking up issues on acme/widgets like on my old machine",
+    "should_trigger": true
+  },
+  {
+    "query": "Can you get the oakgreen stack running on this machine for my repo loosli-labs/receipts? I want the scheduler, the status page and tracing, but not the discord intake stuff.",
+    "should_trigger": true
+  },
+  {
+    "query": "set up cambium for me. config should live in ~/work/cambium.json and it should run on our repo northwind/api",
+    "should_trigger": true
+  },
+  {
+    "query": "I need graft and its github app configured for our org repo so claude can push verified commits \u2014 walk me through it, I've never done this",
+    "should_trigger": true
+  },
+  {
+    "query": "onboard me to oakgreencc. which pieces do I actually need if I just want claude workers opening PRs on my side project?",
+    "should_trigger": true
+  },
+  {
+    "query": "oakgreen doctor shows 6 red lines (cambium config missing, queue labels missing, heartbeat) after a fresh install, help me get it all green",
+    "should_trigger": true
+  },
+  {
+    "query": "add canker and deadwood to this repo as CI gates, nothing else from the stack",
+    "should_trigger": true
+  },
+  {
+    "query": "hook mycelium up to our discord #bugs forum so posts become intake issues on studio/game, and start it as a service",
+    "should_trigger": true
+  },
+  {
+    "query": "I'd like traces from cambium showing up in canopy \u2014 the collector isn't installed yet on this box",
+    "should_trigger": true
+  },
+  {
+    "query": "bootstrap the og stack on my work laptop please, same as the README says but guided",
+    "should_trigger": true
+  },
+  {
+    "query": "cambium has been running fine for weeks but issue #212 is stuck in q:task with a running label and no worker \u2014 what happened?",
+    "should_trigger": false
+  },
+  {
+    "query": "graft refused my publish with 'protected path package.json' \u2014 how do I get that change through the code-owner review?",
+    "should_trigger": false
+  },
+  {
+    "query": "canker says src/tick.mjs:40 has CRAP 42, refactor that function so it passes",
+    "should_trigger": false
+  },
+  {
+    "query": "add a new mycelium source that polls GitHub Discussions and normalizes them into envelopes, with tests",
+    "should_trigger": false
+  },
+  {
+    "query": "write an opentelemetry collector config that ships traces from my python flask app to honeycomb",
+    "should_trigger": false
+  },
+  {
+    "query": "explain how cambium's dispatch graph decides between actionable and needs-human",
+    "should_trigger": false
+  },
+  {
+    "query": "set up a GitHub Actions workflow that runs pnpm verify on every pull request for this monorepo",
+    "should_trigger": false
+  },
+  {
+    "query": "the canopy page loads but the Traces tab is empty since yesterday's update; cambium and otelcol both show running in oakgreen services. dig into why",
+    "should_trigger": false
+  },
+  {
+    "query": "help me install and configure Jenkins on my mac to build our java services",
+    "should_trigger": false
+  },
+  {
+    "query": "what's the difference between oakgreen update and cambium update? which one should my launchd setup use after a release?",
+    "should_trigger": false
+  }
+]

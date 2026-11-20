@@ -2,9 +2,10 @@
 
 Tooling for any software project: graft (agent writes to GitHub), cambium (the scheduler), mycelium (intake connectors), canopy (the queue UI), canker (CRAP check) and deadwood (prose gate).
 
-| Package                            | What                                                                     |
-| ---------------------------------- | ------------------------------------------------------------------------ |
-| [`packages/graft`](packages/graft) | Work a GitHub project as a GitHub App (formerly agit). Published as `@oakgreencc/graft`. |
+| Package                              | What                                                                                           |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| [`packages/graft`](packages/graft)   | Work a GitHub project as a GitHub App (formerly agit). Published as `@oakgreencc/graft`.       |
+| [`packages/plugin`](packages/plugin) | The `oakgreen` agent plugin (Claude Code and Kiro): a guided setup wizard for the whole stack. |
 
 ```sh
 pnpm install
