@@ -57,7 +57,8 @@
 export function findDisplacement({ git, worktreeBase, branchHead, paths }) {
   // No pathspec when nothing is scoped: an unscoped publish sweeps the whole
   // worktree, so the whole tree is what it can displace.
-  const args = ['diff', '--name-only', worktreeBase, branchHead]
+  // --no-renames: a rename must list its old path too, or that path's drift goes unseen.
+  const args = ['diff', '--no-renames', '--name-only', worktreeBase, branchHead]
   if (paths?.length) args.push('--', ...paths)
 
   return git(args)

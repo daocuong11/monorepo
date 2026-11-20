@@ -822,7 +822,7 @@ test('advance after an uncommitted merge publish: quits the merge state (never r
     [`merge-base --is-ancestor ${MERGED} ${sha('e')}`]: '',
     [`merge-base --is-ancestor ${HEAD} ${sha('e')}`]: '',
     'status --porcelain -uall -z': 'M  a.txt\u0000A  theirs.txt\u0000',
-    [`diff --name-only -z ${HEAD} ${sha('e')}`]: 'a.txt\u0000theirs.txt\u0000',
+    [`diff --no-renames --name-only -z ${HEAD} ${sha('e')}`]: 'a.txt\u0000theirs.txt\u0000',
     [`ls-tree -r -z ${sha('e')} -- a.txt theirs.txt`]: `100644 blob ${BLOB_NEW}\ta.txt\u0000100644 blob ${BLOB_THEIRS}\ttheirs.txt\u0000`,
     'hash-object -- a.txt': `${BLOB_NEW}\n`,
     'hash-object -- theirs.txt': `${BLOB_THEIRS}\n`,
@@ -855,7 +855,7 @@ test('advance names `git merge --no-commit` for a collision — resolve and `git
     'rev-parse HEAD': `${HEAD}\n`,
     [`merge-base --is-ancestor ${HEAD} ${sha('e')}`]: '',
     'status --porcelain -uall -z': ' M a.txt\u0000',
-    [`diff --name-only -z ${HEAD} ${sha('e')}`]: 'a.txt\u0000',
+    [`diff --no-renames --name-only -z ${HEAD} ${sha('e')}`]: 'a.txt\u0000',
     [`ls-tree -r -z ${sha('e')} -- a.txt`]: `100644 blob ${BLOB_THEIRS}\ta.txt\u0000`,
     'hash-object -- a.txt': `${BLOB_NEW}\n`,
   })
@@ -881,7 +881,7 @@ test('advance after a publish: HEAD moves, untouched paths follow the branch, pu
     'rev-parse HEAD': `${HEAD}\n`,
     [`merge-base --is-ancestor ${HEAD} ${sha('e')}`]: '',
     'status --porcelain -uall -z': ' M a.txt\u0000 M wip.txt\u0000',
-    [`diff --name-only -z ${HEAD} ${sha('e')}`]: 'a.txt\u0000theirs.txt\u0000',
+    [`diff --no-renames --name-only -z ${HEAD} ${sha('e')}`]: 'a.txt\u0000theirs.txt\u0000',
     [`ls-tree -r -z ${sha('e')} -- a.txt`]: `100644 blob ${BLOB_NEW}\ta.txt\u0000`,
     'hash-object -- a.txt': `${BLOB_NEW}\n`,
     'reset --soft': '',
@@ -912,7 +912,7 @@ test('advance refuses when a locally modified path changed on the branch with di
     'rev-parse HEAD': `${HEAD}\n`,
     [`merge-base --is-ancestor ${HEAD} ${sha('e')}`]: '',
     'status --porcelain -uall -z': ' M a.txt\u0000',
-    [`diff --name-only -z ${HEAD} ${sha('e')}`]: 'a.txt\u0000',
+    [`diff --no-renames --name-only -z ${HEAD} ${sha('e')}`]: 'a.txt\u0000',
     [`ls-tree -r -z ${sha('e')} -- a.txt`]: `100644 blob ${BLOB_THEIRS}\ta.txt\u0000`,
     'hash-object -- a.txt': `${BLOB_NEW}\n`,
   })
@@ -951,7 +951,7 @@ test('advance after a merge publish: the local merge commit is left behind for i
     [`rev-list --parents -n 1 ${LOCAL}`]: `${LOCAL} ${HEAD} ${MERGED}\n`,
     [`merge-base --is-ancestor ${HEAD} ${sha('e')}`]: '',
     'status --porcelain -uall -z': '',
-    [`diff --name-only -z ${LOCAL} ${sha('e')}`]: '',
+    [`diff --no-renames --name-only -z ${LOCAL} ${sha('e')}`]: '',
     'reset --soft': '',
   })
   const out = advance({ git, target: sha('e') })
@@ -985,7 +985,7 @@ test('advance moves off a HEAD that origin already holds, even when it is not an
     [`rev-parse ${sha('e')}^{tree}`]: `${sha('2')}\n`,
     [`for-each-ref --contains=${DEV} refs/remotes/`]: `${DEV} commit\trefs/remotes/origin/develop\n`,
     'status --porcelain -uall -z': '',
-    [`diff --name-only -z ${DEV} ${sha('e')}`]: 'a.txt\u0000',
+    [`diff --no-renames --name-only -z ${DEV} ${sha('e')}`]: 'a.txt\u0000',
     'reset --soft': '',
     restore: '',
   })
@@ -1004,7 +1004,7 @@ test('advance treats a deleted-and-published path as recorded, and a no-op targe
     'rev-parse HEAD': `${HEAD}\n`,
     [`merge-base --is-ancestor ${HEAD} ${sha('e')}`]: '',
     'status --porcelain -uall -z': 'D  gone.txt\u0000',
-    [`diff --name-only -z ${HEAD} ${sha('e')}`]: 'gone.txt\u0000',
+    [`diff --no-renames --name-only -z ${HEAD} ${sha('e')}`]: 'gone.txt\u0000',
     [`ls-tree -r -z ${sha('e')} -- gone.txt`]: '',
     'hash-object -- gone.txt': new Error('fatal: could not open'),
     'reset --soft': '',

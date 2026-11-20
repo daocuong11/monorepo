@@ -3,6 +3,9 @@
  * `graft worktree done [<branch>]` — finish a worktree whose work is all on
  * GitHub, so `ExitWorktree remove` passes without `discard_changes`.
  *
+ *   0. put back strays — paths an earlier HEAD left in the index, whose
+ *      content GitHub holds (src/worktree.mjs `tidy`) — so they do not read as
+ *      local work;
  *   1. ask `graft status`'s question (src/status.mjs); anything local only →
  *      print the report, exit 1, change nothing;
  *   2. rewind the branch to the commit the worktree was created on
@@ -17,8 +20,9 @@
 import { has, positionals } from '../context.mjs'
 import { PublishError } from '../errors.mjs'
 import { syncMain } from '../hooks/sync-worktree.mjs'
-import { localOnly, statusLines, verdict } from '../status.mjs'
-import { rewind } from '../worktree.mjs'
+import { dirtyPaths } from '../publish/publish.mjs'
+import { localOnly, onGitHub, statusLines, verdict } from '../status.mjs'
+import { rewind, tidy } from '../worktree.mjs'
 import { COMMON_VALUE_FLAGS, contextFrom } from './common.mjs'
 
 const USAGE =
@@ -49,6 +53,21 @@ export async function run(argv, { client: given, say = console.log } = {}) {
   const { owner, repo } = ctx.repo()
   const client = await ctx.client()
   const base = await ctx.baseBranch()
+  let local = null
+  try {
+    local = git(['symbolic-ref', '--short', '-q', 'HEAD']).trim() || null
+  } catch {} // detached
+  const refs = [base, branch, local].filter((r) => r != null)
+  const tidied = await tidy({
+    git,
+    dirty: dirtyPaths(git),
+    held: (sha) => onGitHub({ client, owner, repo, sha, refs }),
+  })
+  if (tidied.length)
+    say(
+      `Put back ${tidied.length} path${tidied.length === 1 ? '' : 's'} an earlier HEAD left behind (GitHub holds them):\n` +
+        tidied.map((p) => `  ${p}`).join('\n'),
+    )
   const status = await localOnly({ git, client, owner, repo, base, branch: branch ?? null })
   const out = rewind({ git, status })
   if (!out.rewound && out.why === 'local-only') {

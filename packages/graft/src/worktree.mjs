@@ -32,7 +32,8 @@
  * is the same commit.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 /** The file, in the worktree's git dir, holding the commit the worktree was created on. */
 export const ENTERED_AT = 'graft-entered-at'
@@ -118,4 +119,106 @@ export function rewind({ git, status }) {
   if (!from || isAncestor(git, from, to)) return { rewound: false, why: 'already-there', to }
   git(['reset', '--quiet', '--keep', to])
   return { rewound: true, from, to }
+}
+
+// ---------------------------------------------------------------------------
+// STRAYS. A path HEAD left behind when it moved: the index and the file still
+// hold a commit HEAD was on before, though the commit it is on now does not.
+// `advance` before `--no-renames` made them — a renamed file's old path stayed
+// in the index across `reset --soft` as a staged add — and they are the
+// uncommitted paths `worktree done` and ExitWorktree then refuse over.
+//
+// A dirty path is a stray only when all of these hold, so an agent's own edit
+// is never one:
+//   - it is a file on disk, and the index holds exactly it (fully staged);
+//   - a commit HEAD was on before (its reflog) has that same content there;
+//   - the file is no newer than HEAD's move off that commit — a later write,
+//     even one restoring that old content, is somebody's work;
+//   - GitHub holds that commit (`held`), so the content is not lost.
+// Putting a stray back to HEAD loses nothing GitHub lacks.
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {(args: string[]) => string} git
+ * @param {string[]} dirty   the worktree's uncommitted paths
+ * @returns {{ path: string, from: string }[]}  each stray and the earlier HEAD holding it
+ */
+export function strayPaths(git, dirty) {
+  if (!dirty.length) return []
+  // Newest first: `<sha> HEAD@{<unix time it became HEAD>}`.
+  let moves
+  try {
+    moves = git(['log', '-g', '--date=unix', '--format=%H %gd', 'HEAD', '--'])
+      .trim()
+      .split('\n')
+      .map((l) => /^([0-9a-f]{40}) HEAD@\{(\d+)\}$/.exec(l.trim()))
+      .filter((m) => m !== null)
+      .map((m) => ({ sha: m[1], at: Number(m[2]) }))
+  } catch {
+    return [] // no reflog: nothing to compare against
+  }
+  // Each earlier HEAD, with the time HEAD moved off it.
+  const earlier = []
+  const seen = new Set([moves[0]?.sha])
+  for (let i = 1; i < moves.length; i++) {
+    if (seen.has(moves[i].sha)) continue
+    seen.add(moves[i].sha)
+    earlier.push({ sha: moves[i].sha, leftAt: moves[i - 1].at })
+  }
+  if (!earlier.length) return []
+
+  const root = git(['rev-parse', '--show-toplevel']).trim()
+  const out = []
+  for (const path of dirty) {
+    let mtime
+    try {
+      const st = lstatSync(join(root, path))
+      if (!st.isFile()) continue
+      mtime = Math.floor(st.mtimeMs / 1000)
+    } catch {
+      continue // gone from disk: a deletion, never left behind by a move
+    }
+    const staged = /^\d{6} ([0-9a-f]{40}) 0\t/.exec(git(['ls-files', '-s', '--', path]))?.[1]
+    if (!staged) continue
+    let disk
+    try {
+      disk = git(['hash-object', '--', path]).trim()
+    } catch {
+      continue
+    }
+    if (disk !== staged) continue
+    const from = earlier.find(({ sha, leftAt }) => mtime <= leftAt && blobAt(git, sha, path) === disk)
+    if (from) out.push({ path, from: from.sha })
+  }
+  return out
+}
+
+/** @param {(args: string[]) => string} git  @param {string} sha  @param {string} path */
+function blobAt(git, sha, path) {
+  try {
+    return /^\d{6} blob ([0-9a-f]{40})\t/.exec(git(['ls-tree', sha, '--', path]))?.[1] ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Put every stray whose earlier HEAD GitHub holds back to HEAD: dropped when
+ * HEAD lacks the path, else restored to HEAD's content. Returns the paths put back.
+ *
+ * @param {object} input
+ * @param {(args: string[]) => string} input.git
+ * @param {string[]} input.dirty
+ * @param {(sha: string) => Promise<boolean>} input.held   whether GitHub holds the commit
+ */
+export async function tidy({ git, dirty, held }) {
+  /** @type {Map<string, boolean>} */
+  const known = new Map()
+  const back = []
+  for (const { path, from } of strayPaths(git, dirty)) {
+    if (!known.has(from)) known.set(from, await held(from))
+    if (known.get(from)) back.push(path)
+  }
+  if (back.length) git(['restore', '--source=HEAD', '--staged', '--worktree', '--', ...back])
+  return back
 }
