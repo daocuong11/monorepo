@@ -1,11 +1,18 @@
 {
   "name": "oakgreencc",
-  "owner": { "name": "James Loosli" },
+  "owner": {
+    "name": "James Loosli"
+  },
   "plugins": [
     {
       "name": "graft",
       "source": "./packages/graft",
       "description": "Work a GitHub project as a GitHub App: Verified commits, the repo's git hooks, CODEOWNERS-protected paths, and a scoped maintainer mode."
+    },
+    {
+      "name": "oakgreen",
+      "source": "./packages/plugin",
+      "description": "Set up the oakgreen stack on this machine: a guided wizard over the oakgreen CLI for graft, cambium, tracing, mycelium, canopy, canker and deadwood."
     }
   ]
 }

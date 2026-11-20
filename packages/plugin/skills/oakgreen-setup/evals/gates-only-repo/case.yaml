@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: gates-only-repo
+expected_outcome: |
+  The agent scopes the run to canker and deadwood: proposes installing both as devDependencies and writing canker.json/deadwood.json (or package.json keys) after a yes, runs them, and judges oakgreen doctor only by the canker config and deadwood config checks, treating the failing cambium/graft checks as not chosen rather than as failures.
