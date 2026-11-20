@@ -15,8 +15,9 @@ export const T0 = Date.parse('2026-11-16T12:00:00Z')
 /**
  * @typedef {{ number: number, title?: string, state?: 'OPEN' | 'CLOSED', createdAt?: string, body?: string,
  *   labels?: string[], comment?: { id: number, body: string } | null,
- *   blockedBy?: import('../src/github.mjs').Blocker[] }} FakeIssue
- *   `blockedBy`: a blocker that is also an issue here reads with that issue's state.
+ *   blockedBy?: import('../src/github.mjs').Blocker[], comments?: import('../src/github.mjs').Comment[] }} FakeIssue
+ *   `blockedBy`: a blocker that is also an issue here reads with that issue's state. `comments`: the recent comments
+ *   `read` returns (the state comment is kept apart, in `comment`).
  * @typedef {Partial<import('../src/github.mjs').PullRequest> & { number: number, closes: number[], behind?: number }} FakePr
  *   `behind`: commits of its base the head lacks (`behindBase`); `updatePull` zeroes it and moves the head.
  */
@@ -34,6 +35,7 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
       labels: [],
       comment: null,
       blockedBy: [],
+      comments: [],
       ...i,
     })
   /** @type {import('../src/github.mjs').PullRequest[]} */
@@ -78,6 +80,7 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
       const s = store.get(b.number)
       return s ? { ...b, state: s.state, closedAt: s.state === 'CLOSED' ? b.closedAt : null } : { ...b }
     }),
+    comments: i.comments.map((c) => ({ ...c })),
   })
 
   /** @type {import('../src/github.mjs').GitHub} */
@@ -132,6 +135,7 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
         labels: [...labels],
         comment: null,
         blockedBy: [],
+        comments: [],
       })
       return { number, url: `https://github.com/${slug}/issues/${number}` }
     },

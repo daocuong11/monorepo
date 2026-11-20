@@ -119,8 +119,10 @@ export function readTriage(log, issue) {
  *   queued: { number: number, title: string, labels: string[] }[], agentsMd: string | null,
  *   deferred?: { count: number, reason: string } | null, deferHours?: number,
  *   blocked?: { by: number[], reason: string } | null,
+ *   replied?: { question: string | null, replies: { author: string, at: string, body: string }[] } | null,
  * }} input
- *   `blocked`: an earlier triage parked it on these issues, all closed now.
+ *   `blocked`: an earlier triage parked it on these issues, all closed now. `replied`: a human commented since the
+ *   issue last waited; `question` is what it waited on (the needs-human, defer or blocked reason).
  */
 export function triagePrompt({
   repo,
@@ -131,6 +133,7 @@ export function triagePrompt({
   deferred = null,
   deferHours = 6,
   blocked = null,
+  replied = null,
 }) {
   const others = queued
     .filter((q) => q.number !== issue.number)
@@ -154,6 +157,7 @@ How to look:
 - First, has it already been done? Its comments (\`graft api GET /repos/${repo}/issues/${issue.number}/comments\`) and its timeline (\`graft api GET '/repos/${repo}/issues/${issue.number}/timeline?per_page=100'\`: cross-referenced PRs, and whether they merged) often say so. A merged PR whose change is on ${baseBranch}, and nothing left of the issue, is obsolete; a PR still open or in CI is defer.
 - Does it already wait on other issues? Its GitHub "blocked by" links: \`graft api GET /repos/${repo}/issues/${issue.number}/dependencies/blocked_by\`. An open one, or prose naming an open issue it needs first, is blocked.
 - Read an issue with \`graft issue read <n>\`; search with \`graft api GET '/search/issues?q=repo:${repo}+is:issue+<words>'\`. Never \`gh\`.
+- A human reply (quoted below, when there is one) answering the open question usually makes the issue actionable: fold the answer into \`title\` and \`acceptance\` so the task worker gets it with the issue. If the reply leaves the question open, the verdict is needs-human again, and \`reason\` says what is still missing.
 - Be quick: a verdict, not an investigation. When in doubt whether the work is clear enough to do, choose needs-human; when in doubt whether something is true, check it, or defer until it can be checked.
 
 End your final message with exactly one fenced JSON block, and nothing after it:
@@ -161,10 +165,25 @@ End your final message with exactly one fenced JSON block, and nothing after it:
 { "verdict": "actionable" | "needs-human" | "duplicate" | "obsolete" | "defer" | "blocked", "duplicateOf": 123, "blockedBy": [124], "recheckHours": 6, "reason": "…", "title": "…", "acceptance": ["…"] }
 \`\`\`
 \`duplicateOf\` only for duplicate; \`blockedBy\` only for blocked; \`recheckHours\` only for defer, and optional; \`title\` and \`acceptance\` only for actionable, and optional. A missing or malformed block sends the issue to a human with the error.
-${deferred ? `\nThis is re-triage ${deferred.count + 1}: an earlier triage deferred it to check this:\n${deferred.reason}\nCheck it now. If it still cannot be checked, defer again.\n` : ''}${blocked ? `\nAn earlier triage found it blocked by ${blocked.by.map((n) => `#${n}`).join(', ')}, now closed:\n${blocked.reason}\nJudge it again now that they are done.\n` : ''}${others ? `\nOther issues in cambium's queues right now:\n${others}\n` : ''}
+${deferred ? `\nThis is re-triage ${deferred.count + 1}: an earlier triage deferred it to check this:\n${deferred.reason}\nCheck it now. If it still cannot be checked, defer again.\n` : ''}${blocked ? `\nAn earlier triage found it blocked by ${blocked.by.map((n) => `#${n}`).join(', ')}, now closed:\n${blocked.reason}\nJudge it again now that they are done.\n` : ''}${replied ? repliedNote(replied) : ''}${others ? `\nOther issues in cambium's queues right now:\n${others}\n` : ''}
 --- Issue #${issue.number}: ${issue.title} (${issue.url})
 ${issue.body}
 ${agentsMd ? `\n--- AGENTS.md (the contract a task worker will follow)\n${agentsMd}` : ''}`
+}
+
+/**
+ * The prompt's section quoting the human replies as the answer to what the issue waited on.
+ * @param {NonNullable<Parameters<typeof triagePrompt>[0]['replied']>} r
+ */
+function repliedNote({ question, replies }) {
+  const quote = (/** @type {string} */ s) =>
+    s
+      .split('\n')
+      .map((l) => `> ${l}`)
+      .join('\n')
+  return `\nAn earlier triage or step left it waiting on this:\n${quote(question ?? '(no reason recorded)')}\nA human has since replied on the issue. Read the reply as the answer to that:\n${replies
+    .map((r) => `\n@${r.author} at ${r.at}:\n${quote(r.body)}\n`)
+    .join('')}`
 }
 
 /**
