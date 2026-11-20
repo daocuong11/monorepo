@@ -13,9 +13,13 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
 /**
  * @typedef {{
  *   number: number, title: string, url: string, state: 'OPEN' | 'CLOSED', createdAt: string, body: string,
- *   labels: string[], stateComment: { id: number, marker: import('./marker.mjs').Marker } | null,
- *   blockedBy: Blocker[],
+ *   labels: string[], stateComment: { id: number, marker: import('./marker.mjs').Marker, author?: string | null } | null,
+ *   blockedBy: Blocker[], comments?: Comment[],
  * }} Issue
+ *   `stateComment.author`: the login that wrote the state comment (cambium's). `comments`: the newest 20, oldest
+ *   first, for human-reply detection (human-reply.mjs).
+ * @typedef {{ author: string | null, bot: boolean, createdAt: string, body: string }} Comment
+ *   `bot`: GitHub says the author is a `Bot` (an App).
  * @typedef {{ number: number, state: 'OPEN' | 'CLOSED', closedAt: string | null }} Blocker
  *   An issue GitHub records as blocking this one (the "blocked by" relationship).
  * @typedef {{ name: string, url: string | null, summary: string }} FailingCheck
@@ -108,6 +112,7 @@ fragment I on Issue {
   labels(first: 30) { nodes { name } }
   blockedBy(first: 20) { nodes { number state closedAt } }
   comments(first: 100) { nodes { databaseId body author { login } } }
+  recent: comments(last: 20) { nodes { createdAt body author { login __typename } } }
 }
 fragment P on PullRequest {
   number url title state createdAt headRefName baseRefName headRefOid reviewDecision
@@ -151,13 +156,19 @@ const FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_RE
 /**
  * The first comment holding a marker (from `botLogin` only, when set). Issues and PRs alike.
  * @param {any} n an issue or PR node with `comments` @param {string | null} botLogin
- * @returns {{ id: number, marker: import('./marker.mjs').Marker } | null}
+ * @returns {{ id: number, marker: import('./marker.mjs').Marker, author: string | null } | null}
  */
 function stateCommentOf(n, botLogin) {
   const comment = (n.comments?.nodes ?? []).find(
     (/** @type {any} */ c) => parseMarker(c.body) && (!botLogin || c.author?.login === botLogin),
   )
-  return comment ? { id: comment.databaseId, marker: /** @type {any} */ (parseMarker(comment.body)) } : null
+  return comment
+    ? {
+        id: comment.databaseId,
+        marker: /** @type {any} */ (parseMarker(comment.body)),
+        author: comment.author?.login ?? null,
+      }
+    : null
 }
 
 /** @param {any} n @returns {string[]} */
@@ -224,6 +235,12 @@ function toIssue(n, botLogin) {
       number: b.number,
       state: b.state === 'OPEN' ? 'OPEN' : 'CLOSED',
       closedAt: b.closedAt ?? null,
+    })),
+    comments: (n.recent?.nodes ?? []).filter(Boolean).map((/** @type {any} */ c) => ({
+      author: c.author?.login ?? null,
+      bot: c.author?.__typename === 'Bot',
+      createdAt: c.createdAt ?? '',
+      body: c.body ?? '',
     })),
   }
 }

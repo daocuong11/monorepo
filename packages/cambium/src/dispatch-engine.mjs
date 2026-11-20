@@ -5,7 +5,10 @@
  *
  * - Reconcile: every tracked triage worker's issue at `triaging`.
  * - Sweep: a stale `running` lease on a `q:intake` issue runs `retry-triage`.
- * - Schedule: first parks: a `q:intake` issue without a lease that has an open GitHub `blockedBy` issue goes to the
+ * - Schedule: first wakes: a `q:human` issue (not `why:approve`) without a lease that has a human reply since it
+ *   entered its state (human-reply.mjs) goes back to `q:intake` at `start-triage`, attempt 1, history kept (outcome
+ *   `human-reply`); a parked intake issue (`deferred` / `blocked`) with one is triaged now, whatever its blockers or
+ *   `deferUntil`. Then parks: a `q:intake` issue without a lease that has an open GitHub `blockedBy` issue goes to the
  *   `blocked` node (`wait:blocked`) if it is not there yet, and every other one gets the `wait:*` label its marker
  *   calls for (`wait:deferred` while its `deferUntil` is ahead, none once due or unblocked). Then `q:intake` issues
  *   without a lease, by priority then age, up to `phases.dispatch.cap` counted from live triage workers, skipping
@@ -16,8 +19,10 @@
  */
 import { advance } from './graph/index.mjs'
 import { dispatch, lostLeaseOf, nodeOf, openBlockers } from './graphs/dispatch.mjs'
-import { setLabels } from './issue-state.mjs'
-import { byPriorityThenAge, Q, RUNNING, WAIT } from './labels.mjs'
+import { iso, key, markerOf, setLabels, setMarker } from './issue-state.mjs'
+import { byPriorityThenAge, move, Q, RUNNING, WAIT, WHY } from './labels.mjs'
+import { newMarker, withHistory } from './marker.mjs'
+import { humanReplies, stateSince } from './human-reply.mjs'
 import { each, staleLeases } from './tick.mjs'
 import { markerTrace, turnTracer } from './tracing.mjs'
 
@@ -124,8 +129,7 @@ export function intakeCandidates(deps, ctx) {
         issue.labels.includes(Q.intake) &&
         !issue.labels.includes(RUNNING) &&
         !store.worker(slug, issue.number) &&
-        !deferredPast(issue, ctx.now) &&
-        !openBlockers(issue).length
+        (replied(deps, issue) || (!deferredPast(issue, ctx.now) && !openBlockers(issue).length))
       )
         candidates.push({ slug, issue, snap })
   const order = byPriorityThenAge(config.priorityLabels)
@@ -183,6 +187,7 @@ async function park(deps, ctx) {
     restingIntake(deps, ctx),
     async (c) => {
       const { issue } = c
+      if (replied(deps, issue)) return
       const open = openBlockers(issue)
       const m = issue.stateComment?.marker
       const atBlocked = m?.graph === dispatch.name && m.node === 'blocked'
@@ -216,9 +221,70 @@ const unblockedSince = (blockers, since) =>
   blockers.every((b) => b.state === 'CLOSED') &&
   blockers.some((b) => !since || (!!b.closedAt && Date.parse(b.closedAt) > Date.parse(since)))
 
+/**
+ * Parked at `deferred` or `blocked` with a human reply since: the human may be saying it is not waiting on anything,
+ * so triage looks now. Starting triage moves the marker on, so the same reply wakes it once.
+ * @param {Deps} deps @param {import('./github.mjs').Issue} issue
+ */
+function replied(deps, issue) {
+  const m = issue.stateComment?.marker
+  if (!(m?.graph === dispatch.name && (m.node === 'deferred' || m.node === 'blocked'))) return false
+  return humanReplies(issue, { since: stateSince(m), botLogin: deps.config.graft.botLogin }).length > 0
+}
+
+/**
+ * Wake: every `q:human` issue (any `why:*` but `why:approve`, as re-triage) with no lease, no tracked worker and a
+ * human reply since it entered its state goes back to `q:intake` at `start-triage`, attempt 1, its history kept with
+ * a `human-reply` entry and the `reply` context the triage prompt quotes. The new state starts now, so the same
+ * reply never wakes it again: a triage that answers needs-human again rests until the next reply.
+ * @param {Deps} deps @param {Ctx} ctx
+ */
+async function wake(deps, ctx) {
+  const botLogin = deps.config.graft.botLogin
+  for (const [slug, snap] of ctx.snaps)
+    await each(
+      deps,
+      [...snap.issues.values()].filter(
+        (i) =>
+          i.state === 'OPEN' &&
+          i.labels.includes(Q.human) &&
+          !i.labels.includes(WHY.approve) &&
+          !i.labels.includes(RUNNING) &&
+          !deps.store.worker(slug, i.number) &&
+          !ctx.touched.has(key(slug, i.number)),
+      ),
+      async (issue) => {
+        const m = markerOf(issue)
+        const since = stateSince(issue.stateComment?.marker)
+        const replies = humanReplies(issue, { since, botLogin })
+        if (!since || !replies.length) return
+        const at = iso(ctx.now)
+        const who = [...new Set(replies.map((r) => `@${r.author}`))].join(', ')
+        await setMarker(deps, slug, issue, {
+          ...newMarker({
+            graph: dispatch.name,
+            graphVersion: dispatch.version,
+            node: dispatch.entry.node,
+            phase: 'dispatch',
+            enteredAt: at,
+            traceparent: m.traceparent,
+            history: withHistory(m, { at, attempt: m.attempt, outcome: 'human-reply', reason: `reply from ${who}` })
+              .history,
+          }),
+          reply: { since, question: m.lastFailure ?? m.history.at(-1)?.reason ?? null },
+        })
+        await setLabels(deps, slug, issue, move(issue.labels, Q.intake))
+        ctx.touched.add(key(slug, issue.number))
+        deps.log('info', `human reply from ${who}: q:human → q:intake for triage`, { repo: slug, issue: issue.number })
+      },
+      (issue) => ({ repo: slug, issue: issue.number }),
+    )
+}
+
 /** @param {Deps} deps @param {Ctx} ctx */
 async function schedule(deps, ctx) {
   if (deps.config.phases.dispatch.cap <= 0) return
+  await wake(deps, ctx)
   await park(deps, ctx)
   await each(
     deps,

@@ -14,6 +14,7 @@ import { iso, key, markerOf, MIN, setLabels, setMarker } from '../issue-state.mj
 import { move, Q, WAIT, WHY } from '../labels.mjs'
 import { newMarker, withHistory } from '../marker.mjs'
 import { readTriage, TriageResult, triageComment, triagePrompt } from '../phases/dispatch.mjs'
+import { humanReplies, quoted, replyContextOf } from '../human-reply.mjs'
 import { traceWorker } from '../tracing.mjs'
 import { stopOverdue } from '../workers.mjs'
 import { task } from './task.mjs'
@@ -30,6 +31,8 @@ import { task } from './task.mjs'
 
 /** The nodes an issue in `q:intake` can rest at; a marker elsewhere starts triage over at attempt 1. */
 const INTAKE_NODES = new Set(['start-triage', 'triaging', 'retry-triage', 'deferred', 'blocked'])
+/** The nodes before a verdict: the marker keeps its `reply` context through them; any other node drops it. */
+const PRE_VERDICT = new Set(['start-triage', 'triaging', 'retry-triage'])
 
 /** The open issues among `issue`'s GitHub `blockedBy` links. @param {Issue} issue */
 export const openBlockers = (issue) => (issue.blockedBy ?? []).filter((b) => b.state === 'OPEN').map((b) => b.number)
@@ -64,6 +67,7 @@ async function land(ctx, node, marker, { extra = [], status = 'waiting' } = {}) 
   const decl = nodeOf(node)
   await setMarker(ctx, slug, issue, {
     ...graphMarker(marker),
+    ...(PRE_VERDICT.has(node) ? {} : { reply: null }),
     graph: dispatch.name,
     graphVersion: dispatch.version,
     phase: 'dispatch',
@@ -154,8 +158,12 @@ const startTriage = declare(
       } catch (err) {
         return { to: 'retry', reason: `could not start triage: ${errText(err)}`, outcome: 'spawn-failed' }
       }
+      // A human reply since the issue last waited (on a needs-human, defer or blocked reason) is the answer to it.
+      const reply = m0.reply ?? replyContextOf(markerOf(issue))
+      const replies = reply ? quoted(humanReplies(issue, { since: reply.since, botLogin: config.graft.botLogin })) : []
       await land(ctx, 'triaging', {
         ...m0,
+        reply,
         deferUntil: null,
         host: config.host,
         start: iso(ctx.tick.now),
@@ -189,8 +197,12 @@ const startTriage = declare(
               agentsMd,
               deferHours: caps.deferHours,
               deferred:
-                m0.deferReason && !m0.blockedBy?.length ? { count: m0.defers ?? 0, reason: m0.deferReason } : null,
-              blocked: m0.blockedBy?.length ? { by: m0.blockedBy, reason: m0.deferReason ?? '' } : null,
+                !replies.length && m0.deferReason && !m0.blockedBy?.length
+                  ? { count: m0.defers ?? 0, reason: m0.deferReason }
+                  : null,
+              blocked:
+                !replies.length && m0.blockedBy?.length ? { by: m0.blockedBy, reason: m0.deferReason ?? '' } : null,
+              replied: replies.length ? { question: reply?.question ?? null, replies } : null,
             }),
         })
       } catch (err) {
