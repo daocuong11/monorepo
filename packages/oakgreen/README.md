@@ -8,7 +8,7 @@ Zero third-party dependencies, Node ≥ 22.13 (cambium needs `node:sqlite`). Git
 
 ```sh
 npm install -g oakgreen
-oakgreen setup --repo owner/name    # labels + cambium config skeleton, then the human steps
+oakgreen setup --repo owner/name    # labels, label guide, cambium config skeleton, then the human steps
 oakgreen doctor                     # one checklist, exit 1 if a required check fails
 oakgreen graft status               # any tool, args passed through
 oakgreen start                       # install (first time) and start every service that is configured
@@ -71,10 +71,11 @@ oakgreen depends on every tool, so updating it updates the stack. It updates its
 | `cambium config`      | the config file exists and parses                                                                                                                            | yes      |
 | `cambium status`      | `cambium status --json --config <file>` exits 0 and reports a heartbeat; not run without a config, since it would create its database                        | yes      |
 | `cambium heartbeat`   | the heartbeat's `tick.finishedAt` is within 3 × `daemon.tickSeconds` (file: `paths.heartbeat`, else `<paths.home>/state.json`, else `~/.cambium/state.json`) | yes      |
-| `queue labels <repo>` | `q:intake q:task q:human q:promote running why:budget why:reject why:approve` all exist                                                                      | yes      |
+| `queue labels <repo>` | `q:intake q:task q:human q:promote running why:budget why:reject why:approve why:triage wait:deferred wait:blocked red-base` all exist                       | yes      |
 | `mycelium <source>`   | per enabled source (any of its `MYCELIUM_*` vars set, in the environment or mycelium's env file): every var it needs, plus `MYCELIUM_REPO`                   | yes      |
 | `canker config`       | `canker.json` or `package.json` `"canker"` at the git root of the current directory                                                                          | no       |
 | `deadwood config`     | `deadwood.json` or `package.json` `"deadwood"` at the git root                                                                                               | no       |
+| `label guide`         | `docs/agents/triage-labels.md` at the git root names `q:intake`                                                                                              | no       |
 
 The repositories checked are `--repo`, else every `repos[].slug` in the cambium config, else `$MYCELIUM_REPO`.
 
@@ -82,7 +83,8 @@ The repositories checked are `--repo`, else every `repos[].slug` in the cambium 
 
 1. Writes a cambium config skeleton if the file is absent: one repo (`--repo`, else `$MYCELIUM_REPO`, else the `origin` remote; `OWNER/NAME` if none), its path the current git root. An existing file is never touched.
 2. Creates each missing queue label on each configured repository with `graft api POST /repos/<repo>/labels`.
-3. Prints the steps only a human can do: create and install the GitHub Apps (`graft setup app`), fill in `graft.app`/`graft.botLogin`/`worker.graftApp`, start the services (`oakgreen start`), and optionally write mycelium's settings to `~/.mycelium/env`.
+3. Run from a clone of a configured repository, writes the **label guide** `docs/agents/triage-labels.md` if absent: how agents file issues (`q:intake` only, blockers as GitHub blocked-by links, no `q:` on a tracking parent), the queue labels, the priority labels from the cambium config, and a mapping from the triage roles other skills use (`needs-triage`, `ready-for-agent`, …). That path is where mattpocock's `to-tickets`, `triage` and `wayfinder` skills look, so they use these labels instead of their defaults. It then adds a `### Triage labels` pointer under `## Agent skills` in `CLAUDE.md` (else `AGENTS.md`), once. An existing guide is never rewritten; one that does not name `q:intake` is reported with a step to replace it. Both files are repo changes for the user to commit.
+4. Prints the steps only a human can do: create and install the GitHub Apps (`graft setup app`), fill in `graft.app`/`graft.botLogin`/`worker.graftApp`, start the services (`oakgreen start`), and optionally write mycelium's settings to `~/.mycelium/env`.
 
 Running it again creates nothing.
 

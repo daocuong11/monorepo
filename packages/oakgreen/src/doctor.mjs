@@ -1,4 +1,7 @@
 // @ts-check
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { LABEL_GUIDE_PATH } from './label-guide.mjs'
 import {
   QUEUE_LABELS,
   cambiumConfigPath,
@@ -139,6 +142,21 @@ export async function runDoctor(ctx) {
       ),
     )
   }
+  const guide = root ? join(root, LABEL_GUIDE_PATH) : null
+  const guideOk = guide != null && existsSync(guide) && readFileSync(guide, 'utf8').includes('q:intake')
+  checks.push(
+    check(
+      'label guide',
+      guideOk,
+      !root
+        ? `${ctx.cwd} is not in a git repository`
+        : guideOk
+          ? LABEL_GUIDE_PATH
+          : `no ${LABEL_GUIDE_PATH} naming q:intake in ${root}`,
+      'oakgreen setup, from the repository',
+      false,
+    ),
+  )
   return checks
 }
 
