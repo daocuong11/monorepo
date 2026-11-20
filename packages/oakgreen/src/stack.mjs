@@ -11,6 +11,10 @@ export const QUEUE_LABELS = [
   { name: 'why:budget', color: 'e4e669', description: 'In q:human: attempts spent' },
   { name: 'why:reject', color: 'e4e669', description: 'In q:human: rejected' },
   { name: 'why:approve', color: 'e4e669', description: 'In q:human: waiting for approval' },
+  { name: 'why:triage', color: 'e4e669', description: 'In q:human: triage needs a human' },
+  { name: 'wait:deferred', color: 'bfdadc', description: 'In q:intake: triage deferred it; rechecked later' },
+  { name: 'wait:blocked', color: 'bfdadc', description: 'In q:intake: waits on its open blocked-by issues' },
+  { name: 'red-base', color: 'b60205', description: 'Repair issue for a red base branch' },
 ]
 
 export const MYCELIUM_SOURCES = {

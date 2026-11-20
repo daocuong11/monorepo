@@ -1,6 +1,7 @@
 // @ts-check
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { DEFAULT_PRIORITY_LABELS, writeLabelGuide } from './label-guide.mjs'
 import {
   QUEUE_LABELS,
   cambiumConfigPath,
@@ -33,7 +34,8 @@ async function originSlug(ctx) {
 }
 
 /**
- * Idempotent: creates only what is missing and never rewrites an existing file.
+ * Idempotent: creates only what is missing. Never rewrites an existing file, except to add the label-guide
+ * pointer block to the repo's CLAUDE.md or AGENTS.md.
  *
  * @param {Context} ctx
  * @returns {Promise<{ ok: boolean, created: string[], steps: string[] }>}
@@ -82,6 +84,17 @@ export async function runSetup(ctx) {
       ok = false
       print(`! labels on ${repo}: ${/** @type {Error} */ (err).message}`)
     }
+  }
+
+  const root = gitRoot(ctx.cwd)
+  const here = root ? await originSlug(ctx) : null
+  if (root && here && repos.includes(here)) {
+    const priorityLabels = Array.isArray(config?.priorityLabels) ? config.priorityLabels : DEFAULT_PRIORITY_LABELS
+    const guide = writeLabelGuide({ root, priorityLabels, dryRun, print })
+    created.push(...guide.created)
+    steps.push(...guide.steps)
+  } else if (repos.length) {
+    steps.push(`Run oakgreen setup from a clone of ${repos.join(' or ')} to write its label guide for agents`)
   }
 
   steps.push(

@@ -17,7 +17,12 @@ function healthy() {
     '.cambium/config.json': JSON.stringify({ repos: [{ slug: 'o/r', path: '/x' }] }),
     '.cambium/state.json': beat(10),
   })
-  const cwd = tempDir({ '.git/HEAD': 'ref: refs/heads/main\n', 'canker.json': '{}', 'package.json': '{"deadwood":{}}' })
+  const cwd = tempDir({
+    '.git/HEAD': 'ref: refs/heads/main\n',
+    'canker.json': '{}',
+    'package.json': '{"deadwood":{}}',
+    'docs/agents/triage-labels.md': 'File issues with `q:intake`.',
+  })
   const gh = fakeGithub({ 'o/r': [...ALL_LABELS, 'bug'] })
   const { exec, calls } = fakeExec({
     graft: () => ({ stdout: '✓ node 22\n✓ repository o/r\n' }),
@@ -45,6 +50,7 @@ test('a healthy machine passes every check and exits 0', async () => {
     'mycelium',
     'canker config',
     'deadwood config',
+    'label guide',
   ]) {
     assert.match(r.out, new RegExp(`^✓ ${name}:`, 'm'), name)
   }

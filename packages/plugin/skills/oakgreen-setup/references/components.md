@@ -34,7 +34,7 @@ Ask: the cambium config path (default `~/.cambium/config.json`), the local clone
 
 Run:
 
-1. `oakgreen setup --dry-run --repo <o/n> --config <file>`, show the output, then with a yes the same without `--dry-run`. It writes the skeleton only if the file is absent, sets `repos[0].path` to the git root of the current directory (so run it from the clone), and creates the queue labels (`q:intake q:task q:human q:promote running why:budget why:reject why:approve`) on GitHub. Its "Remaining human steps" list is what the rest of this wizard covers.
+1. `oakgreen setup --dry-run --repo <o/n> --config <file>`, show the output, then with a yes the same without `--dry-run`. It writes the skeleton only if the file is absent, sets `repos[0].path` to the git root of the current directory (so run it from the clone), and creates the queue labels (`q:intake q:task q:human q:promote running why:budget why:reject why:approve why:triage wait:deferred wait:blocked red-base`) on GitHub. Run from the clone, it also writes the label guide `docs/agents/triage-labels.md` and a pointer to it in `CLAUDE.md`/`AGENTS.md`, so agents file issues with `q:intake` instead of another vocabulary's labels. Those two files are repo changes for the user to commit. Its "Remaining human steps" list is what the rest of this wizard covers.
 2. Edit the config (show the diff, ask). If the file already existed (`= cambium config … exists; left as is`), add this repo to `repos[]` yourself: `{ "slug": "<o/n>", "path": "<clone>", "baseBranch": "main" }`, plus `"requiredCheck": null` when the repo has no `ci` check yet (otherwise its base never reads green). The App settings below are global, not per repo: on a config that already serves another owner, leave them as they are and rely on graft's owner → App mapping (`graft setup app` records it; `graft doctor` from the clone shows which App it picked). Otherwise: `graft.app` = the App slug, `graft.botLogin` = `<slug>[bot]`, `worker.graftApp` = the workers' App slug (often the same), plus `phases.task.cap`, `engine`, `merge` if the user chose non-defaults. Keep it valid JSON; the daemon re-reads it every tick, but `engine`, `paths` and `graft` need a restart (`oakgreen restart cambium`).
 3. The target repo's worktrees go under `.claude/worktrees` by default: check that path is in the repo's `.gitignore`, and offer to add it (a repo change for the user to commit).
 4. `oakgreen start cambium` (with a yes): runs `cambium install` to write `~/Library/LaunchAgents/com.oakgreencc.cambium.plist` on first run, then loads it. `cambium install --dry-run --config <file>` shows the agent first. `oakgreen start` runs `cambium install` without `--config`, so with a config outside the default path write the agent yourself first (`cambium install --config <file>`, with a yes), then `oakgreen start cambium`. Recommend the default path unless the user has a reason.
@@ -121,15 +121,15 @@ Check: the doctor's `deadwood config` passes when run from the repo; `npx deadwo
 
 `oakgreen doctor --json` prints `{ ok, checks: [{ name, ok, required, detail, fix }] }`. Its `ok` covers the whole stack, so judge the checks of the chosen components:
 
-| Component | Doctor checks that must pass                                                                    | Other proof                                    |
-| --------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| always    | `node`                                                                                          |                                                |
-| graft     | `graft doctor`                                                                                  |                                                |
-| cambium   | `claude on PATH`, `cambium config`, `cambium status`, `cambium heartbeat`, `queue labels <o/n>` | `oakgreen services cambium` running            |
-| tracing   | (none)                                                                                          | the checks under [tracing](#tracing)           |
-| mycelium  | every `mycelium <source>`, `queue labels <o/n>` for `MYCELIUM_REPO`                             | `oakgreen services mycelium` running           |
-| canopy    | (none)                                                                                          | `oakgreen services canopy` running, `curl` 200 |
-| canker    | `canker config` (optional in the doctor; required here when chosen)                             | `npx canker`                                   |
-| deadwood  | `deadwood config` (optional in the doctor; required here when chosen)                           | `npx deadwood`                                 |
+| Component | Doctor checks that must pass                                                                                   | Other proof                                    |
+| --------- | -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| always    | `node`                                                                                                         |                                                |
+| graft     | `graft doctor`                                                                                                 |                                                |
+| cambium   | `claude on PATH`, `cambium config`, `cambium status`, `cambium heartbeat`, `queue labels <o/n>`, `label guide` | `oakgreen services cambium` running            |
+| tracing   | (none)                                                                                                         | the checks under [tracing](#tracing)           |
+| mycelium  | every `mycelium <source>`, `queue labels <o/n>` for `MYCELIUM_REPO`                                            | `oakgreen services mycelium` running           |
+| canopy    | (none)                                                                                                         | `oakgreen services canopy` running, `curl` 200 |
+| canker    | `canker config` (optional in the doctor; required here when chosen)                                            | `npx canker`                                   |
+| deadwood  | `deadwood config` (optional in the doctor; required here when chosen)                                          | `npx deadwood`                                 |
 
 Run the doctor from inside the repository so the canker and deadwood checks look at it, and pass `--config` when the cambium config is not at the default path.
