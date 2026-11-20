@@ -35,7 +35,7 @@ test('scoped publishes only compare the paths being published', () => {
   const calls = []
   const git = fakeGit('', calls)
   findDisplacement({ git, worktreeBase: 'aaa', branchHead: 'bbb', paths: ['x.md', 'y.md'] })
-  assert.deepEqual(calls[0], ['diff', '--name-only', 'aaa', 'bbb', '--', 'x.md', 'y.md'])
+  assert.deepEqual(calls[0], ['diff', '--no-renames', '--name-only', 'aaa', 'bbb', '--', 'x.md', 'y.md'])
 })
 
 test('an unscoped publish compares the whole tree', () => {
@@ -44,11 +44,11 @@ test('an unscoped publish compares the whole tree', () => {
   const calls = []
   const git = fakeGit('', calls)
   findDisplacement({ git, worktreeBase: 'aaa', branchHead: 'bbb' })
-  assert.deepEqual(calls[0], ['diff', '--name-only', 'aaa', 'bbb'])
+  assert.deepEqual(calls[0], ['diff', '--no-renames', '--name-only', 'aaa', 'bbb'])
 
   const calls2 = []
   findDisplacement({ git: fakeGit('', calls2), worktreeBase: 'aaa', branchHead: 'bbb', paths: [] })
-  assert.deepEqual(calls2[0], ['diff', '--name-only', 'aaa', 'bbb'])
+  assert.deepEqual(calls2[0], ['diff', '--no-renames', '--name-only', 'aaa', 'bbb'])
 })
 
 test('output is sorted and free of blank entries', () => {

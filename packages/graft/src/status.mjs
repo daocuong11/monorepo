@@ -159,7 +159,7 @@ async function pullsFor({ client, owner, repo, sha, branch }) {
 }
 
 /** Whether any of `refs` (branch names or shas) on GitHub contains `sha`. A missing ref, or a sha GitHub lacks, is a 404: no. */
-async function onGitHub({ client, owner, repo, sha, refs }) {
+export async function onGitHub({ client, owner, repo, sha, refs }) {
   for (const ref of new Set(refs)) {
     const cmp = await client.getOrNull(`/repos/${owner}/${repo}/compare/${encodeURIComponent(ref)}...${sha}`)
     if (cmp && cmp.ahead_by === 0) return true

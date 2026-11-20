@@ -10,13 +10,13 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { run as cli } from '../src/cli/worktree.mjs'
 import { sync } from '../src/hooks/sync-worktree.mjs'
 import { advance, publishWorktree, resolveBranch } from '../src/publish/publish.mjs'
 import { localOnly } from '../src/status.mjs'
-import { ENTERED_AT, enteredAt, rewind } from '../src/worktree.mjs'
+import { ENTERED_AT, enteredAt, rewind, strayPaths, tidy } from '../src/worktree.mjs'
 import { gitIn, must, run, scenario } from './fixtures.mjs'
 
 const BRANCH = 'worktree-x'
@@ -221,6 +221,89 @@ test('graft worktree done: refuses the main checkout; rewinds and fast-forwards 
       1,
     )
     assert.match(lines.join('\n'), /local only \(not on GitHub\): 1 commit/)
+  } finally {
+    s.cleanup()
+  }
+})
+
+/** Someone else renames `from` → `to` on origin's develop. Returns the new develop sha. */
+function renameElsewhere(s, from, to) {
+  const tmp = join(s.root, `renamer-${from.replace(/\W/g, '_')}`)
+  run(s.root, ['clone', '-q', s.bare, tmp])
+  run(tmp, ['mv', from, to])
+  run(tmp, ['-c', 'commit.gpgsign=false', 'commit', '-qm', `rename ${from}`])
+  run(s.bare, ['fetch', '-q', tmp, 'develop:develop'])
+  return run(tmp, ['rev-parse', 'HEAD']).trim()
+}
+
+/**
+ * What `advance` did before `--no-renames`: `reset --soft` onto `target`,
+ * restoring only the paths a rename-detecting diff listed — the old path of a
+ * rename stays in the index as a staged add.
+ */
+function strandAcrossRename(dir, target) {
+  const old = run(dir, ['rev-parse', 'HEAD']).trim()
+  const listed = run(dir, ['diff', '--name-only', '-z', old, target]).split('\0').filter(Boolean)
+  run(dir, ['reset', '-q', '--soft', target])
+  run(dir, ['restore', `--source=${target}`, '--staged', '--worktree', '--', ...listed])
+}
+
+test('advance across a rename on the branch leaves nothing behind', () => {
+  const s = scenario()
+  try {
+    const target = renameElsewhere(s, 'b.txt', 'd/b2.txt')
+    run(s.wt, ['fetch', '-q', 'origin', 'develop'])
+    must(advance({ git: s.git, target }).advanced)
+    assert.equal(run(s.wt, ['status', '--porcelain', '-uall']).trim(), '')
+    assert.equal(readFileSync(join(s.wt, 'd/b2.txt'), 'utf8'), 'two\n')
+  } finally {
+    s.cleanup()
+  }
+})
+
+test('graft worktree done puts back a path an earlier HEAD left staged, and finishes', async () => {
+  const s = await enteredPublishedMerged()
+  try {
+    writeFileSync(join(s.lwt, '.graft.json'), JSON.stringify({ baseBranch: 'develop' }))
+    writeFileSync(join(s.wt, '.git', 'info', 'exclude'), '.graft.json\n')
+    const target = renameElsewhere(s, 'b.txt', 'd/b2.txt')
+    run(s.lwt, ['fetch', '-q', 'origin', 'develop'])
+    strandAcrossRename(s.lwt, target)
+    assert.equal(run(s.lwt, ['status', '--porcelain', '-uall']).trim(), 'A  b.txt')
+
+    const lines = []
+    const code = await cli(['done', 'agent/x', '-C', s.lwt, '--repo', 'o/r'], {
+      client: s.client,
+      say: (l) => lines.push(l),
+    })
+    assert.equal(code, 0, lines.join('\n'))
+    assert.match(lines.join('\n'), /Put back 1 path an earlier HEAD left behind[^\n]*\n {2}b\.txt/)
+    assert.deepEqual(exitWorktreeCounts(s), { commits: 0, changed: '' })
+  } finally {
+    s.cleanup()
+  }
+})
+
+test('tidy leaves a path alone when it was written after HEAD moved, or GitHub lacks the earlier commit', async () => {
+  const s = scenario()
+  try {
+    const target = renameElsewhere(s, 'b.txt', 'd/b2.txt')
+    run(s.wt, ['fetch', '-q', 'origin', 'develop'])
+    strandAcrossRename(s.wt, target)
+    const dirty = ['b.txt']
+    assert.deepEqual(
+      strayPaths(s.git, dirty).map((x) => x.path),
+      ['b.txt'],
+    )
+
+    assert.deepEqual(await tidy({ git: s.git, dirty, held: async () => false }), [])
+    assert.equal(run(s.wt, ['status', '--porcelain', '-uall']).trim(), 'A  b.txt')
+
+    // The same content, written after the move: somebody's work, not a stray.
+    const later = new Date(Date.now() + 60_000)
+    utimesSync(join(s.wt, 'b.txt'), later, later)
+    assert.deepEqual(await tidy({ git: s.git, dirty, held: async () => true }), [])
+    assert.equal(run(s.wt, ['status', '--porcelain', '-uall']).trim(), 'A  b.txt')
   } finally {
     s.cleanup()
   }

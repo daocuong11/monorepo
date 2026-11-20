@@ -559,7 +559,10 @@ export function advance({ git, target }) {
   }
 
   const dirty = new Set(dirtyPaths(git))
-  const changed = nulSplit(git(['diff', '--name-only', '-z', old, target]))
+  // --no-renames: with rename detection a moved file lists only its new
+  // path, so the old one would survive `reset --soft` in the index — a staged
+  // add of a file the branch deleted, which `worktree done` then refuses over.
+  const changed = nulSplit(git(['diff', '--no-renames', '--name-only', '-z', old, target]))
   const untouched = changed.filter((p) => !dirty.has(p))
   const collide = changed.filter((p) => dirty.has(p))
 
