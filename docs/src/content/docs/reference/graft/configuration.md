@@ -33,7 +33,7 @@ Every field is optional.
 | `protected.impossible` | `[".github/workflows/**"]` | Paths the App cannot write; no grant unlocks them. |
 | `payload.ceilingBytes` | `524288` | Most one publish may add to a single path. |
 | `payload.neverPublish` | `["*.log"]` | Patterns never published, at any size. |
-| `minVersion` | `null` | Oldest graft allowed to act on this repository. |
+| `minVersion` | `null` | Oldest graft allowed to act on this repository. An older graft refuses every verb, and its session-start hook says so. |
 | `app` | `null` | App slug that acts for this repository. `null`: by owner, then default. |
 
 ## Example

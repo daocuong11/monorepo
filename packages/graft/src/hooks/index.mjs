@@ -11,6 +11,7 @@
  *   guard-protected     PreToolUse Bash, Write|Edit|…   CODEOWNERS paths need a grant
  *   guard-pr-writes     PreToolUse Bash                 merges go through `graft pr merge`
  *   sync-worktree       PostToolUse EnterWorktree       record the entry commit, fast-forward a new worktree
+ *   finish-worktree     PreToolUse ExitWorktree         `graft worktree done` before a remove
  *   session-check       SessionStart                    is raw git bound to the App?
  *
  * THE HOST owns what every hook would otherwise repeat: reading the event
@@ -35,6 +36,7 @@ export const HOOKS = {
   'guard-protected': () => import('./guard-protected.mjs'),
   'guard-pr-writes': () => import('./guard-pr-writes.mjs'),
   'sync-worktree': () => import('./sync-worktree.mjs'),
+  'finish-worktree': () => import('./finish-worktree.mjs'),
   'session-check': () => import('./session-check.mjs'),
 }
 

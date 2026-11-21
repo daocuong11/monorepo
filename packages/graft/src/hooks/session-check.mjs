@@ -16,20 +16,53 @@
  * those settings. What it catches is the session that loaded them and still
  * is not bound: a foreign block, a remote on another owner's SSH, a helper
  * that answers before graft's.
+ *
+ * It also says when this graft is older than `.graft.json`'s `minVersion`.
+ * Every verb refuses then (gates/version.mjs), but hooks do not go through
+ * that gate: an old graft's hooks run quietly and do less, such as never
+ * recording the commit `graft worktree done` rewinds to. Saying so at session
+ * start beats finding out at the end of the work.
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { resolveContext } from '../context.mjs'
+import { VERSION, versionRefusal } from '../gates/version.mjs'
 import { readRawGit, sessionFindings } from '../session-env.mjs'
 
 /**
  * @param {any} event
- * @param {{ env?: NodeJS.ProcessEnv }} [opts]
+ * @param {{ env?: NodeJS.ProcessEnv, running?: string }} [opts]   `running`: the graft version (default: this one)
  * @returns {string | null}
  */
-export function check(event, { env = process.env } = {}) {
+export function check(event, { env = process.env, running } = {}) {
   const ctx = resolveContext({ cwd: event?.cwd ?? process.cwd(), env })
   if (!ctx.root) return null
+  const stale = staleGraft(ctx, running)
+  const bound = binding(ctx, env)
+  return [stale, bound].filter(Boolean).join('\n\n') || null
+}
+
+/**
+ * The notice when this graft is older than the project's `minVersion`, else null.
+ * @param {{ config: { minVersion?: string | null } }} ctx  @param {string} [running]
+ */
+export function staleGraft(ctx, running) {
+  let min = null
+  try {
+    min = ctx.config.minVersion ?? null
+  } catch {
+    return null // unreadable policy: doctor names it
+  }
+  if (!versionRefusal(min, running)) return null
+  return (
+    `graft: this is graft ${running ?? VERSION}; this project's .graft.json requires >= ${min}.\n` +
+    'Every graft verb will refuse, and its hooks are doing less than the project expects.\n' +
+    'Update it (`oakgreen update`, or `npm install -g @oakgreencc/graft`), then start a new session.'
+  )
+}
+
+/** @param {any} ctx  @param {NodeJS.ProcessEnv} env */
+function binding(ctx, env) {
   const settingsPath = join(ctx.root, '.claude', 'settings.json')
   let settingsEnv = null
   try {

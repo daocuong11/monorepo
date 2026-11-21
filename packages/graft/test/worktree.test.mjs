@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { run as cli } from '../src/cli/worktree.mjs'
+import { finish } from '../src/hooks/finish-worktree.mjs'
 import { sync } from '../src/hooks/sync-worktree.mjs'
 import { advance, publishWorktree, resolveBranch } from '../src/publish/publish.mjs'
 import { localOnly } from '../src/status.mjs'
@@ -307,4 +308,54 @@ test('tidy leaves a path alone when it was written after HEAD moved, or GitHub l
   } finally {
     s.cleanup()
   }
+})
+
+// ---------------------------------------------------------------------------
+// finish-worktree: the same, as a PreToolUse ExitWorktree hook
+// ---------------------------------------------------------------------------
+
+const exitEvent = (cwd, input = { action: 'remove' }) => ({ tool_name: 'ExitWorktree', tool_input: input, cwd })
+
+test('finish-worktree: a merged worktree is rewound before ExitWorktree counts, and the remove goes through', async () => {
+  const s = await enteredPublishedMerged()
+  try {
+    writeFileSync(join(s.lwt, '.graft.json'), JSON.stringify({ baseBranch: 'develop' }))
+    writeFileSync(join(s.wt, '.git', 'info', 'exclude'), '.graft.json\n')
+    assert.ok(exitWorktreeCounts(s).commits >= 2)
+    /** @type {string[][]} */
+    const calls = []
+    const done = (/** @type {string[]} */ argv, /** @type {any} */ o) => {
+      calls.push(argv)
+      return cli([...argv, '--repo', 'o/r'], { ...o, client: s.client })
+    }
+    assert.equal(await finish(exitEvent(s.lwt), { done }), null)
+    assert.deepEqual(calls, [['done', '-C', s.lwt]])
+    assert.deepEqual(exitWorktreeCounts(s), { commits: 0, changed: '' })
+
+    // Local work: denied, with what would be lost.
+    writeFileSync(join(s.lwt, 'b.txt'), 'wip\n')
+    run(s.lwt, ['add', 'b.txt'])
+    run(s.lwt, ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'wip'])
+    const denied = await finish(exitEvent(s.lwt), { done })
+    assert.match(String(denied), /holds work GitHub does not have/)
+    assert.match(String(denied), /local only \(not on GitHub\): 1 commit/)
+  } finally {
+    s.cleanup()
+  }
+})
+
+test('finish-worktree: no opinion on keep, an explicit discard, no cwd, or when done cannot run', async () => {
+  let ran = 0
+  const done = async () => {
+    ran++
+    return 1
+  }
+  assert.equal(await finish(exitEvent('/w', { action: 'keep' }), { done }), null)
+  assert.equal(await finish(exitEvent('/w', { action: 'remove', discard_changes: true }), { done }), null)
+  assert.equal(await finish({ tool_input: { action: 'remove' } }, { done }), null)
+  assert.equal(ran, 0)
+  const throws = async () => {
+    throw new Error('main checkout')
+  }
+  assert.equal(await finish(exitEvent('/w'), { done: throws }), null)
 })

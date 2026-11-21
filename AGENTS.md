@@ -5,6 +5,6 @@
 3. **Push:** `graft publish agent/<topic> "<conventional commit message>" --paths <a,b> --pr "<title>"`. Never `git commit`, `git push`, `git fetch` or `git pull`.
 4. **Done:** `graft ci wait agent/<topic>`, then the PR merges through the queue.
 
-Work in a worktree under `.claude/worktrees/<topic>`. When finished, run `graft worktree done agent/<topic>`, then remove it (ExitWorktree `remove`, no `discard_changes`). If `done` exits 1, the worktree holds work GitHub lacks: publish it, don't discard it.
+Work in a worktree under `.claude/worktrees/<topic>`. When finished, remove it (ExitWorktree `remove`, no `discard_changes`). The `finish-worktree` hook runs `graft worktree done` first. If the remove is denied, the worktree holds work GitHub lacks: publish it, don't discard it.
 
 A change to a user-facing fact (a flag, default, label, behaviour) updates the matching page in `docs/` in the same PR. Those pages are for humans: follow [docs/AGENTS.md](docs/AGENTS.md).

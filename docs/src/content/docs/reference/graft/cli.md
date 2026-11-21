@@ -108,7 +108,7 @@ Bodies come only from files. `--body-file -` reads stdin. An inline `--body` is 
 | `graft jobs` | `graft jobs <run-id \| run URL> [--logs <dir>] [--all]` | A workflow run's jobs; `--logs` saves job logs. |
 | `graft ci wait` | `graft ci wait <sha\|ref> [--check <name>] [--timeout <s>] [--interval <s>]` | One check's verdict. Default check: `requiredCheck`. |
 | `graft status` | `graft status [<branch>] [--base <b>]` | What the worktree holds that GitHub does not: uncommitted paths, and local commits no branch on GitHub contains. Read through the API, no fetch. |
-| `graft worktree done` | `graft worktree done [<branch>]` | If GitHub holds everything, rewinds the branch to the commit the worktree was created on and fast-forwards the main checkout's base branch. Otherwise prints what is local only, exits 1, changes nothing. |
+| `graft worktree done` | `graft worktree done [<branch>]` | If GitHub holds everything, rewinds the branch to the commit the worktree was created on and fast-forwards the main checkout's base branch. Otherwise prints what is local only, exits 1, changes nothing. ExitWorktree `remove` runs it first through the `finish-worktree` hook. |
 | `graft credential get` | — | git credential helper; git runs it. |
 
 ### `graft ci wait` exit codes
@@ -156,7 +156,7 @@ A grant binds one session: the one it is typed into, or `--session`. Default exp
 | `graft setup app --manual` | `graft setup app --manual [--app-id <id>] [--key <pem>]` | Registers an existing App. |
 | `graft setup project` | see below | Writes `.graft.json`, CODEOWNERS and `.claude/settings.json`; creates or extends the base branch ruleset. |
 | `graft doctor` | `graft doctor` | Checks the machine and repository. `✗` is broken; `!` works with less protection than it appears. |
-| `graft hook` | `graft hook <guard-credentials\|guard-protected\|guard-pr-writes\|sync-worktree\|session-check>` | Claude Code hook entry points. Read the event JSON on stdin. |
+| `graft hook` | `graft hook <guard-credentials\|guard-protected\|guard-pr-writes\|sync-worktree\|finish-worktree\|session-check>` | Claude Code hook entry points. Read the event JSON on stdin. |
 
 ```
 graft setup project [--config-in <.graft.json | package.json>] [--base <branch>]
