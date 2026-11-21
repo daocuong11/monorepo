@@ -1,0 +1,197 @@
+---
+import { LinkButton } from '@astrojs/starlight/components'
+import Ring from './Ring.astro'
+
+const { data } = Astro.locals.starlightRoute.entry
+const { title = data.title, tagline, actions = [] } = data.hero || {}
+---
+
+<section class="hero">
+	<div class="copy">
+		<h1 id="_top" data-page-title set:html={title} />
+		{tagline && <p class="tagline" set:html={tagline} />}
+		{
+			actions.length > 0 && (
+				<div class="actions">
+					{actions.map(({ attrs: { class: className, ...attrs } = {}, icon, link: href, text, variant }) => (
+						<LinkButton {href} {variant} icon={icon?.name} class:list={[className]} {...attrs}>
+							{text}
+							{icon?.html && <Fragment set:html={icon.html} />}
+						</LinkButton>
+					))}
+				</div>
+			)
+		}
+	</div>
+
+	<div class="stage" aria-hidden="true">
+		<div class="turn">
+			<Ring class="ring" />
+		</div>
+		<div class="orbit orbit-inner">
+			<svg class="orbiter earth" viewBox="0 0 512 512" fill="currentColor">
+				<path d="M256 0C114.842 0 0 114.842 0 256s114.842 256 256 256c2.591 0 5.17-.05 7.742-.128 1.121.076 2.248.128 3.388.128 1.301 0 2.562-.164 3.778-.445C405.153 503.807 512 392.154 512 256 512 114.842 397.158 0 256 0zM128.412 438.311C70.998 398.009 33.391 331.317 33.391 256c0-29.507 5.786-57.686 16.257-83.478h83.917c18.412 0 33.391 14.979 33.391 33.391s-14.979 33.391-33.391 33.391H116.87c-27.618 0-50.087 22.469-50.087 50.087s22.469 50.087 50.087 50.087 50.087 22.469 50.087 50.087c0 23.432-16.042 43.472-38.545 48.746zm90.521 37.195c-19.308-3.25-37.783-8.984-55.076-16.879 22.256-15.122 36.49-40.587 36.49-69.061 0-46.03-37.448-83.478-83.478-83.478-9.206 0-16.696-7.49-16.696-16.696s7.49-16.696 16.696-16.696h16.696c36.824 0 66.783-29.959 66.783-66.783s-29.959-66.783-66.783-66.783H66.619C105.892 75.723 176.09 33.391 256 33.391c24.269 0 47.637 3.918 69.522 11.13h-8.304c-55.236 0-100.174 44.938-100.174 100.174S261.982 244.87 317.217 244.87h83.478c9.206 0 16.696 7.49 16.696 16.696s-7.49 16.696-16.696 16.696h-66.783c-27.618 0-50.087 22.469-50.087 50.087s22.469 50.087 50.087 50.087c9.206 0 16.696 7.49 16.696 16.696s-7.49 16.696-16.696 16.696H267.13c-27.618 0-50.087 22.469-50.087 50.087 0 4.538.668 9.093 1.89 13.419zM264.761 478.421c-8.085-1.156-14.326-8.109-14.326-16.508 0-9.206 7.49-16.696 16.696-16.696h66.783c27.618 0 50.087-22.469 50.087-50.087s-22.469-50.087-50.087-50.087c-9.206 0-16.696-7.49-16.696-16.696s7.49-16.696 16.696-16.696h66.783c27.618 0 50.087-22.469 50.087-50.087s-22.469-50.087-50.087-50.087h-83.478c-36.824 0-66.783-29.959-66.783-66.783 0-36.824 29.959-66.783 66.783-66.783h70.375c.579 0 1.149-.03 1.712-.087 54.184 40.642 89.304 105.383 89.304 178.174 0 114.245-95.148 212.235-213.848 216.855z"></path>
+			</svg>
+		</div>
+		<div class="orbit orbit-outer">
+			<svg class="orbiter teapot" viewBox="0 0 160 160" fill="none" stroke="currentColor" stroke-width="7">
+				<g transform="translate(-24.03 -51.45)">
+					<path d="m131.058 106.52c0-6.189-20.368-3.724-25.949-9.664-4.569-4.569 1.867-4.8 1.867-9.583.095-4.663-7.16-4.378-7.162-4.378-.08-.003-7.256-.26-7.162 4.378 0 4.783 6.436 5.014 1.867 9.583-5.58 5.94-25.949 3.475-25.949 9.664z"></path>
+					<path d="m66.349 108.411c0-1.12-2-1.124-2 0l-5.25 16.047c-5.059 14.24-7.044 23.235-6.79 31.085 0 0-17.064-8.774-17.064-28.237 0-7.572 9.599-7.795 9.599-7.795h15.864l2.088-6.449h-22.147c-12.603 0-12.587 14.244-12.587 14.244 0 26.72 23.864 37.885 25.708 37.885.203.772.424 1.55.665 2.338.952 3.855 9.379 9.971 9.379 9.971v2.5h72v-2.5c0 0 8.427-6.116 9.379-9.971.297-.975.566-1.933.805-2.885 21.307-6.305 16.164-43.87 33.208-55.133 1.151-.761 1.055-1.215-.326-1.195l-7.882.111c-1.381.02-3.339.785-4.226 1.841-7.436 8.858-5.85 22.549-21.729 28.504-1.083-4.153-2.573-8.847-4.515-14.315l-5.235-16.047c0-1.112-2.015-1.117-2.015 0z"></path>
+				</g>
+			</svg>
+			<svg class="orbiter sputnik" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
+				<circle cx="12" cy="17.7" r="5.2"></circle>
+				<path d="M6.8 17.7 3.3 5.5M17.2 17.7l3.5-12.2M12 16.8V1"></path>
+			</svg>
+		</div>
+	</div>
+</section>
+
+<style>
+	.hero {
+		position: relative;
+		display: grid;
+		grid-template-columns: 100%;
+		align-items: center;
+		gap: 2.5rem;
+		padding-block: 2rem 3rem;
+	}
+
+	.copy {
+		position: relative;
+		z-index: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 1.5rem;
+	}
+
+	h1 {
+		margin: 0;
+		font-size: clamp(2.25rem, 1rem + 5vw, 4.5rem);
+		font-weight: 200;
+		line-height: 1;
+		letter-spacing: 0.22em;
+		text-transform: uppercase;
+		color: var(--og-brand);
+		/* Trailing tracking would push the word off-centre of its box. */
+		margin-inline-end: -0.22em;
+	}
+
+	.tagline {
+		margin: 0;
+		max-width: 36ch;
+		font-size: clamp(1.0625rem, 0.9rem + 0.6vw, 1.3125rem);
+		font-weight: 300;
+		line-height: 1.55;
+		color: var(--sl-color-gray-1);
+		text-wrap: pretty;
+	}
+
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.75rem 2rem;
+		margin-top: 0.5rem;
+	}
+	.actions :global(.sl-link-button) {
+		margin: 0;
+	}
+
+	.stage {
+		position: relative;
+		justify-self: end;
+		width: min(110vw, 30rem);
+		margin-block: 2rem 0;
+		margin-inline-end: -42vw;
+		aspect-ratio: 1;
+		color: var(--og-ring);
+	}
+	.turn,
+	.orbit {
+		position: absolute;
+		inset: 0;
+	}
+	.ring {
+		width: 100%;
+		height: 100%;
+		color: var(--og-ring);
+	}
+	.orbit-inner {
+		inset: -2.5%;
+	}
+	.orbit-outer {
+		inset: -5%;
+	}
+	.orbiter {
+		position: absolute;
+		display: block;
+	}
+	.earth {
+		top: 50%;
+		left: 0;
+		width: 1.5rem;
+		height: 1.5rem;
+		translate: -50% -50%;
+		color: var(--og-earth);
+	}
+	.teapot {
+		top: 85.4%;
+		left: 14.6%;
+		width: 1.375rem;
+		height: 1.375rem;
+		translate: -50% -50%;
+		color: var(--sl-color-white);
+		opacity: 0.85;
+	}
+	.sputnik {
+		top: 62.9%;
+		left: 1.7%;
+		width: 2.25rem;
+		height: 2.25rem;
+		translate: -50% -50%;
+		rotate: 150deg;
+		color: var(--og-gold);
+	}
+
+	@media (prefers-reduced-motion: no-preference) {
+		.turn {
+			animation: og-spin 40s linear infinite;
+		}
+		.orbit-inner {
+			animation: og-spin 90s linear infinite reverse;
+		}
+		.orbit-outer {
+			animation: og-spin 75s linear infinite;
+		}
+		.teapot {
+			animation: og-spin 9s linear infinite;
+		}
+	}
+
+	@keyframes og-spin {
+		to {
+			rotate: 360deg;
+		}
+	}
+
+	@media (min-width: 50rem) {
+		.hero {
+			grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+			gap: 4rem;
+			min-height: 34rem;
+			padding-block: clamp(3rem, 1rem + 9vmin, 8rem);
+		}
+		.stage {
+			position: absolute;
+			top: 50%;
+			right: calc(50% - 50vw - 12rem);
+			width: clamp(34rem, 50vw, 52rem);
+			max-width: none;
+			margin: 0;
+			translate: 0 -50%;
+		}
+	}
+</style>
