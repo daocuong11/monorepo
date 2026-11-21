@@ -24,7 +24,7 @@ import { task } from './task.mjs'
  * @typedef {import('../marker.mjs').Marker} Marker
  * @typedef {import('./task.mjs').Subject} Subject
  * @typedef {import('./task.mjs').TaskCtx} DispatchCtx
- * @typedef {{ queue: string | null, running: boolean }} Declared
+ * @typedef {{ queue: string | null, running: boolean, about?: string }} Declared
  *   A stale `running` lease (at `triaging`) goes to `retry-triage` (dispatch-engine.mjs sweep).
  * @typedef {import('../graph/define.mjs').GraphNode & Declared} DispatchNode
  */
@@ -235,7 +235,11 @@ const startTriage = declare(
       return { to: 'running', pid: s.pid, worktree: s.worktree, attempt: marker.attempt }
     },
   }),
-  { queue: Q.intake, running: false },
+  {
+    queue: Q.intake,
+    running: false,
+    about: 'Claims the issue and starts a triage worker in a read-only checkout; out of attempts, it goes to a human.',
+  },
 )
 
 const triaging = declare(
@@ -289,7 +293,12 @@ const triaging = declare(
       }
     },
   }),
-  { queue: Q.intake, running: true },
+  {
+    queue: Q.intake,
+    running: true,
+    about:
+      'Holds while the triage worker runs under its wall-clock cap; on exit, reads the typed verdict from its log.',
+  },
 )
 
 const retryTriage = declare(
@@ -322,7 +331,11 @@ const retryTriage = declare(
       return { to: 'start', attempt: m.attempt + 1 }
     },
   }),
-  { queue: Q.intake, running: false },
+  {
+    queue: Q.intake,
+    running: false,
+    about: 'Back to q:intake with attempt + 1, or to a human once the attempts are spent.',
+  },
 )
 
 const ToTaskIn = z.object({
@@ -367,7 +380,12 @@ const toTask = declare(
       return {}
     },
   }),
-  { queue: Q.task, running: false },
+  {
+    queue: Q.task,
+    running: false,
+    about:
+      'Actionable: posts the triage comment (title, acceptance checks), then hands the issue to the task graph in q:task.',
+  },
 )
 
 const toHuman = declare(
@@ -398,7 +416,7 @@ const toHuman = declare(
       return {}
     },
   }),
-  { queue: Q.human, running: false },
+  { queue: Q.human, running: false, about: 'Into q:human with why:triage and the reason in the state comment.' },
 )
 
 const DupIn = z.object({ duplicateOf: z.number().int(), reason: z.string(), log: z.string() })
@@ -443,7 +461,7 @@ const closeDuplicate = declare(
       return {}
     },
   }),
-  { queue: null, running: false },
+  { queue: null, running: false, about: 'Out of every queue, closed as a duplicate with a link to the original.' },
 )
 
 const DeferIn = z.object({ reason: z.string(), recheckHours: z.number().optional(), log: z.string() })
@@ -502,7 +520,11 @@ const deferred = declare(
       return { to: 'wait', until }
     },
   }),
-  { queue: Q.intake, running: false },
+  {
+    queue: Q.intake,
+    running: false,
+    about: 'Rests in q:intake until a condition a machine can check is due, then triages again. Bounded by maxDefers.',
+  },
 )
 
 const BlockedIn = z.object({
@@ -573,7 +595,7 @@ const blockedNode = declare(
       return { to: 'wait', blockedBy: open }
     },
   }),
-  { queue: Q.intake, running: false },
+  { queue: Q.intake, running: false, about: 'Rests in q:intake with wait:blocked until every blockedBy issue closes.' },
 )
 
 const ObsIn = z.object({ reason: z.string(), log: z.string() })
@@ -612,7 +634,7 @@ const closeObsolete = declare(
       return {}
     },
   }),
-  { queue: null, running: false },
+  { queue: null, running: false, about: 'Out of every queue, closed as not planned with the evidence triage found.' },
 )
 
 /** @param {unknown} err */
@@ -621,6 +643,7 @@ const errText = (err) => /** @type {Error} */ (err)?.message ?? String(err)
 /** The Dispatch phase. Bump `version` when a node is removed or renamed. */
 export const dispatch = defineGraph({
   name: 'dispatch',
+  about: 'Triages a q:intake issue with a one-shot read-only worker, then routes it on its verdict.',
   version: 1,
   entry: { queue: Q.intake, node: 'start-triage', input: () => ({}) },
   nodes: [startTriage, triaging, retryTriage, toTask, toHuman, closeDuplicate, deferred, blockedNode, closeObsolete],

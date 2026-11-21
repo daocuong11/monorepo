@@ -9,7 +9,8 @@
 import { byPriorityThenAge, move, Q, queueOf, RUNNING, WHY } from './labels.mjs'
 import { withHistory } from './marker.mjs'
 import { failureSummary, iso, key, markerOf, MIN, setLabels, setMarker } from './issue-state.mjs'
-import { GRAPH_ENGINE } from './graph-engine.mjs'
+import { GRAPH_ENGINE, GRAPHS } from './graph-engine.mjs'
+import { describeGraph } from './graph/describe.mjs'
 import { linkIssue, prFor, taskExit, taskPrompt } from './phases/task.mjs'
 import { branchName } from './convention.mjs'
 import { PREPARE_FAILED_LINE } from './prepare.mjs'
@@ -653,6 +654,8 @@ async function release(deps, ctx) {
  *     logs: { stdout: string, stderr: string },
  *   }[],
  *   events: Event[],
+ *   engine: 'legacy' | 'graph',
+ *   graphs: import('./graph/describe.mjs').GraphDescription[],
  * }} HeartbeatState
  */
 
@@ -674,6 +677,14 @@ function countsOf(snap) {
   }
   c.review = snap.prs.filter((p) => p.state === 'OPEN').length
   return c
+}
+
+/** @type {import('./graph/describe.mjs').GraphDescription[] | undefined} */
+let described
+/** Every graph cambium defines, as plain JSON; built once, on first use (graph-engine.mjs imports this file). */
+const graphDescriptions = () => {
+  described ??= Object.values(GRAPHS).map(describeGraph)
+  return described
 }
 
 /** @param {Deps} deps @param {Ctx} ctx @returns {HeartbeatState} */
@@ -730,5 +741,7 @@ export function heartbeatState(deps, ctx) {
     repos,
     workers,
     events: deps.events?.() ?? [],
+    engine: config.engine,
+    graphs: graphDescriptions(),
   }
 }

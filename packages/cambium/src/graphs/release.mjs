@@ -31,7 +31,7 @@ import { markerTrace, turnTracer } from '../tracing.mjs'
  *   One repo's turn; `pr` is the promotion PR a `release-promote` turn is about; `traceparent` the turn's trace
  *   while it is traced (tracing.mjs `turnTracer`), which markers written in the turn take when they have none.
  * @typedef {import('../tick.mjs').Deps & { tick: import('../tick.mjs').Ctx, subject: ReleaseSubject }} ReleaseCtx
- * @typedef {{ queue: string | null, enter?: (input: any, ctx: ReleaseCtx) => Promise<void> }} Declared
+ * @typedef {{ queue: string | null, about?: string, enter?: (input: any, ctx: ReleaseCtx) => Promise<void> }} Declared
  *   `queue`: the label a PR resting here carries. `enter`: the write that lands a PR on this wait.
  */
 
@@ -141,7 +141,7 @@ const cleanup = declare(
       return { closed }
     },
   }),
-  { queue: null },
+  { queue: null, about: 'Closes every open promotion PR older than 24 h, with a comment.' },
 )
 
 const prepare = declare(
@@ -215,12 +215,16 @@ const prepare = declare(
     },
   }),
   // The PR it opens waits in `q:promote`, release-promote's queue.
-  { queue: Q.promote },
+  {
+    queue: Q.promote,
+    about: 'When from is ahead of to, opens the promotion PR (or refreshes the open one) and labels it q:promote.',
+  },
 )
 
 /** Bump `version` when a node is removed or renamed. */
 export const releasePrepare = defineGraph({
   name: 'release-prepare',
+  about: 'Once a day, opens or refreshes the promotion PR from the integration branch to the release branch.',
   version: 1,
   entry: { node: 'cleanup', input: () => ({}) },
   nodes: [cleanup, prepare],
@@ -269,7 +273,10 @@ const merge = declare(
       return { to: 'armed', pr: input.pr }
     },
   }),
-  { queue: Q.promote },
+  {
+    queue: Q.promote,
+    about: 'The promotion PR is approved: merges it through graft pr merge --auto. A refused head is not retried.',
+  },
 )
 
 const merging = declare(
@@ -287,6 +294,7 @@ const merging = declare(
   }),
   {
     queue: Q.promote,
+    about: 'Holds while the promotion PR is open; moves on once it merges or closes unmerged.',
     /** @param {{ pr: number }} input @param {ReleaseCtx} ctx */
     enter: async (input, ctx) => {
       const pr = prOf(ctx)
@@ -324,12 +332,13 @@ const exit = (name, outcome, said) =>
         return {}
       },
     }),
-    { queue: null },
+    { queue: null, about: `The promotion PR ${said}.` },
   )
 
 /** Bump `version` when a node is removed or renamed. */
 export const releasePromote = defineGraph({
   name: 'release-promote',
+  about: 'Merges an approved q:promote promotion PR and closes it out.',
   version: 1,
   entry: { queue: Q.promote, node: 'merge' },
   nodes: [

@@ -392,7 +392,7 @@ export function semanticMarker(body) {
 /**
  * What a harness saw, for the differential test: every GitHub call in order (label moves, markers compared
  * semantically, closes, branch deletions), worker starts with their prompts, kills, worktree teardowns, the
- * worker rows left, the log, and the heartbeats (without step timings).
+ * worker rows left, the log, and the heartbeats (without step timings or `engine`).
  * @param {ReturnType<typeof harness>} h
  */
 export function trace(h) {
@@ -422,6 +422,7 @@ export function trace(h) {
     cleaned: [...h.spawner.cleaned],
     workers,
     events: h.events.map((e) => ({ ...e })),
-    beats: h.beats.map((b) => ({ ...b, steps: b.steps.map(({ ms: _ms, ...s }) => s) })),
+    // `engine` names the engine that ran, which is the one thing the two engines must differ on.
+    beats: h.beats.map(({ engine: _engine, ...b }) => ({ ...b, steps: b.steps.map(({ ms: _ms, ...s }) => s) })),
   }
 }

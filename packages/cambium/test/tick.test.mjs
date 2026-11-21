@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openStore } from '../src/store.mjs'
 import { tick } from '../src/tick.mjs'
+import { GRAPHS } from '../src/graph-engine.mjs'
 import { KILL_GRACE_MS } from '../src/workers.mjs'
 import { harness as baseHarness, SLUG, stageOf, trace } from './fakes.mjs'
 
@@ -572,7 +573,9 @@ scenario('heartbeat: the documented shape', async () => {
     'caps',
     'counts',
     'daemon',
+    'engine',
     'events',
+    'graphs',
     'host',
     'mode',
     'pid',
@@ -583,6 +586,15 @@ scenario('heartbeat: the documented shape', async () => {
     'workers',
   ])
   assert.equal(s.version, 1)
+  assert.equal(s.engine, h.config.engine)
+  assert.deepEqual(
+    s.graphs.map((g) => g.name),
+    Object.keys(GRAPHS),
+  )
+  for (const g of s.graphs) {
+    assert.ok(g.about, `${g.name} has an about`)
+    for (const n of g.nodes) assert.ok(n.about, `${g.name}/${n.name} has an about`)
+  }
   assert.equal(s.pid, 42)
   assert.equal(s.tick.n, 4)
   assert.equal(s.daemon.tickSeconds, 30)

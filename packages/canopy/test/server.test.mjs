@@ -77,6 +77,8 @@ test('GET / serves one self-contained page', async () => {
     assert.doesNotMatch(res.body, /https?:\/\/(?!github\.com)[a-z]/i)
     const script = res.body.split('<script>')[1].split('</script>')[0]
     assert.doesNotThrow(() => new Function(script))
+    assert.match(res.body, /id="tab-graphs" data-tab="graphs"/)
+    assert.match(res.body, /function layoutGraph/)
   })
 })
 

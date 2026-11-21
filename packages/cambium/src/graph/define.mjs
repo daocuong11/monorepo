@@ -20,7 +20,8 @@ export { END }
  * @typedef {(out: any, subject: unknown) => unknown} EdgeFn
  * @typedef {[from: string, to: string, when?: EdgeFn | null, map?: EdgeFn]} Edge
  * @typedef {{ queue?: string, node: string, input?: (...args: any[]) => unknown }} Entry
- * @typedef {{ name: string, version: number, entry: Entry, nodes: GraphNode[], edges: Edge[] }} Graph
+ * @typedef {{ name: string, version: number, about?: string, entry: Entry, nodes: GraphNode[], edges: Edge[] }} Graph
+ *   `about`: one line on what the graph is for, carried into the heartbeat (graph/describe.mjs).
  */
 
 /** A failure inside a node: bad input or output, or a throw from run, poll, when or map. */
@@ -98,6 +99,13 @@ export function defineWait(def) {
 export function defineGraph(def) {
   const problems = validateGraph(def)
   if (problems.length) throw new Error(`graph "${def?.name}" is invalid:\n- ${problems.join('\n- ')}`)
-  const { name, version, entry, nodes, edges } = def
-  return Object.freeze({ name, version, entry: { ...entry }, nodes: [...nodes], edges: edges.map((e) => e) })
+  const { name, version, about, entry, nodes, edges } = def
+  return Object.freeze({
+    name,
+    version,
+    ...(typeof about === 'string' ? { about } : {}),
+    entry: { ...entry },
+    nodes: [...nodes],
+    edges: edges.map((e) => e),
+  })
 }

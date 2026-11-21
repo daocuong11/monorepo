@@ -8,6 +8,7 @@ import {
   defineGraph,
   defineNode,
   defineWait,
+  describeGraph,
   END,
   GraphNodeError,
   toMermaid,
@@ -44,7 +45,7 @@ const sample = () =>
 
 test('graph: exported as @oakgreencc/cambium/graph with the documented API', () => {
   assert.equal(typeof END, 'string')
-  for (const f of [advance, defineGraph, defineNode, defineWait, toMermaid, validateGraph])
+  for (const f of [advance, defineGraph, defineNode, defineWait, describeGraph, toMermaid, validateGraph])
     assert.equal(typeof f, 'function')
 })
 
@@ -324,4 +325,40 @@ test('graph: toMermaid snapshot', () => {
   n2 --> end_
 `,
   )
+})
+
+test('graph: describeGraph is plain JSON with kinds, declared labels, abouts and condition names', () => {
+  const g = defineGraph({
+    name: 'sample',
+    version: 3,
+    about: 'counts up',
+    entry: { queue: 'q:task', node: 'inc' },
+    nodes: [{ ...inc, queue: 'q:task', running: true, about: 'adds one' }, gate, dbl],
+    edges: [
+      ['inc', 'gate'],
+      ['gate', 'dbl', even],
+      ['gate', 'inc'],
+      ['dbl', END],
+    ],
+  })
+  const d = describeGraph(g)
+  assert.deepEqual(JSON.parse(JSON.stringify(d)), d, 'survives JSON')
+  assert.deepEqual(d, {
+    name: 'sample',
+    version: 3,
+    about: 'counts up',
+    entry: { queue: 'q:task', node: 'inc' },
+    nodes: [
+      { name: 'inc', kind: 'step', queue: 'q:task', running: true, about: 'adds one' },
+      { name: 'gate', kind: 'wait', queue: null, running: false, about: null },
+      { name: 'dbl', kind: 'step', queue: null, running: false, about: null },
+    ],
+    edges: [
+      { from: 'inc', to: 'gate', when: null },
+      { from: 'gate', to: 'dbl', when: 'even' },
+      { from: 'gate', to: 'inc', when: null },
+      { from: 'dbl', to: null, when: null },
+    ],
+  })
+  assert.equal(describeGraph(sample()).about, null)
 })
