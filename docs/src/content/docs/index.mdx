@@ -1,0 +1,48 @@
+---
+title: oakgreen
+description: Run coding agents against a GitHub repository, with GitHub as the source of truth.
+template: splash
+hero:
+  tagline: Coding agents that work a GitHub repository the way a careful team member would. Every write is a Verified commit, every queue is a label, and a human approves what matters.
+  actions:
+    - text: Make your first Verified commit
+      link: /tutorials/first-verified-commit/
+      icon: right-arrow
+    - text: How it fits together
+      link: /explanation/architecture/
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components'
+
+## The tools
+
+<CardGrid>
+  <Card title="graft" icon="seti:git">
+    Lets an agent write to GitHub as a GitHub App. Commits land Verified, your git hooks still run, and CODEOWNERS decides what needs a human.
+  </Card>
+  <Card title="cambium" icon="random">
+    The scheduler. Reads the `q:*` labels every tick, runs headless Claude Code workers in their own worktrees, and moves each issue through triage, work, review and release.
+  </Card>
+  <Card title="mycelium" icon="comment-alt">
+    Intake. Turns Discord posts, App Store and Google Play reviews, TestFlight feedback and crash reports into deduplicated `q:intake` issues.
+  </Card>
+  <Card title="canopy" icon="laptop">
+    A local, read-only page over the queues: what needs you, what is running, and how each issue moved.
+  </Card>
+  <Card title="canker and deadwood" icon="approve-check">
+    Quality gates for agent-written code: complex untested functions, stray markdown and comment bloat.
+  </Card>
+  <Card title="oakgreen" icon="setting">
+    One CLI to check a machine, set up what is missing and run the services.
+  </Card>
+</CardGrid>
+
+## Find your way
+
+<CardGrid>
+  <LinkCard title="Tutorials" description="Learn by doing: a first Verified commit, then a first task run by an agent." href="/tutorials/first-verified-commit/" />
+  <LinkCard title="How-to guides" description="Install the stack, approve protected changes, turn on triage, releases and tracing." href="/how-to/install-the-stack/" />
+  <LinkCard title="Reference" description="Every command, config key, label and refusal." href="/reference/oakgreen-cli/" />
+  <LinkCard title="Explanation" description="Why GitHub is the boundary, why labels are the queue, and how the pieces fit." href="/explanation/architecture/" />
+</CardGrid>

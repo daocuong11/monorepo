@@ -1,0 +1,74 @@
+---
+title: graft configuration
+description: The .graft.json project policy, its defaults, and where graft keeps machine state.
+sidebar:
+  order: 2
+---
+
+## Location
+
+The project policy is `.graft.json` at the repository root, or the same object under a `"graft"` key in the root `package.json`. Only one may exist; both present is refused. Either is a [protected path](/reference/glossary/#protected-path).
+
+With the `package.json` form, graft protects the `"graft"` key, not the whole file. GitHub cannot enforce a key, so `graft doctor` warns unless CODEOWNERS also owns `/package.json`.
+
+Legacy names are still read: `.agit.json`, the `"agit"` key, `AGIT_*` variables, `~/.config/agit`.
+
+## Fields
+
+Every field is optional.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `repo` | `null` | `owner/name`. `null`: from the `origin` remote. |
+| `baseBranch` | `null` | Where agent PRs land without `--base`. `null`: the repository's default branch. |
+| `mergeableBases` | `null` | Bases `graft pr merge` may merge into. `null`: `[baseBranch]`. `[]`: none. |
+| `requiredCheck` | `null` | Check that defines a green base, for `graft pr merge` and `graft ci wait`. `null` turns the red-base rule off. |
+| `validate.command` | `null` | Command `graft validate` runs. |
+| `hooks.path` | `null` | Repo-relative hooks directory. `null`: git's `core.hooksPath`, else `.git/hooks`. |
+| `hooks.run` | `["pre-commit", "prepare-commit-msg", "commit-msg", "pre-push"]` | Hooks graft runs during a publish. Absent ones are skipped. |
+| `hooks.required` | `[]` | Hooks whose absence refuses a publish. |
+| `protected.codeowners` | `true` | Use CODEOWNERS as the list of protected paths. |
+| `protected.owners` | `[]` | Only CODEOWNERS lines naming one of these owners count. Empty: any owner. |
+| `protected.extra` | `[]` | More protected patterns, CODEOWNERS syntax, enforced locally only. |
+| `protected.impossible` | `[".github/workflows/**"]` | Paths the App cannot write; no grant unlocks them. |
+| `payload.ceilingBytes` | `524288` | Most one publish may add to a single path. |
+| `payload.neverPublish` | `["*.log"]` | Patterns never published, at any size. |
+| `minVersion` | `null` | Oldest graft allowed to act on this repository. |
+| `app` | `null` | App slug that acts for this repository. `null`: by owner, then default. |
+
+## Example
+
+```json
+{
+  "baseBranch": "develop",
+  "mergeableBases": ["develop"],
+  "requiredCheck": "ci",
+  "validate": { "command": "npm run ci" },
+  "hooks": { "path": ".githooks", "required": ["pre-push"] },
+  "protected": { "owners": ["@you"], "extra": [], "impossible": [".github/workflows/**"] },
+  "payload": { "ceilingBytes": 524288, "neverPublish": ["*.log"] },
+  "minVersion": "0.1.0"
+}
+```
+
+## Always-protected paths
+
+Whatever CODEOWNERS says, these are protected: `.graft.json` (or the `"graft"` key), CODEOWNERS, `.claude/settings.json`.
+
+## State locations
+
+| State | Location | Tracked |
+| --- | --- | --- |
+| Project policy | `.graft.json` | yes |
+| Protected paths | CODEOWNERS | yes |
+| App identity and private key | `~/.config/graft/apps/<slug>/` (mode 0600) | no |
+| Token cache | `~/.config/graft/cache/` (mode 0600) | no |
+| Rulesets written for manual import | `~/.config/graft/rulesets/<owner>-<repo>-<base>.json` | no |
+| Maintainer grants (`maintainer/<session>.json`) and log (`maintainer.log`) | `<git-common-dir>/graft/` | no, shared by a clone's worktrees |
+| Validation receipt | `<git-dir>/graft/validated-base.json` | no, per worktree |
+
+## Environment
+
+| Variable | Meaning |
+| --- | --- |
+| `GRAFT_APP` | App slug to act as, overriding the owner mapping. |

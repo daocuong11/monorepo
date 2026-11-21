@@ -13,4 +13,6 @@ pnpm start           # the stack from source: canopy (restarts on edits), cambiu
 pnpm verify          # lint + test, every project, from the Nx cache when unchanged
 ```
 
+User documentation (tutorials, how-to guides, reference, explanation) lives in [`docs/`](docs), a Starlight site.
+
 AGPL-3.0-only.
