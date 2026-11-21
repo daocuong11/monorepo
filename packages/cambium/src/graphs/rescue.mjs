@@ -466,12 +466,29 @@ const toHuman = defineNode({
   },
 })
 
+/** A node with its one-line description, which the heartbeat carries (graph/describe.mjs). @template N @param {N} node @param {string} text */
+const about = (node, text) => Object.freeze({ ...node, about: text })
+
 /** The rescue graph. Bump `version` when a node is removed or renamed. */
 export const rescue = defineGraph({
   name: 'rescue',
   version: 1,
+  about: 'Diagnoses a stuck item with a one-shot read-only worker, unsticks it and files its root causes in q:intake.',
   entry: { node: 'start-rescue', input: () => ({}) },
-  nodes: [startRescue, diagnosing, unstick, fileCauses, report, toHuman],
+  nodes: [
+    about(
+      startRescue,
+      'Starts the rescue worker in a read-only checkout; over the weekly budget, the item goes to a human.',
+    ),
+    about(diagnosing, 'Holds while the worker diagnoses the item; on exit, checks its verdict against the item.'),
+    about(unstick, "Carries out the verdict's actions, in order."),
+    about(
+      fileCauses,
+      'Files each root cause as a q:intake ticket labelled rescue, or notes a recurrence on the open one.',
+    ),
+    about(report, 'Comments on the item: what was seen, how it got stuck, what was done, the root causes.'),
+    about(toHuman, 'Into q:human with why:rescue and what cambium saw.'),
+  ],
   edges: [
     ['start-rescue', 'diagnosing', started, (o) => ({ attempt: o.attempt })],
     ['start-rescue', 'to-human', budgetSpent],

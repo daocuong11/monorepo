@@ -1,6 +1,7 @@
 // @ts-check
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
+import { graphFlow } from './flow.mjs'
 
 /** Older rotated files are read, newest first, until this many bytes in all. */
 export const DEFAULT_BUDGET = 64 * 1024 * 1024
@@ -307,8 +308,21 @@ export function traceList(f, { limit = 200 } = {}) {
   return { ...describe(f), total: all.length, traces: all.slice(0, limit) }
 }
 
-/** The window the Queue tab's throughput figures cover. */
+/** The window the Queue tab's throughput figures and the Graphs tab's replay cover. */
 export const RECENT_MS = 24 * 3_600_000
+
+/** A read's graph flow is worked out again once it is this old, so the window keeps sliding while the file rests. */
+const FLOW_FRESH_MS = 15_000
+/** @type {WeakMap<TraceFile, { at: number, flow: import('./flow.mjs').Flow }>} */
+const flowed = new WeakMap()
+/** @param {TraceFile} f @param {number} now */
+function flowOf(f, now) {
+  const hit = flowed.get(f)
+  if (hit && now >= hit.at && now - hit.at < FLOW_FRESH_MS) return hit.flow
+  const flow = graphFlow(f.traces, now, RECENT_MS)
+  flowed.set(f, { at: now, flow })
+  return flow
+}
 
 /**
  * What `/api/state` carries: counts and, per `owner/name#n`, that issue's
@@ -316,7 +330,8 @@ export const RECENT_MS = 24 * 3_600_000
  * (`progress`), so the Queue tab can show how far live work has come. `recent`
  * is the last `RECENT_MS`: traces with a span ending in it, which cambium node
  * each last reached (most common first; `null` when it reached none), failures
- * and spend.
+ * and spend. `flow` is how work moved through each graph in that window
+ * (flow.mjs), for the Graphs tab.
  *
  * @param {TraceFile} f
  * @param {number} [now]
@@ -355,6 +370,7 @@ export function traceIndex(f, now = Date.now()) {
         .map(([node, n]) => ({ node, n }))
         .sort((a, b) => b.n - a.n || String(a.node).localeCompare(String(b.node))),
     },
+    flow: flowOf(f, now),
   }
 }
 

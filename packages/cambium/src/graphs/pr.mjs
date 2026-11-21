@@ -155,7 +155,11 @@ const assess = declare(
       return hold
     },
   }),
-  { queue: null, running: false },
+  {
+    queue: null,
+    running: false,
+    about: 'Reads the PR and decides, in order: merged, close, rework, merge, stall or hold. Writes nothing.',
+  },
 )
 
 const merge = declare(
@@ -219,7 +223,11 @@ const merge = declare(
       return { to: 'done' }
     },
   }),
-  { queue: null, running: false },
+  {
+    queue: null,
+    running: false,
+    about: 'Updates a branch that is behind its base; otherwise merges through graft pr merge --auto.',
+  },
 )
 
 const ReworkIn = z.object({ ...failure, pr: z.number().int(), failedSha: z.string().nullable() })
@@ -281,7 +289,11 @@ const rework = declare(
       return { to: 'task' }
     },
   }),
-  { queue: Q.task, running: false },
+  {
+    queue: Q.task,
+    running: false,
+    about: 'Back to the task graph in q:task with the PR kept and the reason as lastFailure. Reworks spent: q:human.',
+  },
 )
 
 const CloseIn = z.object({ pr: z.number().int(), reason: z.string() })
@@ -317,7 +329,7 @@ const closePr = declare(
       return {}
     },
   }),
-  { queue: null, running: false },
+  { queue: null, running: false, about: 'Closes the PR with the reason. The issue stays where it is.' },
 )
 
 /** Delete a merged PR's branch once per tick. @param {TaskCtx} ctx @param {PullRequest} pr */
@@ -362,7 +374,11 @@ const closeOut = declare(
       return {}
     },
   }),
-  { queue: null, running: false },
+  {
+    queue: null,
+    running: false,
+    about: 'Merged: the issue is closed and leaves every queue, and the branch is deleted.',
+  },
 )
 
 const toHuman = declare(
@@ -393,12 +409,13 @@ const toHuman = declare(
       return {}
     },
   }),
-  { queue: Q.human, running: false },
+  { queue: Q.human, running: false, about: 'Into q:human with a why:* reason label.' },
 )
 
 /** The PR graph. Bump `version` when a node is removed or renamed. */
 export const prGraph = defineGraph({
   name: 'pr',
+  about: 'Takes an agent PR whose CI has settled to merged, reworked, closed or a human.',
   version: 1,
   entry: { node: 'assess', input: () => ({}) },
   nodes: [assess, merge, rework, closePr, closeOut, toHuman],

@@ -39,7 +39,7 @@ import { stopOverdue } from '../workers.mjs'
  *   `traceparent`: the running step node's span, when advance is instrumented (tracing.mjs).
  * @typedef {{ node: string, input: unknown }} Position
  * @typedef {{
- *   queue: string | null, running: boolean, pollOnEntry?: boolean,
+ *   queue: string | null, running: boolean, about?: string, pollOnEntry?: boolean,
  *   enter?: (input: any, ctx: TaskCtx) => Promise<void>,
  *   recover?: (ctx: TaskCtx) => Position,
  * }} Declared
@@ -240,7 +240,11 @@ const startWorker = declare(
       return { to: 'running', pid: s.pid, branch, worktree: s.worktree, attempt: marker.attempt }
     },
   }),
-  { queue: Q.task, running: false },
+  {
+    queue: Q.task,
+    running: false,
+    about: 'Claims the issue and starts a Claude worker on its branch; out of attempts, it goes to a human.',
+  },
 )
 
 const workerRunning = declare(
@@ -303,6 +307,7 @@ const workerRunning = declare(
   }),
   {
     queue: Q.task,
+    about: 'Holds while the worker runs under its wall-clock cap; on exit, looks for the PR it published.',
     running: true,
     recover: (ctx) => ({ node: 'requeue', input: lostLeaseOf(ctx) }),
   },
@@ -350,7 +355,11 @@ const submit = declare(
       return {}
     },
   }),
-  { queue: null, running: false },
+  {
+    queue: null,
+    running: false,
+    about: 'The worker published its PR: the issue leaves every queue and the PR graph takes over.',
+  },
 )
 
 const requeue = declare(
@@ -397,7 +406,12 @@ const requeue = declare(
       return { to: 'start', attempt: next }
     },
   }),
-  { queue: Q.task, running: false },
+  {
+    queue: Q.task,
+    running: false,
+    about:
+      'Back to q:task with attempt + 1, or to a human once the attempts are spent. Not charged while the base is red.',
+  },
 )
 
 const HumanIn = z.object({ ...failure, why: z.string().optional() })
@@ -428,7 +442,7 @@ const toHuman = declare(
       return {}
     },
   }),
-  { queue: Q.human, running: false },
+  { queue: Q.human, running: false, about: 'Into q:human with a why:* reason label.' },
 )
 
 /**
@@ -438,6 +452,7 @@ const toHuman = declare(
  */
 export const task = defineGraph({
   name: 'task',
+  about: 'Turns a q:task issue into a published PR; a failed attempt is retried until the budget is spent.',
   version: 2,
   entry: { queue: Q.task, node: 'start-worker', input: () => ({}) },
   nodes: [startWorker, workerRunning, submit, requeue, toHuman],

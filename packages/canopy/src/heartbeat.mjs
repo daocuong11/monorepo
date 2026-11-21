@@ -86,6 +86,42 @@ function normalize(/** @type {any} */ hb) {
     })),
     workers: arr(hb.workers).map((w) => ({ ...obj(w), logs: obj(w?.logs) })),
     events: arr(hb.events),
+    engine: typeof hb.engine === 'string' ? hb.engine : null,
+    // null: this cambium predates `graphs` (an older heartbeat), which the page says rather than showing none.
+    graphs: Array.isArray(hb.graphs) ? hb.graphs.map(graphOf).filter((g) => g !== null) : null,
+  }
+}
+
+const str = (/** @type {unknown} */ v) => (typeof v === 'string' && v ? v : null)
+
+/**
+ * One graph as cambium's `describeGraph` writes it, or null when it has no name or nodes. Edges to a node the
+ * graph does not list are dropped, so the page never draws a dangling arrow.
+ * @param {any} g
+ */
+function graphOf(g) {
+  const name = str(g?.name)
+  const nodes = arr(g?.nodes)
+    .filter((n) => str(n?.name))
+    .map((n) => ({
+      name: String(n.name),
+      kind: n.kind === 'wait' ? 'wait' : 'step',
+      queue: str(n.queue),
+      running: n.running === true,
+      about: str(n.about),
+    }))
+  if (!name || !nodes.length) return null
+  const names = new Set(nodes.map((n) => n.name))
+  const entry = str(g?.entry?.node)
+  return {
+    name,
+    version: Number.isInteger(g.version) ? g.version : null,
+    about: str(g.about),
+    entry: { queue: str(g?.entry?.queue), node: entry && names.has(entry) ? entry : nodes[0].name },
+    nodes,
+    edges: arr(g.edges)
+      .filter((e) => names.has(e?.from) && (e.to === null || names.has(e.to)))
+      .map((e) => ({ from: String(e.from), to: e.to === null ? null : String(e.to), when: str(e.when) })),
   }
 }
 

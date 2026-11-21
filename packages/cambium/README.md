@@ -286,9 +286,25 @@ Written at the end of every tick to `paths.heartbeat` (default `~/.cambium/state
       "repo": "oakgreencc/monorepo",
       "issue": 12
     } // level: "info" | "warn" | "error"; repo/issue optional
+  ],
+  "engine": "graph", // config.engine: "legacy" | "graph"
+  "graphs": [
+    // every graph this cambium defines, as describeGraph() writes it (see The graph module); the same every tick
+    {
+      "name": "task",
+      "version": 2,
+      "about": "Turns a q:task issue into a published PR; …",
+      "entry": { "queue": "q:task", "node": "start-worker" },
+      "nodes": [
+        { "name": "worker-running", "kind": "wait", "queue": "q:task", "running": true, "about": "Holds while …" }
+      ],
+      "edges": [{ "from": "start-worker", "to": "worker-running", "when": "started" }] // to: null ends the graph
+    }
   ]
 }
 ```
+
+`engine` and `graphs` were added within `version: 1`; a reader of an older heartbeat finds neither.
 
 The mode lives in the SQLite file (`paths.db`, table `control`), so `cambium status --json` returns `{ "mode", "heartbeat" }` even when the daemon is down. The daemon's own log is `<paths.logs>/cambium.log` (one `.1` kept); launchd's stderr goes to `<paths.logs>/cambium.launchd.err.log`.
 
@@ -623,6 +639,7 @@ const { transitions, reason, node, input } = await advance(g, { node: 'open-pr',
 - **`validateGraph(graph)`** returns every problem as a string (`defineGraph` throws on any): unknown edge endpoints, nodes unreachable from `entry.node`, a node with outgoing edges whose last edge is conditional (no fallback), duplicate names, a non-integer `version`.
 - **`advance(graph, { node, input }, ctx, { maxTransitions = 8, signal })`** runs step nodes and ready waits and returns `{ transitions, reason, node, input, error? }`: `reason` is `waiting` (a wait that is not ready), `end`, `limit`, `aborted` (`signal`, or `ctx.signal`, checked before each node) or `error`; `node`/`input` is where it stopped. Each transition is `{ from, to, edge, input, output, next }`. `ctx` is passed to `run`/`poll` untouched apart from `ctx.signal`; edges see `ctx.subject`.
 - **`toMermaid(graph)`** renders a flowchart: boxes for steps, hexagons for waits, conditional edges labelled with `when`'s function name.
+- **`describeGraph(graph)`** returns the graph as plain JSON: `{ name, version, about, entry: { queue, node }, nodes: [{ name, kind: 'step' | 'wait', queue, running, about }], edges: [{ from, to, when }] }`. `to: null` ends the graph; `when` is the condition's function name, `null` for the fallback. `about` is the optional one-line description given to `defineGraph` (and, in cambium's graphs, to each node's declaration); `queue`/`running` are the labels a node declares, else `null`/`false`. The heartbeat carries every cambium graph this way.
 - **`opts.instrument(visit, step)`** (optional) wraps each node visit: `visit` is `{ node, kind: 'node' | 'wait', input }`; `step(extraCtx?)` runs the node (or poll) and picks the edge, returning the transition, or `null` for a wait that is not ready, and throws on a node error. `extraCtx` is merged into that node's `ctx`. Return what `step` returned. Without it, `advance` behaves exactly as before. [`advanceHooks`](#tracing) is the tracing implementation.
 
 ### LangGraph interop

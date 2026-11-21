@@ -2,6 +2,7 @@
 import { facetsOf, inboxItems, inboxStats, priorityRank, viewOf } from './inbox.mjs'
 import { autoApproved, flameFrames, flameTree } from './flame.mjs'
 import { markdown } from './markdown.mjs'
+import { layoutGraph } from './graph-layout.mjs'
 
 const CSS = `
 /* Neutrals carry a trace of canopy green (hue 150); blue is kept for action and selection so green can mean healthy.
@@ -252,10 +253,103 @@ td.br{white-space:nowrap}.grid,.active{grid-template-columns:minmax(0,1fr)}.acti
 .sp,.wf-axis{grid-template-columns:minmax(0,1fr) 56px}.sp .track,.wf-axis .ticks{grid-column:1/-1;order:3}.wf-axis>span:not(.ticks){display:none}}
 @media (max-width:480px){main{padding:var(--s3) var(--s3) var(--s5);gap:var(--s3)}section{padding:var(--s3)}
 .tabs{padding:0 var(--s3);gap:var(--s4)}}
+/* Graphs tab: cambium's graphs in a drawer beside the drawing of the one chosen. The drawing persists across polls
+   (only its figures are patched), so the replay of the day's moves never restarts. Pulses wear the flow hue;
+   a node's queue label is a swatch in its meta line, colored like the Queue tab's lanes. */
+main:has(.gx){max-width:none}
+.gx{display:grid;grid-template-columns:264px minmax(0,1fr);gap:var(--s4);align-items:start}
+.gx.undocked{grid-template-columns:minmax(0,1fr)}.gx.undocked>.gx-drawer{display:none}
+.gx-drawer{background:var(--panel);border:1px solid var(--line);border-radius:6px;position:sticky;top:calc(var(--top-h,90px) + var(--s4));max-height:calc(100vh - var(--top-h,90px) - var(--s4) * 2);overflow:auto;padding:var(--s3) 0 var(--s3);scrollbar-width:thin;scrollbar-color:var(--bar) transparent}
+.gx-dh{display:flex;align-items:center;gap:var(--s2);padding:0 var(--s4) var(--s2)}.gx-dh h2{margin:0}.gx-dh .icon-btn{margin-left:auto;display:none}
+.gx-list{list-style:none;margin:0;padding:0}
+.gx-item{appearance:none;width:100%;display:grid;gap:3px;padding:10px var(--s4);border:0;border-top:1px solid var(--line);background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;transition:background-color .15s ease-out}
+.gx-item:hover{background:color-mix(in srgb,var(--chip) 70%,transparent)}
+.gx-item[aria-current=true]{background:color-mix(in srgb,var(--accent) 11%,var(--panel))}
+.gx-item:focus-visible{outline:none;box-shadow:inset 0 0 0 2px var(--accent)}
+.gx-nm{display:flex;align-items:baseline;gap:var(--s2)}.gx-nm b{font:600 13px ui-monospace,SFMono-Regular,Menlo,monospace}
+.gx-item[aria-current=true] .gx-nm b{color:var(--accent)}
+.gx-about{font-size:12px;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.gx-item .meta b{font-weight:600;color:var(--text)}
+.gx-src{margin:0;padding:var(--s3) var(--s4) 0;border-top:1px solid var(--line);font-size:12px;color:var(--faint)}
+.gx-stage{position:relative;padding:0}
+.gx-head{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s3);padding:var(--s3) var(--s4);border-bottom:1px solid var(--line)}
+.gx-title{margin:0;font:600 15px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text);text-transform:none;letter-spacing:0}
+.gx-head .gx-about{flex-basis:100%;margin:0;font-size:13px;-webkit-line-clamp:3;max-width:90ch}
+.gx-legend{margin-left:auto;display:flex;flex-wrap:wrap;gap:2px var(--s3);font-size:12px;color:var(--muted)}
+.gx-legend span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}.gx-legend svg{overflow:visible}
+.lg-step,.lg-wait{fill:var(--panel);stroke:color-mix(in oklch,var(--text) 30%,var(--line))}.lg-wait{fill:var(--chip)}
+.lg-end{fill:var(--panel);stroke:var(--muted)}.lg-end-dot{fill:var(--muted)}.lg-pulse{stroke:var(--flow-3);stroke-width:2.5;stroke-linecap:round}.lg-head{fill:var(--flow-3)}
+.gx-legend .sw{width:8px;height:8px;border-radius:50%;background:var(--c)}
+.icon-btn{appearance:none;display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--muted);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap;transition:color .15s ease-out,border-color .15s ease-out}
+.icon-btn:hover{color:var(--text);border-color:color-mix(in srgb,var(--text) 22%,var(--line))}
+.icon-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.icon-btn[aria-pressed=true]{color:var(--text);background:var(--chip)}
+.icon-btn svg{width:14px;height:14px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.gx-canvas{padding:var(--s4) var(--s4) var(--s3);overflow-x:auto;scrollbar-width:thin;scrollbar-color:var(--bar) transparent}
+.gx-svg{display:block;margin:0 auto;height:auto;overflow:visible;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.g-edge{fill:none;stroke:color-mix(in oklch,var(--muted) 62%,var(--panel));stroke-width:var(--sw,1.25);transition:opacity .15s ease-out,stroke .15s ease-out}
+.g-edge.idle{stroke:color-mix(in oklch,var(--muted) 34%,var(--panel))}
+.g-edge.flash{stroke:var(--flow-3);transition:none}
+.g-arrow{fill:color-mix(in oklch,var(--muted) 72%,var(--panel))}
+.g-lbl rect{fill:var(--panel)}.g-lbl text{font:11px ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--muted)}
+.g-end circle{fill:var(--panel);stroke:color-mix(in oklch,var(--muted) 62%,var(--panel));stroke-width:1.25}.g-end circle+circle{fill:color-mix(in oklch,var(--muted) 62%,var(--panel));stroke:none}
+.g-node{cursor:pointer;outline:none}
+.g-node .body{fill:var(--panel);stroke:color-mix(in oklch,var(--text) 24%,var(--line));stroke-width:1;transition:stroke .15s ease-out,fill .15s ease-out}
+.g-node.wait .body{fill:color-mix(in oklch,var(--chip) 75%,var(--panel))}
+.g-node.start .body{fill:var(--chip);stroke:none}
+.g-node .nm{font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--text)}
+.g-node.start .nm{font-weight:500;font-size:11px;fill:var(--muted)}
+.g-node .mt{font-size:11px;fill:var(--faint)}
+.g-node .sw{fill:var(--c)}
+.g-node:hover .body,.g-node.on .body{stroke:var(--accent);stroke-width:1.5}
+.g-node:focus-visible .body{stroke:var(--accent);stroke-width:2}
+.g-badge circle{fill:var(--flow-3)}.g-badge.human circle{fill:var(--warn)}
+.g-badge text{font:600 10.5px system-ui,-apple-system,sans-serif;fill:var(--panel)}
+.g-ring{fill:none;stroke:var(--flow-3);stroke-width:2;opacity:0;pointer-events:none;transform-box:fill-box;transform-origin:center}
+.g-ring.err{stroke:var(--err)}
+.g-pulse{fill:none;stroke:var(--flow-3);stroke-width:2.5;stroke-linecap:round;pointer-events:none}
+.g-pulse.live{stroke:var(--accent);stroke-width:3}.g-pulse.err{stroke:var(--err)}
+.g-head{fill:var(--flow-3);pointer-events:none}.g-head.live{fill:var(--accent)}.g-head.err{fill:var(--err)}
+.gx-svg .g-node,.gx-svg .g-edge,.gx-svg .g-lbl,.gx-svg .g-end{transition:opacity .15s ease-out}
+.gx-svg.focus .g-node:not(.hot),.gx-svg.focus .g-lbl:not(.hot),.gx-svg.focus .g-end:not(.hot){opacity:.3}
+.gx-svg.focus .g-edge:not(.hot){opacity:.18}.gx-svg.focus .g-edge.hot{stroke:var(--accent)}
+.gx-tip{position:absolute;z-index:2;width:min(340px,calc(100% - 24px));padding:var(--s3) var(--s4) var(--s4);background:var(--panel);border:1px solid var(--line);border-radius:7px;
+box-shadow:0 10px 28px -8px rgb(0 0 0 / .24),0 2px 6px -2px rgb(0 0 0 / .12);font-size:12.5px;pointer-events:none;opacity:0;transform:translateY(2px);transition:opacity .12s ease-out,transform .12s ease-out}
+.gx-tip.shown{opacity:1;transform:none}.gx-tip.pinned{pointer-events:auto}
+.gx-tip[hidden]{display:block;visibility:hidden}
+.tip-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px var(--s2)}.tip-h b{font:600 13px ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
+.tip-h .hint{margin-left:auto;font-size:11px;color:var(--faint)}
+.tip-about{margin:var(--s1) 0 0;color:var(--muted);line-height:1.45}
+.tip-sec{margin-top:var(--s3);padding-top:var(--s2);border-top:1px solid var(--line)}
+.tip-sec>h3{margin:0 0 var(--s1);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;display:flex;gap:var(--s2);align-items:baseline}
+.tip-sec>h3 span{text-transform:none;letter-spacing:0;font-weight:400;color:var(--faint)}
+.tip-figs{display:flex;flex-wrap:wrap;gap:2px var(--s4)}.tip-figs b{font-size:14px;font-weight:600;margin-right:3px}
+.tip-list{list-style:none;margin:0;padding:0;display:grid;gap:3px}
+.tip-list li{display:flex;align-items:baseline;gap:var(--s2);min-width:0}.tip-list .t{flex:1;min-width:0}.tip-list .n{margin-left:auto;color:var(--faint);flex:none}
+.tip-list code{font-size:12px}.tip-list i{color:var(--muted)}
+.gx-play{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s3);padding:var(--s2) var(--s4) var(--s3);border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+.gx-tl{position:relative;flex:1 1 200px;min-width:120px;height:22px;cursor:pointer;border-radius:3px}
+.gx-tl::before{content:"";position:absolute;left:0;right:0;top:50%;height:1px;background:var(--line)}
+.gx-tl i{position:absolute;top:6px;width:1.5px;height:10px;margin-left:-.75px;background:color-mix(in oklch,var(--flow-2) 70%,var(--panel));border-radius:1px}
+.gx-tl i.err{background:var(--err)}
+.gx-tl b{position:absolute;top:1px;bottom:1px;width:2px;margin-left:-1px;background:var(--accent);border-radius:1px}
+.gx-tl:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.gx-play .what{flex-basis:100%}
+.gx-scrim{display:none}
+@media (max-width:900px){.gx,.gx.undocked{grid-template-columns:minmax(0,1fr)}
+.gx-drawer,.gx.undocked>.gx-drawer{display:block;position:fixed;z-index:5;top:0;bottom:0;left:0;width:min(320px,86vw);max-height:none;border-radius:0 7px 7px 0;border-left:0;
+box-shadow:0 12px 40px -8px rgb(0 0 0 / .32);transform:translateX(-104%);visibility:hidden;transition:transform .28s cubic-bezier(.16,1,.3,1),visibility 0s linear .28s}
+.gx.drawer-open .gx-drawer{transform:none;visibility:visible;transition:transform .28s cubic-bezier(.16,1,.3,1)}
+.gx-dh .icon-btn{display:inline-flex}
+.gx-scrim{display:block;position:fixed;inset:0;z-index:4;background:rgb(0 0 0 / .3);opacity:0;pointer-events:none;transition:opacity .2s ease-out}
+.gx.drawer-open .gx-scrim{opacity:1;pointer-events:auto}
+.gx-legend{margin-left:0;flex-basis:100%}}
+@media (max-width:480px){.gx-head,.gx-play{padding-left:var(--s3);padding-right:var(--s3)}.gx-canvas{padding:var(--s3)}}
+@media (prefers-reduced-motion:reduce){.gx-drawer,.gx.drawer-open .gx-drawer,.gx-scrim,.gx-tip{transition:none}}
 `
 
 const JS = `
-${[inboxItems, priorityRank, facetsOf, viewOf, inboxStats, markdown, autoApproved, flameTree, flameFrames].map(String).join('\n')}
+${[inboxItems, priorityRank, facetsOf, viewOf, inboxStats, markdown, autoApproved, flameTree, flameFrames, layoutGraph].map(String).join('\n')}
 const $ = (id) => document.getElementById(id)
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag)
@@ -976,15 +1070,526 @@ function tracesTab(now) {
   return traceSel ? traceView(traceState.data) : runsView(traceState.data, now)
 }
 
-const TABS = ['inbox', 'queue', 'traces', 'health']
-// #inbox/<owner>/<name>/<n> selects an inbox item; #traces/<id> opens a trace.
+// Graphs tab. The drawing is built once per graph and direction and then kept: each poll patches its figures
+// (traffic, who is where) and feeds it new moves, so the replay runs on without a restart.
+// The SVG namespace is a name, not a request; spelled in parts so the page holds no outside URL.
+const SVGNS = ['http:', '', 'www.w3.org', '2000', 'svg'].join('/')
+function sv(tag, attrs, ...kids) {
+  const el = document.createElementNS(SVGNS, tag)
+  for (const [k, v] of Object.entries(attrs || {})) if (v != null && v !== false) el.setAttribute(k, v)
+  for (const k of kids.flat(Infinity)) if (k != null && k !== false) el.append(k instanceof Node ? k : String(k))
+  return el
+}
+const GX_LOOP_MS = 24000 // the replay plays the window (24 h) in 24 s: a second is an hour
+const GX_SPEED = 0.2 // px per ms a pulse travels
+const GX_TAIL = 30
+const GX_MAX_PULSES = 48
+const QUEUE_COLOR = { 'q:intake': 'var(--flow-1)', 'q:task': 'var(--flow-2)', 'q:promote': 'var(--flow-4)', 'q:human': 'var(--warn)' }
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)')
+let gxSel = store.get('graphs.sel', null), gxDock = store.get('graphs.dock', true) !== false, gxOpen = false
+let gxPaused = false, gxHover = null, gxPin = null, gxIssues = new Map(), gx = null
+const ICONS = {
+  drawer: 'M2.5 3.5h11v9h-11zM6 3.5v9',
+  close: 'M4 4l8 8M12 4l-8 8',
+  pause: 'M5.5 3.5v9M10.5 3.5v9',
+  play: 'M5 3.2v9.6l7.5-4.8z',
+}
+const icon = (k) => sv('svg', { viewBox: '0 0 16 16', 'aria-hidden': 'true' }, sv('path', { d: ICONS[k] }))
+const edgeId = (from, to) => (from || '') + '>' + (to || '')
+
+// Issue keys still in the loop: queued, running, waiting on a human, or closed by an open agent PR.
+function loopIssues(gh) {
+  const m = new Map()
+  for (const k of ['intake', 'waiting', 'task', 'running', 'human', 'promote']) for (const i of gh.columns[k] || []) m.set(issueKey(i.repo, i.number), i)
+  for (const i of strandedOf(gh)) m.set(issueKey(i.repo, i.number), i)
+  for (const p of gh.prs) for (const n of p.closes || []) if (!m.has(issueKey(p.repo, n))) m.set(issueKey(p.repo, n), { repo: p.repo, number: n, title: p.title, url: 'https://github.com/' + p.repo + '/issues/' + n })
+  return m
+}
+// Per node, the issues still in the loop whose newest traced step was there.
+function hereNow(flow, graph) {
+  const by = {}
+  if (!flow) return by
+  for (const [k, st] of Object.entries(flow.at || {})) {
+    if (st.graph !== graph || !gxIssues.has(k)) continue
+    ;(by[st.node] = by[st.node] || []).push({ key: k, at: st.at })
+  }
+  for (const xs of Object.values(by)) xs.sort((a, b) => b.at - a.at)
+  return by
+}
+const countHere = (by) => Object.values(by).reduce((n, xs) => n + xs.length, 0)
+
+// LR reads like the flow; it is kept while it draws at 90% scale or more, else whichever direction draws larger.
+// The drawing may grow to 1.3x where the stage has room, so a small graph still reads from across the desk.
+const GX_GROW = 1.3
+const GX_MIN = 0.72
+function gxAvail() {
+  const main = $('main'), wide = !matchMedia('(max-width:900px)').matches
+  const narrow = matchMedia('(max-width:480px)').matches
+  return Math.max(240, (main ? main.clientWidth : innerWidth) - (narrow ? 24 : 32) - (wide && gxDock ? 264 + 16 : 0) - (narrow ? 26 : 34))
+}
+function gxLayout(g) {
+  const avail = gxAvail()
+  const lr = layoutGraph(g, { dir: 'LR' })
+  const fit = (l) => Math.min(1, avail / l.width)
+  if (fit(lr) >= 0.9) return lr
+  const td = layoutGraph(g, { dir: 'TD' })
+  return fit(td) > fit(lr) ? td : lr
+}
+function gxSize(svg, layout) {
+  const tall = Math.max(260, innerHeight - 300)
+  // Never below GX_MIN: past that the names stop being readable, so a narrow screen pans the drawing instead.
+  const vb = layout.vb || { w: layout.width, h: layout.height }
+  const k = Math.max(GX_MIN, Math.min(GX_GROW, gxAvail() / vb.w, Math.max(1, tall / vb.h)))
+  svg.setAttribute('width', Math.round(vb.w * k))
+  svg.setAttribute('height', Math.round(vb.h * k))
+}
+
+function gxDrawer(graphs, flow, cur) {
+  const items = graphs.map((g) => {
+    const gf = flow && flow.graphs[g.name], here = countHere(hereNow(flow, g.name)), waits = g.nodes.filter((n) => n.kind === 'wait').length
+    return h('li', {}, h('button', { type: 'button', class: 'gx-item', 'data-graph': g.name, 'data-fk': 'graph:' + g.name, 'aria-current': String(g.name === cur) },
+      h('span', { class: 'gx-nm' }, h('b', {}, g.name), g.version != null ? h('span', { class: 'faint' }, 'v' + g.version) : null),
+      g.about ? h('span', { class: 'gx-about' }, g.about) : null,
+      h('span', { class: 'meta' }, h('span', {}, plural(g.nodes.length, 'node', 'nodes') + (waits ? ' · ' + plural(waits, 'wait', 'waits') : '')),
+        here ? h('span', {}, h('b', {}, here), ' in the loop') : null,
+        gf ? h('span', { class: 'faint' }, plural(gf.total, 'move', 'moves') + ' today') : null)))
+  })
+  return h('aside', { class: 'gx-drawer', id: 'gx-drawer', 'aria-label': 'Graphs' },
+    h('div', { class: 'gx-dh' }, h('h2', {}, 'Graphs', h('span', { class: 'n' }, graphs.length)),
+      h('button', { type: 'button', class: 'icon-btn', 'data-gx-close': '', 'data-fk': 'gx-close', 'aria-label': 'Close the list of graphs' }, icon('close'))),
+    h('ul', { class: 'gx-list' }, items),
+    h('p', { class: 'gx-src' }, "From cambium's heartbeat. Moves come from its traces."))
+}
+
+function gxHead(g) {
+  const wide = !matchMedia('(max-width:900px)').matches
+  const toggle = h('button', { type: 'button', class: 'icon-btn', 'data-gx-drawer': '', 'data-fk': 'gx-drawer',
+    'aria-expanded': String(wide ? gxDock : gxOpen), 'aria-controls': 'gx-drawer', title: wide ? (gxDock ? 'Hide the list of graphs' : 'Show the list of graphs') : 'Choose a graph' },
+    icon('drawer'), wide ? null : 'Graphs')
+  const queues = [...new Set(g.nodes.map((n) => n.queue).filter(Boolean))]
+  const shape = (d, cls) => sv('svg', { width: 16, height: 12, viewBox: '0 0 16 12', 'aria-hidden': 'true' }, sv('path', { d, class: cls }))
+  const legend = h('div', { class: 'gx-legend', 'aria-hidden': 'true' },
+    h('span', {}, shape('M2 1.5h12a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5H2A1.5 1.5 0 0 1 .5 9V3A1.5 1.5 0 0 1 2 1.5z', 'lg-step'), 'step'),
+    h('span', {}, shape('M3.5 1.5h9l3 4.5-3 4.5h-9l-3-4.5z', 'lg-wait'), 'wait'),
+    h('span', {}, sv('svg', { width: 12, height: 12, viewBox: '0 0 12 12', 'aria-hidden': 'true' }, sv('circle', { cx: 6, cy: 6, r: 5, class: 'lg-end' }), sv('circle', { cx: 6, cy: 6, r: 2.4, class: 'lg-end-dot' })), 'ends'),
+    h('span', {}, sv('svg', { width: 22, height: 12, viewBox: '0 0 22 12', 'aria-hidden': 'true' }, sv('path', { d: 'M1 6h14', class: 'lg-pulse' }), sv('circle', { cx: 17, cy: 6, r: 3, class: 'lg-head' })), 'a move'),
+    queues.map((q) => h('span', {}, h('i', { class: 'sw', style: '--c:' + (QUEUE_COLOR[q] || 'var(--faint)') }), h('span', { class: 'mono' }, q))))
+  return h('div', { class: 'gx-head' }, toggle, h('h2', { class: 'gx-title', id: 'gx-title' }, g.name),
+    g.version != null ? h('span', { class: 'pill' }, 'v' + g.version) : null, legend,
+    g.about ? h('p', { class: 'gx-about' }, g.about) : null)
+}
+
+function gxBar(gf, flow, g) {
+  const btn = h('button', { type: 'button', class: 'icon-btn', 'data-gx-play': '', 'data-fk': 'gx-play', 'aria-pressed': String(gxPaused) },
+    icon(gxPaused ? 'play' : 'pause'), gxPaused ? 'Play' : 'Pause')
+  if (gf && gf.moves.length) {
+    const span = flow.sinceMs, t0 = Date.now() - span
+    const ticks = gf.moves.map((m) => h('i', { class: m.error ? 'err' : null, style: 'left:' + Math.max(0, Math.min(100, ((m.at - t0) / span) * 100)).toFixed(2) + '%' }))
+    const shown = gf.total > gf.moves.length ? 'the newest ' + gf.moves.length + ' of ' + gf.total + ' moves' : plural(gf.total, 'move', 'moves')
+    return h('div', { class: 'gx-play' }, btn,
+      h('span', { class: 'faint' }, dur(span) + ' ago'),
+      h('div', { class: 'gx-tl', id: 'gx-tl', role: 'slider', tabindex: 0, 'data-fk': 'gx-tl', 'aria-label': 'Replay position', 'aria-valuemin': 0, 'aria-valuemax': 100,
+        'aria-valuenow': 0, title: 'Click to jump the replay to that time' }, ticks, h('b', { id: 'gx-head' })),
+      h('span', { class: 'faint' }, 'now'),
+      h('span', { class: 'what' }, 'Replaying the last ' + dur(span) + ' of the ', h('span', { class: 'mono' }, g.name), ' graph: ' + shown + ', a second for each hour. Moves that land while you watch run as they happen.'))
+  }
+  const why = !flow ? (last && last.traces ? last.traces.message || 'Tracing is off' : 'Tracing is off') + ', so there are no real moves to replay.'
+    : 'No moves through this graph were traced in the last ' + dur(flow.sinceMs) + '.'
+  return h('div', { class: 'gx-play' }, btn, h('span', {}, why + ' Showing every path an issue can take instead.'))
+}
+
+function gxBuild(g, layout) {
+  const defs = sv('defs', {}, sv('marker', { id: 'gx-arrow', viewBox: '0 0 10 10', refX: 8.5, refY: 5, markerWidth: 9, markerHeight: 9, orient: 'auto-start-reverse', markerUnits: 'userSpaceOnUse' },
+    sv('path', { d: 'M1 1.5L9 5L1 8.5z', class: 'g-arrow' })))
+  const edgesG = sv('g', {}), labelsG = sv('g', {}), nodesG = sv('g', {}), pulsesG = sv('g', {})
+  const paths = new Map(), nodes = new Map(), ends = new Map(), labels = new Map()
+  for (const e of layout.edges) {
+    const p = sv('path', { d: e.d, class: 'g-edge' + (e.back ? ' loop' : ''), 'marker-end': e.to !== null ? 'url(#gx-arrow)' : null, 'data-edge': e.id })
+    edgesG.append(p)
+    paths.set(e.id, p)
+    if (e.end) {
+      const m = sv('g', { class: 'g-end' }, sv('circle', { cx: e.end.x, cy: e.end.y, r: 5 }), sv('circle', { cx: e.end.x, cy: e.end.y, r: 2.4 }))
+      edgesG.append(m)
+      ends.set(e.id, m)
+    }
+    if (e.label) {
+      const w = Math.round(e.label.text.length * 6.6 + 8)
+      const lg = sv('g', { class: 'g-lbl' }, sv('rect', { x: e.label.x - w / 2, y: e.label.y - 8, width: w, height: 16, rx: 3 }),
+        sv('text', { x: e.label.x, y: e.label.y + 3.5, 'text-anchor': 'middle' }, e.label.text))
+      labelsG.append(lg)
+      labels.set(e.id, lg)
+    }
+  }
+  for (const n of layout.nodes) {
+    const isStart = n.kind === 'start', d = isStart ? null : g.nodes.find((x) => x.name === n.name)
+    const kids = [sv('path', { d: n.shape, class: 'body' }), sv('path', { d: n.shape, class: 'g-ring' })]
+    if (isStart) kids.push(sv('text', { x: n.cx, y: n.cy + 4, 'text-anchor': 'middle', class: 'nm' }, n.label))
+    else {
+      const sw = d.queue ? 9 : 0, mw = n.meta.length * 6.4
+      kids.push(sv('text', { x: n.cx, y: n.cy - 3, 'text-anchor': 'middle', class: 'nm' }, n.label))
+      if (sw) kids.push(sv('circle', { cx: n.cx - (mw + sw) / 2 + 3.5, cy: n.cy + 10.5, r: 3.5, class: 'sw', style: '--c:' + (QUEUE_COLOR[d.queue] || 'var(--faint)') }))
+      kids.push(sv('text', { x: n.cx + sw / 2, y: n.cy + 14, 'text-anchor': 'middle', class: 'mt' }, n.meta))
+    }
+    const label = isStart ? 'Entry: issues start here from ' + n.label : n.name + ', ' + (d.kind === 'wait' ? 'wait' : 'step') + (d.queue ? ', in ' + d.queue : '')
+    const el = sv('g', { class: 'g-node ' + n.kind, tabindex: 0, role: 'button', 'data-node': n.id, 'data-fk': 'gnode:' + n.id, 'aria-label': label + '. Show details', 'aria-expanded': 'false' }, kids)
+    nodesG.append(el)
+    nodes.set(n.id, { el, n, ring: kids[1] })
+  }
+  // Labels may reach past the layout's box (a wide one on an edge near the margin): the view takes them in.
+  let x0 = 0, y0 = 0, x1 = layout.width, y1 = layout.height
+  for (const e of layout.edges) if (e.label) {
+    const hw = (e.label.text.length * 6.6 + 8) / 2 + 4
+    x0 = Math.min(x0, e.label.x - hw); x1 = Math.max(x1, e.label.x + hw); y0 = Math.min(y0, e.label.y - 12); y1 = Math.max(y1, e.label.y + 12)
+  }
+  layout.vb = { x: Math.floor(x0), y: Math.floor(y0), w: Math.ceil(x1 - x0), h: Math.ceil(y1 - y0) }
+  const svg = sv('svg', { class: 'gx-svg', id: 'gx-svg', width: layout.vb.w, height: layout.vb.h, viewBox: [layout.vb.x, layout.vb.y, layout.vb.w, layout.vb.h].join(' '),
+    role: 'group', 'aria-label': g.name + ' graph: ' + plural(g.nodes.length, 'node', 'nodes') + '. Each node shows its details on focus.' },
+    defs, edgesG, labelsG, nodesG, pulsesG)
+  return { svg, paths, nodes, ends, labels, pulsesG }
+}
+
+// Traffic and who is where, patched into the kept drawing on every poll.
+function gxOverlay(gf, here) {
+  const traffic = new Map((gf ? gf.edges : []).map((e) => [edgeId(e.from, e.to), e.n]))
+  const max = Math.max(1, ...traffic.values())
+  for (const [id, p] of gx.paths) {
+    const n = traffic.get(id) || 0
+    p.style.setProperty('--sw', (1.25 + (n ? 2.25 * Math.sqrt(n / max) : 0)).toFixed(2))
+    p.classList.toggle('idle', gx.mode === 'replay' && !n && !id.endsWith('>'))
+  }
+  for (const [id, x] of gx.nodes) {
+    const xs = here[id] || [], old = x.el.querySelector('.g-badge')
+    if (!xs.length) { if (old) old.remove(); continue }
+    const r = 9, cx = x.n.x + x.n.w - 4, cy = x.n.y + 4, human = x.n.meta && x.n.meta.startsWith('q:human')
+    const badge = sv('g', { class: 'g-badge' + (human ? ' human' : ''), 'aria-hidden': 'true' }, sv('circle', { cx, cy, r: xs.length > 9 ? r + 2 : r }),
+      sv('text', { x: cx, y: cy + 3.6, 'text-anchor': 'middle' }, xs.length))
+    if (old) old.replaceWith(badge)
+    else x.el.append(badge)
+    x.el.setAttribute('aria-label', x.el.getAttribute('aria-label').replace(/ · \\d+ in the loop here/, '').replace('. Show details', ' · ' + xs.length + ' in the loop here. Show details'))
+  }
+}
+
+// What the replay plays: the real moves in the window, or, with none, a walk along every edge from the entry.
+function gxSchedule(gf, flow, g) {
+  if (gf && gf.moves.length) {
+    const t0 = Date.now() - flow.sinceMs
+    return { mode: 'replay', loop: GX_LOOP_MS, moves: gf.moves.map((m) => ({ ...m, phase: Math.max(0, Math.min(1, (m.at - t0) / flow.sinceMs)) * GX_LOOP_MS })) }
+  }
+  const order = [], seenNodes = new Set(), queue = [null]
+  seenNodes.add(null)
+  order.push({ from: null, to: g.entry.node })
+  queue.push(g.entry.node)
+  seenNodes.add(g.entry.node)
+  queue.shift()
+  while (queue.length) {
+    const v = queue.shift()
+    for (const e of g.edges.filter((x) => x.from === v)) {
+      if (order.some((o) => o.from === e.from && o.to === e.to)) continue
+      order.push({ from: e.from, to: e.to })
+      if (e.to !== null && !seenNodes.has(e.to)) { seenNodes.add(e.to); queue.push(e.to) }
+    }
+  }
+  const STEP = 650
+  return { mode: 'paths', loop: order.length * STEP + 1600, moves: order.map((m, i) => ({ ...m, phase: i * STEP, walk: true })) }
+}
+
+const easeInOut = (t) => 0.5 - Math.cos(Math.PI * t) / 2
+function gxBlip(id, err) {
+  const x = gx && gx.nodes.get(id)
+  if (!x || !x.ring.animate) return
+  x.ring.classList.toggle('err', !!err)
+  x.ring.animate(reducedMotion.matches ? [{ opacity: 0.9 }, { opacity: 0 }] : [{ opacity: 0.9, transform: 'scale(1)' }, { opacity: 0, transform: 'scale(1.18)' }],
+    { duration: 700, easing: 'cubic-bezier(.16,1,.3,1)' })
+}
+function gxFlash(p) {
+  p.classList.add('flash')
+  setTimeout(() => p.classList.remove('flash'), 600)
+}
+function gxPulse(id, opts) {
+  const p = gx.paths.get(id)
+  const to = id.slice(id.indexOf('>') + 1)
+  if (!p) { if (to) gxBlip(to, opts.error); return }
+  if (reducedMotion.matches) { gxFlash(p); if (to) gxBlip(to, opts.error); return }
+  if (gx.pulses.length >= GX_MAX_PULSES) { if (to) gxBlip(to, opts.error); return }
+  const len = p.getTotalLength()
+  const cls = opts.error ? ' err' : opts.live ? ' live' : ''
+  const tail = sv('path', { d: p.getAttribute('d'), class: 'g-pulse' + cls, 'stroke-dasharray': GX_TAIL + ' ' + (len + GX_TAIL * 2), 'stroke-dashoffset': GX_TAIL })
+  const p0 = p.getPointAtLength(0)
+  const head = sv('circle', { r: opts.live ? 4 : 3.2, class: 'g-head' + cls, cx: p0.x.toFixed(1), cy: p0.y.toFixed(1) })
+  gx.pulsesG.append(tail, head)
+  gx.pulses.push({ p, len, tail, head, to, start: performance.now(), dur: Math.max(420, Math.min(1800, len / GX_SPEED)), opts })
+}
+// A move into a node whose only way on is the end carries on through its stub.
+const onlyEnds = (g, node) => { const outs = g.edges.filter((e) => e.from === node); return outs.length > 0 && outs.every((e) => e.to === null) }
+
+function gxFrame(ts) {
+  if (!gx || !gx.svg.isConnected) { if (gx) gx.raf = 0; return }
+  gx.raf = requestAnimationFrame(gxFrame)
+  if (document.hidden) { gx.lastTs = ts; return }
+  const S = gx.sched
+  if (!gxPaused) {
+    if (gx.lastTs != null) gx.clock = (gx.clock + Math.min(250, ts - gx.lastTs)) % S.loop
+    const prev = gx.played, now = gx.clock
+    for (const m of S.moves) {
+      const hit = prev <= now ? m.phase > prev && m.phase <= now : m.phase > prev || m.phase <= now
+      if (hit) gxPulse(edgeId(m.from, m.to), { error: m.error, walk: m.walk })
+    }
+    gx.played = now
+  }
+  gx.lastTs = ts
+  const head = $('gx-head')
+  if (head && S.mode === 'replay') {
+    head.style.left = ((gx.clock / S.loop) * 100).toFixed(2) + '%'
+    const tl = $('gx-tl')
+    if (tl) tl.setAttribute('aria-valuenow', Math.round((gx.clock / S.loop) * 100))
+  }
+  gx.pulses = gx.pulses.filter((u) => {
+    const t = Math.min(1, (ts - u.start) / u.dur), at = easeInOut(t) * u.len
+    u.tail.setAttribute('stroke-dashoffset', (GX_TAIL - at).toFixed(1))
+    const pt = u.p.getPointAtLength(at)
+    u.head.setAttribute('cx', pt.x.toFixed(1))
+    u.head.setAttribute('cy', pt.y.toFixed(1))
+    if (t < 1) return true
+    u.tail.remove()
+    u.head.remove()
+    if (u.to) {
+      gxBlip(u.to, u.opts.error)
+      if (!u.opts.walk && onlyEnds(gx.g, u.to)) gxPulse(edgeId(u.to, null), u.opts)
+    }
+    return false
+  })
+}
+
+// Moves traced since the last poll run now, ahead of the replay, as they happen.
+function gxIngest(gf, first) {
+  const latest = gf && gf.moves.length ? gf.moves[gf.moves.length - 1].at : 0
+  if (first || gx.seen == null) { gx.seen = latest; return }
+  if (!gf) return
+  for (const m of gf.moves) if (m.at > gx.seen) gxPulse(edgeId(m.from, m.to), { error: m.error, live: true })
+  gx.seen = Math.max(gx.seen, latest)
+}
+
+function gxTipContent(id) {
+  const now = Date.now(), g = gx.g, gf = gx.gf, flow = gx.flow
+  const pinned = gxPin === id
+  const hint = h('span', { class: 'hint' }, pinned ? 'Esc to close' : 'click to pin')
+  if (id === '\\u0000start') {
+    const n = gf ? gf.edges.filter((e) => e.from === null).reduce((s, e) => s + e.n, 0) : null
+    return [h('div', { class: 'tip-h' }, h('b', {}, 'entry'), hint),
+      h('p', { class: 'tip-about' }, g.entry.queue ? ['Issues labelled ', h('code', {}, g.entry.queue), ' enter at ', h('code', {}, g.entry.node), '.'] : ['A run starts at ', h('code', {}, g.entry.node), '.']),
+      n != null ? h('div', { class: 'tip-sec' }, h('h3', {}, 'Last ' + dur(flow.sinceMs)), h('div', { class: 'tip-figs' }, h('span', {}, h('b', {}, n), plural(n, 'entry', 'entries').replace(/^\\d+ /, '')))) : null]
+  }
+  const d = g.nodes.find((x) => x.name === id)
+  const st = gf && gf.nodes[id], here = gx.here[id] || []
+  const traffic = new Map((gf ? gf.edges : []).map((e) => [edgeId(e.from, e.to), e.n]))
+  const cond = (e) => (e.when ? h('i', {}, e.when) : h('span', { class: 'faint' }, 'otherwise'))
+  const outs = g.edges.filter((e) => e.from === id).map((e) => h('li', {}, h('span', { class: 't' }, e.to === null ? h('span', { class: 'muted' }, 'the end') : h('code', {}, e.to), ' ', h('span', { class: 'faint' }, 'when'), ' ', cond(e)),
+    traffic.get(edgeId(id, e.to)) ? h('span', { class: 'n' }, traffic.get(edgeId(id, e.to))) : null))
+  const ins = [...(g.entry.node === id ? [h('li', {}, h('span', { class: 't' }, h('span', { class: 'muted' }, 'entry'), g.entry.queue ? [' ', h('span', { class: 'faint' }, 'from'), ' ', h('code', {}, g.entry.queue)] : null),
+      traffic.get(edgeId(null, id)) ? h('span', { class: 'n' }, traffic.get(edgeId(null, id))) : null)] : []),
+    ...g.edges.filter((e) => e.to === id).map((e) => h('li', {}, h('span', { class: 't' }, h('code', {}, e.from), ' ', h('span', { class: 'faint' }, 'when'), ' ', cond(e)),
+      traffic.get(edgeId(e.from, id)) ? h('span', { class: 'n' }, traffic.get(edgeId(e.from, id))) : null))]
+  const labels = d.queue ? [h('code', {}, d.queue), d.running ? [' and ', h('code', {}, 'running')] : null] : [h('span', { class: 'faint' }, 'none')]
+  let figs
+  if (!flow) figs = h('p', { class: 'faint', style: 'margin:0' }, 'Tracing is off, so there are no visits to count.')
+  else if (!st) figs = h('p', { class: 'faint', style: 'margin:0' }, 'No visits in the last ' + dur(flow.sinceMs) + '.')
+  else figs = h('div', { class: 'tip-figs' },
+    h('span', {}, h('b', {}, st.visits), st.visits === 1 ? 'visit' : 'visits'),
+    st.errors ? h('span', { class: 'err' }, h('b', {}, st.errors), 'failed') : null,
+    st.medianMs != null ? h('span', { title: d.kind === 'wait' ? 'Median time an issue waited here' : 'Median time this step took' }, h('b', {}, dur(st.medianMs)), d.kind === 'wait' ? 'median wait' : 'median run') : null,
+    st.lastAt ? h('span', { class: 'faint', title: new Date(st.lastAt).toISOString() }, 'last ' + ago(new Date(st.lastAt).toISOString(), now)) : null)
+  const SHOW = 6
+  return [
+    h('div', { class: 'tip-h' }, h('b', {}, d.name), h('span', { class: 'pill' }, d.kind), g.entry.node === id ? h('span', { class: 'pill' }, 'entry') : null, hint),
+    d.about ? h('p', { class: 'tip-about' }, d.about) : null,
+    h('div', { class: 'tip-sec' }, h('h3', {}, 'Labels', h('span', {}, 'an issue resting here carries')), h('div', {}, labels)),
+    h('div', { class: 'tip-sec' }, h('h3', {}, flow ? 'Last ' + dur(flow.sinceMs) : 'Traffic'), figs),
+    here.length ? h('div', { class: 'tip-sec' }, h('h3', {}, 'Last step here', h('span', {}, here.length + ' still in the loop')),
+      h('ul', { class: 'tip-list' }, here.slice(0, SHOW).map((x) => {
+        const i = gxIssues.get(x.key), [repo, n] = x.key.split('#')
+        return h('li', {}, link(i && i.url, h('span', { class: 't t1', title: i ? i.title : x.key }, h('span', { class: 'faint' }, '#' + n + ' '), i ? i.title : repo)),
+          h('span', { class: 'n', title: new Date(x.at).toISOString() }, ago(new Date(x.at).toISOString(), now)))
+      }), here.length > SHOW ? h('li', { class: 'faint' }, (here.length - SHOW) + ' more') : null)) : null,
+    outs.length ? h('div', { class: 'tip-sec' }, h('h3', {}, 'Leads to', h('span', {}, 'tried in order')), h('ul', { class: 'tip-list' }, outs)) : null,
+    ins.length ? h('div', { class: 'tip-sec' }, h('h3', {}, 'Comes from'), h('ul', { class: 'tip-list' }, ins)) : null]
+}
+
+function gxShowTip(id) {
+  const tip = $('gx-tip'), stage = tip && tip.parentElement
+  if (!gx || !tip || !stage) return
+  const shown = gxPin || id
+  for (const [k, x] of gx.nodes) { x.el.classList.toggle('on', k === shown); x.el.setAttribute('aria-expanded', String(k === gxPin)) }
+  // Focus: the node, its edges and their ends stay lit; the rest of the drawing steps back.
+  gx.svg.classList.toggle('focus', !!shown)
+  const hot = new Set(shown ? [shown] : [])
+  for (const [eid, p] of gx.paths) {
+    const [from, to] = eid.split('>'), f = from || '\\u0000start'
+    const on = !!shown && (f === shown || to === shown)
+    p.classList.toggle('hot', on)
+    gx.labels.get(eid)?.classList.toggle('hot', on)
+    gx.ends.get(eid)?.classList.toggle('hot', on)
+    if (on) { hot.add(f); if (to) hot.add(to) }
+  }
+  for (const [k, x] of gx.nodes) x.el.classList.toggle('hot', hot.has(k))
+  if (!shown) { tip.classList.remove('shown', 'pinned'); tip.hidden = true; tip.dataset.node = ''; return }
+  tip.replaceChildren(...gxTipContent(shown).filter(Boolean))
+  tip.dataset.node = shown
+  tip.hidden = false
+  tip.classList.toggle('pinned', !!gxPin)
+  const node = gx.nodes.get(shown).el.querySelector('.body').getBoundingClientRect(), box = stage.getBoundingClientRect()
+  const tw = tip.offsetWidth, th = tip.offsetHeight, gap = 10
+  let left = node.right - box.left + gap
+  if (left + tw > box.width - 8) left = node.left - box.left - tw - gap
+  let top = node.top - box.top
+  if (left < 8) { left = Math.max(8, Math.min(box.width - tw - 8, node.left - box.left + node.width / 2 - tw / 2)); top = node.bottom - box.top + gap }
+  top = Math.max(8, Math.min(top, Math.max(8, box.height - th - 8)))
+  tip.style.left = Math.round(left) + 'px'
+  tip.style.top = Math.round(top) + 'px'
+  requestAnimationFrame(() => tip.classList.add('shown'))
+}
+
+function graphsTab(s) {
+  const d = s.heartbeat.data
+  if (!d) return [calmBox('Graphs appear once cambium writes a readable heartbeat.', 'See the message above.')]
+  if (!d.graphs) return [calmBox("This cambium doesn't publish its graphs.", 'Newer versions of @oakgreencc/cambium list every graph in the heartbeat; upgrade it and restart the daemon.')]
+  if (!d.graphs.length) return [calmBox('cambium lists no graphs.', 'Its heartbeat has an empty graphs list.')]
+  const graphs = d.graphs, g = graphs.find((x) => x.name === gxSel) || graphs[0]
+  const flow = s.traces && s.traces.status === 'ok' && s.traces.flow ? s.traces.flow : null
+  const gf = (flow && flow.graphs[g.name]) || null
+  gxIssues = loopIssues(s.github)
+  const here = hereNow(flow, g.name)
+  const out = []
+  if (d.engine === 'legacy') out.push(h('div', { class: 'banner warn' }, h('b', {}, 'cambium runs the legacy engine: '),
+    'these graphs describe its code, but no issue moves through them. Set ', h('code', {}, '"engine": "graph"'), " in cambium's config to run them."))
+  const cls = 'gx' + (gxDock ? '' : ' undocked') + (gxOpen ? ' drawer-open' : '')
+  const drawer = gxDrawer(graphs, flow, g.name), head = gxHead(g), bar = gxBar(gf, flow, g)
+  const old = $('gx'), layout = gx && old && gx.g.name === g.name && JSON.stringify(gx.g) === JSON.stringify(g) ? gx.layout : null
+  const fresh = layout ? null : gxLayout(g)
+  // Kept: the same graph, drawn the same way. Only the figures around and on it change.
+  if (old && gx && layout && gxLayout(g).dir === layout.dir) {
+    old.className = cls
+    old.querySelector(':scope > .gx-drawer').replaceWith(drawer)
+    old.querySelector('.gx-head').replaceWith(head)
+    old.querySelector('.gx-play').replaceWith(bar)
+    const sched = gxSchedule(gf, flow, g)
+    if (sched.mode !== gx.sched.mode || sched.moves.length !== gx.sched.moves.length) { gx.sched = sched; gx.played = gx.clock % sched.loop }
+    Object.assign(gx, { gf, flow, here, mode: sched.mode })
+    gxOverlay(gf, here)
+    gxIngest(gf, false)
+    gxSize(gx.svg, gx.layout)
+    if ($('gx-tip') && $('gx-tip').dataset.node) gxShowTip(gxHover)
+    out.push(old)
+    return out
+  }
+  const lay = fresh || gxLayout(g)
+  const built = gxBuild(g, lay)
+  const tip = h('div', { class: 'gx-tip', id: 'gx-tip', role: 'tooltip', hidden: '' })
+  const el = h('div', { class: cls, id: 'gx' }, drawer, h('div', { class: 'gx-scrim', 'data-gx-close': '' }),
+    h('section', { class: 'gx-stage', 'aria-labelledby': 'gx-title' }, head, h('div', { class: 'gx-canvas' }, built.svg), bar, tip))
+  if (gx && gx.raf) cancelAnimationFrame(gx.raf)
+  const sched = gxSchedule(gf, flow, g)
+  gx = { g, layout: lay, ...built, gf, flow, here, sched, mode: sched.mode, clock: 0, played: -1, lastTs: null, pulses: [], seen: null, raf: 0 }
+  // The replay starts at the window's newest end, so a fresh view first shows what just happened.
+  if (sched.mode === 'replay') { gx.clock = Math.max(0, sched.loop - 6000); gx.played = gx.clock }
+  gxOverlay(gf, here)
+  gxIngest(gf, true)
+  gxSize(built.svg, lay)
+  gxHover = null
+  if (gxPin && !gx.nodes.has(gxPin)) gxPin = null
+  gx.raf = requestAnimationFrame(gxFrame)
+  out.push(el)
+  return out
+}
+
+function gxPick(name) {
+  gxSel = name
+  store.set('graphs.sel', name)
+  gxPin = null
+  gxHover = null
+  const was = gxOpen
+  gxOpen = false
+  history.replaceState(null, '', '#graphs/' + encodeURIComponent(name))
+  if (last) render(last)
+  if (was) document.querySelector('[data-gx-drawer]')?.focus({ preventScroll: true })
+}
+function gxToggleDrawer() {
+  if (matchMedia('(max-width:900px)').matches) {
+    gxOpen = !gxOpen
+    if (last) render(last)
+    if (gxOpen) (document.querySelector('.gx-item[aria-current=true]') || document.querySelector('.gx-item'))?.focus({ preventScroll: true })
+  } else {
+    gxDock = !gxDock
+    store.set('graphs.dock', gxDock)
+    if (last) render(last)
+  }
+}
+function gxCloseDrawer() {
+  if (!gxOpen) return
+  gxOpen = false
+  if (last) render(last)
+  document.querySelector('[data-gx-drawer]')?.focus({ preventScroll: true })
+}
+
+$('main').addEventListener('pointerover', (e) => {
+  const n = e.target.closest && e.target.closest('.g-node')
+  if (!n || tab !== 'graphs' || e.pointerType === 'touch') return
+  if (gxHover !== n.dataset.node) { gxHover = n.dataset.node; gxShowTip(gxHover) }
+})
+$('main').addEventListener('pointerout', (e) => {
+  const n = e.target.closest && e.target.closest('.g-node')
+  if (!n || tab !== 'graphs' || (e.relatedTarget && n.contains(e.relatedTarget))) return
+  if (gxHover === n.dataset.node) { gxHover = null; gxShowTip(null) }
+})
+$('main').addEventListener('focusin', (e) => {
+  const n = e.target.closest && e.target.closest('.g-node')
+  if (n && tab === 'graphs') { gxHover = n.dataset.node; gxShowTip(gxHover) }
+})
+$('main').addEventListener('focusout', (e) => {
+  const n = e.target.closest && e.target.closest('.g-node')
+  if (!n || tab !== 'graphs' || (e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('.gx-tip'))) return
+  if (gxHover === n.dataset.node) { gxHover = null; gxShowTip(null) }
+})
+document.addEventListener('keydown', (e) => {
+  if (tab !== 'graphs' || e.defaultPrevented) return
+  if (e.key === 'Escape') {
+    if (gxOpen) { e.preventDefault(); return gxCloseDrawer() }
+    if (gxPin) { e.preventDefault(); const id = gxPin; gxPin = null; gxShowTip(gxHover); return document.querySelector('[data-node="' + CSS.escape(id) + '"]')?.focus({ preventScroll: true }) }
+  }
+  const n = e.target.closest && e.target.closest('.g-node')
+  if (n && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); gxPin = gxPin === n.dataset.node ? null : n.dataset.node; gxShowTip(n.dataset.node) }
+  const tl = e.target.closest && e.target.closest('#gx-tl')
+  const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key]
+  if (tl && step && gx) { e.preventDefault(); gx.clock = (gx.clock + step * gx.sched.loop / 24 + gx.sched.loop) % gx.sched.loop; gx.played = gx.clock }
+})
+// A click outside a pinned card lets it go.
+document.addEventListener('click', (e) => {
+  if (tab !== 'graphs' || !gxPin || (e.target.closest && e.target.closest('.g-node,.gx-tip'))) return
+  gxPin = null
+  gxShowTip(gxHover)
+})
+let gxResize = 0
+new ResizeObserver(() => {
+  if (tab !== 'graphs' || !gx || gxResize) return
+  gxResize = requestAnimationFrame(() => {
+    gxResize = 0
+    if (gx && gx.svg.isConnected && gxLayout(gx.g).dir !== gx.layout.dir && last) return render(last)
+    if (gx && gx.svg.isConnected) gxSize(gx.svg, gx.layout)
+    if (gxHover || gxPin) gxShowTip(gxHover)
+  })
+}).observe($('main'))
+
+const TABS = ['inbox', 'queue', 'graphs', 'traces', 'health']
+// #inbox/<owner>/<name>/<n> selects an inbox item; #traces/<id> opens a trace; #graphs/<name> picks a graph.
 const parseHash = () => {
   const [t, id, name, n] = location.hash.slice(1).split('/')
-  if (!TABS.includes(t)) return ['inbox', null, null]
-  return [t, t === 'traces' && /^[0-9a-f]{32}$/.test(id || '') ? id : null, t === 'inbox' && name && /^[1-9][0-9]*$/.test(n || '') ? id + '/' + name + '#' + n : null]
+  if (!TABS.includes(t)) return ['inbox', null, null, null]
+  let graph = null
+  try { graph = t === 'graphs' && id ? decodeURIComponent(id) : null } catch {}
+  return [t, t === 'traces' && /^[0-9a-f]{32}$/.test(id || '') ? id : null, t === 'inbox' && name && /^[1-9][0-9]*$/.test(n || '') ? id + '/' + name + '#' + n : null, graph]
 }
-let [tab, traceSel, hashSel] = parseHash(), last = null, traceState = null
+let [tab, traceSel, hashSel, hashGraph] = parseHash(), last = null, traceState = null
 if (hashSel) { ibSel = hashSel; ibOpen = true }
+if (hashGraph) gxSel = hashGraph
 const traceKey = () => (traceSel ? '/api/traces/' + traceSel : '/api/traces')
 async function loadTraces() {
   if (tab !== 'traces') return
@@ -1052,7 +1657,7 @@ async function go(t, focus) {
   if (!TABS.includes(t)) return
   tab = t
   traceSel = null
-  history.replaceState(null, '', t === 'inbox' && ibSel ? ibHash(ibSel) : '#' + t)
+  history.replaceState(null, '', t === 'inbox' && ibSel ? ibHash(ibSel) : t === 'graphs' && gxSel ? '#graphs/' + encodeURIComponent(gxSel) : '#' + t)
   window.scrollTo(0, 0)
   if (last) render(last)
   if (focus) $('tab-' + t).focus()
@@ -1073,6 +1678,20 @@ $('tabs').addEventListener('keydown', (e) => {
 $('main').addEventListener('click', (e) => {
   const b = e.target.closest('[data-go]')
   if (b) return go(b.dataset.go, true)
+  const gb = e.target.closest('[data-graph],[data-gx-drawer],[data-gx-close],[data-gx-play],#gx-tl,.g-node')
+  if (gb) {
+    if (gb.dataset.graph) return gxPick(gb.dataset.graph)
+    if (gb.dataset.gxDrawer != null) return gxToggleDrawer()
+    if (gb.dataset.gxClose != null) return gxCloseDrawer()
+    if (gb.dataset.gxPlay != null) { gxPaused = !gxPaused; if (last) render(last); return }
+    if (gb.id === 'gx-tl' && gx) {
+      const r = gb.getBoundingClientRect()
+      gx.clock = Math.max(0, Math.min(0.999, (e.clientX - r.left) / r.width)) * gx.sched.loop
+      gx.played = gx.clock
+      return
+    }
+    if (gb.dataset.node) { gxPin = gxPin === gb.dataset.node ? null : gb.dataset.node; gxHover = gb.dataset.node; return gxShowTip(gxHover) }
+  }
   const mb = e.target.closest('[data-menu]')
   if (mb) { ibMenu = ibMenu === mb.dataset.menu ? null : mb.dataset.menu; if (last) render(last); return }
   const ctl = e.target.closest('[data-sort],[data-tag],[data-clear],[data-key],[data-back],[data-retry]')
@@ -1155,8 +1774,10 @@ document.addEventListener('keydown', (e) => {
 addEventListener('hashchange', async () => {
   const before = traceSel
   let sel
-  ;[tab, traceSel, sel] = parseHash()
+  let graph
+  ;[tab, traceSel, sel, graph] = parseHash()
   if (sel) { ibSel = sel; ibOpen = true }
+  if (graph && graph !== gxSel) { gxSel = graph; gxPin = null }
   if (traceSel !== before) { openSpans = new Set(); flameKey = ''; window.scrollTo(0, 0) }
   if (last) render(last)
   await loadTraces()
@@ -1172,6 +1793,7 @@ function render(s) {
   let split = null
   if (tab === 'inbox') for (const x of inbox(s, now)) if (x instanceof Node) body.push(x); else body.push((split = x).ib)
   if (tab === 'queue') body.push(...queues(s, now))
+  if (tab === 'graphs') body.push(...graphsTab(s))
   if (tab === 'traces') body.push(tracesTab(now))
   if (tab === 'health') {
     if (d) body.push(summary(d), h('div', { class: 'detail' }, workers(d, s.heartbeat.ageMs), events(d)))
@@ -1191,6 +1813,11 @@ function render(s) {
     ib.querySelector(':scope > .ib-side').replaceWith(split.side)
     for (const c of [...$('main').children]) if (c !== ib) c.remove()
     ib.before(...body.filter((x) => x !== split.ib))
+  } else if (body.includes($('gx'))) {
+    // The graph drawing is kept (graphsTab patched it): swap what sits around it, leave it in place.
+    const gxEl = $('gx')
+    for (const c of [...$('main').children]) if (c !== gxEl) c.remove()
+    gxEl.before(...body.filter((x) => x !== gxEl))
   } else {
     $('main').replaceChildren(...body)
     const p = $('ib-pane')
@@ -1251,6 +1878,7 @@ export const PAGE = `<!doctype html>
 <nav class="tabs" id="tabs" role="tablist" aria-label="Views">
 <button class="tab" role="tab" type="button" id="tab-inbox" data-tab="inbox" aria-controls="main">Inbox <span class="count" id="n-inbox">–</span></button>
 <button class="tab" role="tab" type="button" id="tab-queue" data-tab="queue" aria-controls="main" tabindex="-1">Queue <span class="count" id="n-queue">–</span></button>
+<button class="tab" role="tab" type="button" id="tab-graphs" data-tab="graphs" aria-controls="main" tabindex="-1">Graphs</button>
 <button class="tab" role="tab" type="button" id="tab-traces" data-tab="traces" aria-controls="main" tabindex="-1">Traces <span class="count" id="n-traces">–</span></button>
 <button class="tab" role="tab" type="button" id="tab-health" data-tab="health" aria-controls="main" tabindex="-1">Health <span class="dot" id="d-health"></span></button>
 </nav></div>
