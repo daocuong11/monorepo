@@ -21,7 +21,7 @@
 
 	--sl-color-text-invert: #0b190f;
 	--sl-color-bg-nav: #0b190f;
-	--sl-color-bg-sidebar: #0d1d12;
+	--sl-color-bg-sidebar: #0f2215;
 	--sl-color-bg-inline-code: #173620;
 	--sl-color-hairline-light: #1d3a25;
 	--sl-color-hairline: #163020;
@@ -214,7 +214,7 @@ html:not([data-has-hero]) .main-pane > main > .content-panel:first-child > * {
 	position: relative;
 }
 
-.content-panel h1#_top {
+html:not([data-has-hero]) .content-panel h1#_top {
 	font-weight: 300;
 	letter-spacing: -0.015em;
 	text-wrap: balance;
@@ -336,10 +336,8 @@ html:not([data-has-hero]) .main-pane > main > .content-panel:first-child > * {
 }
 
 [data-has-hero] .card .title {
-	font-size: 0.8125rem;
+	font-size: 1.125rem;
 	font-weight: 500;
-	letter-spacing: var(--og-label-track);
-	text-transform: uppercase;
 	color: var(--sl-color-white);
 	gap: 0.75rem;
 }
@@ -362,11 +360,8 @@ html:not([data-has-hero]) .main-pane > main > .content-panel:first-child > * {
 }
 
 [data-has-hero] .sl-markdown-content h2 {
-	font-weight: 300;
-	font-size: 1rem;
-	letter-spacing: 0.24em;
-	text-transform: uppercase;
-	color: var(--og-label);
+	font-weight: 400;
+	color: var(--sl-color-white);
 }
 
 /* Search */
@@ -385,4 +380,31 @@ site-search button[data-open-modal]:hover {
 
 footer .meta {
 	color: var(--sl-color-gray-3);
+}
+
+/* Mobile menu toggle, themed like the search button */
+
+.sl-menu-button {
+	border: 1px solid var(--sl-color-hairline-light);
+	background-color: var(--sl-color-gray-6);
+	color: var(--sl-color-gray-1);
+	box-shadow: none;
+}
+
+.sl-menu-button:has(~ :popover-open),
+:root[data-theme='light'] .sl-menu-button:has(~ :popover-open) {
+	background-color: var(--sl-color-accent-low);
+}
+
+:root[data-theme='light'] .sl-menu-button {
+	background-color: var(--sl-color-gray-6);
+	color: var(--sl-color-gray-1);
+}
+
+/* The home ring bleeds off the viewport edge */
+
+html[data-has-hero],
+html[data-has-hero] body,
+html[data-has-hero] .main-frame {
+	overflow-x: clip;
 }
