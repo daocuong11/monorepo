@@ -1288,6 +1288,21 @@ test('a POST git/trees that dies on a dropped connection is repeated, reported, 
   )
 })
 
+test('the first read after the pre-commit hook dying on a stale socket is repeated, and the merge lands', async () => {
+  let reads = 0
+  const client = fakeClient(
+    mergeRoutes({
+      [`GET /repos/o/r/git/commits/${MERGED}`]: () => {
+        if (++reads === 1) throw droppedSocket('UND_ERR_SOCKET')
+        return { sha: MERGED, tree: { sha: MERGED_TREE } }
+      },
+    }),
+  )
+  const out = await merge(staleMerge(), client)
+  assert.equal(reads, 2)
+  assert.equal(out.commit.sha, sha('e'))
+})
+
 test('a POST git/blobs that dies on EPIPE is repeated and the blob checked', async () => {
   let blobPosts = 0
   const git = staleMerge({ [`cat-file blob ${BLOB_NEW}`]: Buffer.from([0x00, 0x01]) })

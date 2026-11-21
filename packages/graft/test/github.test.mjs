@@ -146,7 +146,7 @@ test('serverErrorWait: a dropped connection (stale keep-alive socket) waits like
   assert.equal(serverErrorWait(dropped(undefined), 0), null)
 })
 
-test('the client itself never retries a dropped connection either', async () => {
+test('the client never retries a write whose connection dropped', async () => {
   let calls = 0
   const fetch = /** @type {typeof globalThis.fetch} */ (
     async () => {
@@ -160,6 +160,54 @@ test('the client itself never retries a dropped connection either', async () => 
     (err) => droppedConnection(err) === 'UND_ERR_SOCKET',
   )
   assert.equal(calls, 1)
+})
+
+test('the client repeats a read whose connection dropped, and says so', async () => {
+  let calls = 0
+  /** @type {string[]} */
+  const reports = []
+  /** @type {number[]} */
+  const waits = []
+  const fetch = /** @type {typeof globalThis.fetch} */ (
+    async () => {
+      if (++calls === 1) throw dropped('UND_ERR_SOCKET')
+      return new Response(JSON.stringify({ sha: 'abc', tree: { sha: 'def' } }))
+    }
+  )
+  const client = createClient({
+    token: 'ghs_t',
+    fetch,
+    sleep: async (ms) => void waits.push(ms),
+    report: (line) => reports.push(line),
+  })
+  assert.deepEqual(await client.getOrNull('/repos/o/r/git/commits/abc'), { sha: 'abc', tree: { sha: 'def' } })
+  assert.equal(calls, 2)
+  assert.deepEqual(waits, [1_000])
+  assert.match(reports[0], /connection dropped \(UND_ERR_SOCKET\) on GET \/repos\/o\/r\/git\/commits\/abc/)
+})
+
+test('a request that never got an answer names its method, path and cause code', async () => {
+  let calls = 0
+  const fetch = /** @type {typeof globalThis.fetch} */ (
+    async () => {
+      calls++
+      throw dropped('ECONNRESET')
+    }
+  )
+  const client = createClient({ token: 'ghs_t', fetch, sleep: async () => {} })
+  await assert.rejects(client.api('/repos/o/r/git/commits/abc'), (err) => {
+    assert.match(
+      String(/** @type {Error} */ (err).message),
+      /^GET \/repos\/o\/r\/git\/commits\/abc: fetch failed \(ECONNRESET/,
+    )
+    assert.equal(droppedConnection(err), 'ECONNRESET')
+    return true
+  })
+  assert.equal(calls, 1 + SERVER_ERROR_RETRIES)
+  await assert.rejects(
+    client.json('/repos/o/r/git/commits', 'POST', {}),
+    /^Error: POST \/repos\/o\/r\/git\/commits: fetch failed \(ECONNRESET: other side closed\)/,
+  )
 })
 
 test('retryServerErrors repeats a dropped connection and says so', async () => {

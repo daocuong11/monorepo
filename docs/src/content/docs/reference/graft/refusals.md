@@ -60,4 +60,4 @@ Code-owner approval counts on the current head, or on an earlier commit when the
 
 ## Retries
 
-graft waits out GitHub's 403/429 rate-limit refusals, doubling each wait and reporting it on stderr. Only content-addressed writes (`POST /git/blobs`, `POST /git/trees`) are retried on a 5xx or a dropped connection. Commit creation and ref updates never are.
+graft waits out GitHub's 403/429 rate-limit refusals, doubling each wait and reporting it on stderr. Only content-addressed writes (`POST /git/blobs`, `POST /git/trees`) are retried on a 5xx or a dropped connection. Reads (`GET`) are retried on a dropped connection. Commit creation and ref updates never are. A request that fails before GitHub answers is reported with its method, path and error code, for example `GET /repos/o/r/git/commits/abc: fetch failed (UND_ERR_SOCKET: other side closed)`.
