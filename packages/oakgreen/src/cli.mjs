@@ -5,6 +5,7 @@ import { parseArgs } from 'node:util'
 import { withEnvFile } from '@oakgreencc/mycelium/envfile'
 import { doctorOk, formatDoctor, runDoctor } from './doctor.mjs'
 import { graftGithub } from './github.mjs'
+import { createProxy, DEFAULT_PORT as PROXY_PORT, installProxy, loadRoutes } from './proxy.mjs'
 import { runServices } from './services.mjs'
 import { runSetup } from './setup.mjs'
 import { TOOLS, defaultExec, defaultSpawn, isTool, toolCommand, toolRunner, which } from './tools.mjs'
@@ -16,12 +17,14 @@ const USAGE = `oakgreen ${PKG.version} — the oakgreen stack in one command
 
   oakgreen doctor [--json] [--repo owner/name] [--config <file>]
   oakgreen setup [--dry-run] [--repo owner/name] [--config <file>]
-  oakgreen services [--json]    the stack's launchd agents (otelcol, cambium, mycelium, canopy) and whether they run
+  oakgreen services [--json]    the stack's launchd agents (otelcol, cambium, mycelium, canopy, proxy) and whether they run
   oakgreen start [service...]   install (if needed), enable and start each (default: all that can be)
   oakgreen stop [service...]    stop each and keep it stopped across logins, until start
   oakgreen restart [service...] new process for each (default: all installed), e.g. after an npm update
   oakgreen reload [service...]  also re-read each agent's plist (its env), waiting for the old one to stop
   oakgreen update [--check]     install the latest oakgreen (and its tools), then restart running services
+  oakgreen proxy [--port n]     serve http://<name>.localhost/ (canopy, jaeger, ~/.oakgreen/proxy.json) on :80
+  oakgreen proxy install [--port n] [--dry-run]   write its launchd agent (oakgreen start does this)
   oakgreen <tool> [args...]     run ${Object.keys(TOOLS).join(', ')}
 
 --config is cambium's config (default $CAMBIUM_CONFIG, then ~/.cambium/config.json).
@@ -46,6 +49,8 @@ const USAGE = `oakgreen ${PKG.version} — the oakgreen stack in one command
  *   exists?: (path: string) => boolean,
  *   sleep?: (ms: number) => Promise<unknown>,
  *   updater?: import('./update.mjs').Updater,
+ *   write?: (path: string, text: string) => void,
+ *   listen?: (server: import('node:http').Server, port: number) => Promise<number>,
  * }} Ports
  */
 
@@ -118,11 +123,27 @@ export async function main(argv, ports = {}) {
         now,
         json: flags.includes('--json'),
         runTool: (tool, args) => runTool(tool, args, { cwd }),
+        installSelf: async () => {
+          let out = ''
+          try {
+            const code = installProxy([], {
+              home,
+              path: env.PATH ?? '/usr/bin:/bin',
+              write: ports.write,
+              out: (s) => (out += s),
+            })
+            return { code, stdout: out, stderr: '' }
+          } catch (err) {
+            return { code: 1, stdout: out, stderr: /** @type {Error} */ (err).message }
+          }
+        },
       },
       stdout,
       stderr,
     )
   }
+  if (verb === 'proxy')
+    return proxyCommand(rest, { home, env, stdout, stderr, write: ports.write, listen: ports.listen })
   if (verb === 'update') {
     const bad = rest.filter((a) => a !== '--check')
     if (bad.length) {
@@ -194,4 +215,74 @@ export async function main(argv, ports = {}) {
     print: (line) => stdout(`${line}\n`),
   })
   return result.ok ? 0 : 1
+}
+
+/**
+ * `oakgreen proxy [--port n]` serves until killed; `oakgreen proxy install [--port n] [--dry-run]` writes the agent.
+ * @param {string[]} args
+ * @param {{ home: string, env: import('./stack.mjs').Env, stdout: (s: string) => void, stderr: (s: string) => void,
+ *   write?: (path: string, text: string) => void, listen?: (server: import('node:http').Server, port: number) => Promise<number> }} io
+ * @returns {Promise<number>}
+ */
+async function proxyCommand(args, { home, env, stdout, stderr, write, listen = serveForever }) {
+  const install = args[0] === 'install'
+  let values
+  try {
+    ;({ values } = parseArgs({
+      args: install ? args.slice(1) : args,
+      options: {
+        port: { type: 'string' },
+        ...(install ? { 'dry-run': { type: 'boolean', default: false } } : {}),
+      },
+      strict: true,
+    }))
+  } catch (err) {
+    stderr(`oakgreen proxy: ${/** @type {Error} */ (err).message}\n`)
+    return 2
+  }
+  const port = values.port === undefined ? PROXY_PORT : Number(values.port)
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    stderr(`oakgreen proxy: --port must be 0-65535, got ${values.port}\n`)
+    return 2
+  }
+  if (install) {
+    const flags = values.port === undefined ? [] : ['--port', String(port)]
+    return installProxy(flags, {
+      home,
+      path: env.PATH ?? '/usr/bin:/bin',
+      dryRun: !!values['dry-run'],
+      write,
+      out: stdout,
+    })
+  }
+  const { routes, errors } = loadRoutes(home)
+  for (const e of errors) stderr(`oakgreen proxy: ${e}\n`)
+  const server = createProxy({ routes, port })
+  const suffix = port === 80 ? '' : `:${port}`
+  server.once('listening', () => {
+    const list = Object.entries(routes).map(([n, p]) => `  http://${n}.localhost${suffix}/ → 127.0.0.1:${p}`)
+    stdout(`oakgreen proxy on :${port} (loopback clients only)\n${list.join('\n')}\n`)
+  })
+  try {
+    return await listen(server, port)
+  } catch (err) {
+    const e = /** @type {NodeJS.ErrnoException} */ (err)
+    const why =
+      e.code === 'EADDRINUSE'
+        ? `port ${port} is in use (lsof -nP -iTCP:${port} -sTCP:LISTEN)`
+        : e.code === 'EACCES'
+          ? `not allowed to bind port ${port}`
+          : e.message
+    stderr(`oakgreen proxy: ${why}\n`)
+    return 1
+  }
+}
+
+/** Listen on the wildcard (macOS allows :80 unprivileged only there); resolve when the server closes. */
+function serveForever(/** @type {import('node:http').Server} */ server, /** @type {number} */ port) {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.once('close', () => resolve(0))
+    server.listen({ port, host: '::', ipv6Only: false })
+  })
 }

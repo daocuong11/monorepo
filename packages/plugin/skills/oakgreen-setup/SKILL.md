@@ -44,7 +44,7 @@ Offer these, with one line each (more in [references/components.md](references/c
 | **cambium**  | The scheduler: runs `claude -p` workers on `q:task` issues, watches PRs | graft, Claude Code, macOS  |
 | **tracing**  | Local OTel collector + cambium's `OTEL_*` env; traces in canopy         | cambium, `otelcol-contrib` |
 | **mycelium** | Intake: Discord, App Store, Google Play feedback → `q:intake` issues    | graft, macOS, source creds |
-| **canopy**   | Local status page at `http://127.0.0.1:4317/`                           | cambium, macOS             |
+| **canopy**   | Local status page at `http://canopy.localhost/` (or `127.0.0.1:4317`)   | cambium, macOS             |
 | **canker**   | CI gate: fails complex untested functions (CRAP score)                  | a repo with test coverage  |
 | **deadwood** | CI gate: markdown allowlist, comment-density ceiling                    | a repo                     |
 
@@ -75,7 +75,7 @@ The order follows the dependencies: credentials before anything calls GitHub, th
 4. **tracing**: collector config and agent, then `oakgreen start otelcol`; then the `OTEL_*` env in cambium's agent.
 5. **cambium**: `oakgreen start cambium` (writes the agent on first run, then loads it).
 6. **mycelium** _(human writes the secrets)_: `~/.mycelium/env`, then `mycelium poll <source> --dry-run`, then `oakgreen start mycelium`.
-7. **canopy**: `oakgreen start canopy` (or `canopy install --port <n>` first for a non-default port, then `oakgreen reload canopy`).
+7. **canopy**: `oakgreen start canopy` (or `canopy install --port <n>` first for a non-default port, then `oakgreen reload canopy`), then `oakgreen start proxy` so it answers at `http://canopy.localhost/` (port 80 taken: `oakgreen proxy install --port <n>` first).
 8. **canker / deadwood**: devDependency and config file in the repo. These, and the label guide from step 3, are repo changes: the user commits them their usual way (in a graft repo, through `graft publish`).
 
 After each step run its check from [references/components.md](references/components.md) and say in one line whether it passed.

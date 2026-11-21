@@ -2,7 +2,8 @@
 /**
  * The stack's long-running services: launchd user agents (macOS).
  *
- * - `start`: install the agent when its tool can (`cambium install`, `mycelium install`, `canopy install`), enable
+ * - `start`: install the agent when its tool can (`cambium install`, `mycelium install`, `canopy install`,
+ *   `oakgreen proxy install`), enable
  *   it, load it.
  * - `stop`: disable and unload it, so it stays stopped across logins until `start`.
  * - `restart`: a new process on the same agent definition. SIGTERM, then launchd's KeepAlive starts it again
@@ -11,14 +12,17 @@
  *   wait until launchd has let go of it, then `bootstrap`. Waiting matters: bootstrapping while the old process
  *   is still finishing a tick fails with "Bootstrap failed: 5: Input/output error".
  *
- * Order is otelcol, cambium, mycelium, canopy, so the first spans have a collector to go to and the page comes up
+ * Order is otelcol, cambium, mycelium, canopy, proxy, so the first spans have a collector to go to and the page comes up
  * over a running stack; `stop` goes in reverse.
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
-/** @typedef {{ name: string, label: string, what: string, install?: import('./tools.mjs').Tool }} Service */
+/**
+ * `install`: the tool whose `install` writes the agent; `'oakgreen'` for one oakgreen writes itself (`proxy`).
+ * @typedef {{ name: string, label: string, what: string, install?: import('./tools.mjs').Tool | 'oakgreen' }} Service
+ */
 
 /** @type {readonly Service[]} */
 export const SERVICES = Object.freeze([
@@ -26,6 +30,7 @@ export const SERVICES = Object.freeze([
   { name: 'cambium', label: 'com.oakgreencc.cambium', what: 'the scheduler daemon', install: 'cambium' },
   { name: 'mycelium', label: 'com.oakgreencc.mycelium', what: 'intake connectors', install: 'mycelium' },
   { name: 'canopy', label: 'com.oakgreencc.canopy', what: 'the local status page', install: 'canopy' },
+  { name: 'proxy', label: 'com.oakgreencc.proxy', what: 'http://<name>.localhost/ on :80', install: 'oakgreen' },
 ])
 
 /**
@@ -39,6 +44,7 @@ export const SERVICES = Object.freeze([
  *   now?: () => number,
  *   timeoutMs?: number,
  *   runTool?: (tool: import('./tools.mjs').Tool, args: string[]) => Promise<import('./tools.mjs').Result>,
+ *   installSelf?: (service: string) => Promise<import('./tools.mjs').Result>,
  * }} Ports
  * @typedef {{
  *   name: string, label: string, what: string, plist: string, installed: boolean, loaded: boolean,
@@ -147,8 +153,11 @@ export async function start(p, s) {
   let st = await statusOf(p, s)
   if (running(st)) return { name: s.name, ok: true, detail: `already running, pid ${st.pid}` }
   if (!st.installed) {
-    if (!s.install || !p.runTool) return notInstalled(s)
-    const r = await p.runTool(s.install, ['install'])
+    const r =
+      s.install === 'oakgreen'
+        ? await p.installSelf?.(s.name)
+        : s.install && (await p.runTool?.(s.install, ['install']))
+    if (!r) return notInstalled(s)
     st = await statusOf(p, s)
     if (r.code !== 0 || !st.installed) {
       const why = (r.stderr || r.stdout).trim().split('\n').at(-1) || `exit ${r.code}`

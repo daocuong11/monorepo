@@ -12,7 +12,7 @@ oakgreen setup --repo owner/name    # labels, label guide, cambium config skelet
 oakgreen doctor                     # one checklist, exit 1 if a required check fails
 oakgreen graft status               # any tool, args passed through
 oakgreen start                       # install (first time) and start every service that is configured
-oakgreen services                    # are otelcol, cambium, mycelium and canopy running?
+oakgreen services                    # are otelcol, cambium, mycelium, canopy and proxy running?
 oakgreen restart                     # new processes, e.g. after npm updates
 oakgreen stop mycelium               # stopped until the next start, across logins too
 oakgreen update                      # latest oakgreen and its tools, then restart what runs
@@ -29,6 +29,8 @@ oakgreen update                      # latest oakgreen and its tools, then resta
 | `oakgreen restart [service...]`                             | A new process for each (all installed ones by default), on the same agent definition.                          |
 | `oakgreen reload [service...]`                              | Re-read each agent's plist too (its env, its program), then start it.                                          |
 | `oakgreen update [--check]`                                 | Install the latest oakgreen and its tools, restart running services. See [Update](#update).                    |
+| `oakgreen proxy [--port n]`                                 | Serve `http://<name>.localhost/` for the stack's web UIs. See [Proxy](#proxy).                                 |
+| `oakgreen proxy install [--port n] [--dry-run]`             | Write the proxy's launchd agent (`oakgreen start` does this the first time).                                   |
 
 A tool runs from its installed package's `bin` (resolved from `oakgreen`'s own `node_modules`) with the current Node; if the package is not installed, the bare name is looked up on `PATH`. A tool found in neither exits 127 with the install command.
 
@@ -44,6 +46,7 @@ The long-running parts of the stack are launchd user agents (macOS only for now)
 | `cambium`  | `com.oakgreencc.cambium`  | The scheduler daemon (`cambium install` writes the agent)                            |
 | `mycelium` | `com.oakgreencc.mycelium` | The intake connectors, `mycelium run` (`mycelium install` writes the agent)          |
 | `canopy`   | `com.oakgreencc.canopy`   | The status page on `http://127.0.0.1:4317/` (`canopy install` writes the agent)      |
+| `proxy`    | `com.oakgreencc.proxy`    | `http://<name>.localhost/` on :80, see [Proxy](#proxy) (`oakgreen proxy install`)    |
 
 - **`start`** leaves a running service alone. A missing agent is written by its tool (`cambium install`, `mycelium install`, `canopy install`; otelcol has none, see cambium's [Tracing](../cambium/README.md#tracing)); with no names, one its tool refuses (no cambium config, no mycelium source) is skipped with the reason. Then `launchctl enable` and `bootstrap`, or `kickstart` when it is loaded but idle.
 - **`stop`** is `launchctl disable` then `bootout`, waiting for the process to exit. Disabled, launchd will not start it at login; `start`, `restart` and `reload` all enable it again.
@@ -52,6 +55,28 @@ The long-running parts of the stack are launchd user agents (macOS only for now)
 - **`reload`** is for a changed plist (an added `OTEL_*` variable, a new Node path): `launchctl bootout`, then it **waits until launchd has let go of the old process** before `launchctl bootstrap` (retried a few times). Bootstrapping while cambium is still finishing a tick is what fails with `Bootstrap failed: 5: Input/output error`.
 - With no names, every service is handled and one that is not installed is skipped; a named one that is not installed fails. Each waits up to 3 minutes for its process; exit 1 if any did not come up.
 - canopy is not a service here: it runs in the foreground (`canopy`, or `pnpm start` in the monorepo).
+
+## Proxy
+
+`oakgreen proxy` is a reverse proxy on port 80 that gives each web UI a name instead of a port:
+
+| URL                        | Goes to           |
+| -------------------------- | ----------------- |
+| `http://canopy.localhost/` | `127.0.0.1:4317`  |
+| `http://jaeger.localhost/` | `127.0.0.1:16686` |
+| `http://localhost/`        | a list of routes  |
+
+- **No DNS setup.** `*.localhost` is reserved for loopback (RFC 6761) and browsers resolve it themselves, so there is no `/etc/hosts` entry or sudo; browsers also treat it as a secure context. (`.local` is mDNS's, `.lan` is unreserved and answered by routers.) Safari may need a hosts entry.
+- **More routes** go in `~/.oakgreen/proxy.json`, merged over the defaults; `null` removes one. Restart the proxy after editing (`oakgreen restart proxy`).
+
+  ```json
+  { "routes": { "grafana": 3000, "jaeger": null } }
+  ```
+
+- **Loopback only.** macOS lets an unprivileged process bind a port below 1024 only on the wildcard address, so it listens on `::` (IPv4 and IPv6) and destroys every connection that does not come from loopback before reading it. A request is answered only when its `Host` is `localhost` or `<name>.localhost`, so a page elsewhere cannot reach it through DNS rebinding.
+- **Upstreams** see `Host: 127.0.0.1:<port>` (canopy refuses other Hosts) and `X-Forwarded-Host: <name>.localhost`. WebSocket and other `Upgrade` requests are passed through.
+- A route whose service is down answers 502 naming the port; an unknown name, 404. Port 80 already taken: the proxy exits 1 saying so (`--port 8080` serves `http://canopy.localhost:8080/` instead; `oakgreen proxy install --port 8080` to keep it).
+- Logs: `~/.oakgreen/logs/proxy.log`.
 
 ## Update
 

@@ -52,6 +52,8 @@ oakgreen start canopy        # writes the agent (canopy install) on first run, t
 oakgreen restart canopy      # new process on new code, e.g. after npm i -g
 ```
 
+With the `proxy` service running too (`oakgreen start` starts it), canopy is also at `http://canopy.localhost/`; see oakgreen's [Proxy](../oakgreen/README.md#proxy).
+
 `canopy install [flags]` writes `~/Library/LaunchAgents/com.oakgreencc.canopy.plist`, serving with the flags given (`--dry-run` prints it instead). KeepAlive restarts it whenever it exits; output goes to `~/.canopy/logs/canopy.log`. After changing the flags, run `canopy install …` again, then `oakgreen reload canopy`.
 
 ## Flags
