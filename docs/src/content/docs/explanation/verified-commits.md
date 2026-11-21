@@ -35,7 +35,7 @@ GitHub's GraphQL `createCommitOnBranch` mutation takes file contents and makes a
 
 GitHub limits content-creating requests to roughly 80 a minute. Sending each changed file as its own blob would exhaust that on a large reformat, so text rides inline in the tree request, many files at once, and only binaries, symlinks and large files go as separate blobs.
 
-Retries follow from content addressing. Writing a blob or a tree is safe to repeat: the answer is a hash fixed by the content. Creating a commit or moving a branch is not: a repeat could create a second commit. So graft retries the first kind on server errors and dropped connections, and never the second.
+Retries follow from content addressing. Writing a blob or a tree is safe to repeat: the answer is a hash fixed by the content. Creating a commit or moving a branch is not: a repeat could create a second commit. So graft retries the first kind on server errors and dropped connections, and never the second. A read (`GET`) is safe to repeat too, so a read whose connection dropped is retried. That happens when the connection sits idle while a long pre-commit hook runs.
 
 If a commit landed but its response was lost, re-running the same publish finds the branch already holds that content, writes nothing, and carries on. The publish is idempotent where it matters.
 

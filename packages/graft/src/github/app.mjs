@@ -298,8 +298,8 @@ export function droppedConnection(err) {
  * or 504, or that died on a dropped connection ({@link droppedConnection}) —
  * one second, doubling per `attempt` — or `null` for anything else.
  *
- * Deliberately NOT part of {@link rateLimitWait} or the client's own retry:
- * a 5xx, or a connection that dropped mid-request, does not say whether
+ * Deliberately NOT part of {@link rateLimitWait} or the client's own retry
+ * (which repeats only a GET or HEAD whose connection dropped): a 5xx, or a connection that dropped mid-request, does not say whether
  * GitHub performed the write. Repeating is safe only for a content-addressed
  * write — `POST /git/blobs`, `POST /git/trees`, whose answer is a sha fixed by
  * the body — and never for `POST /git/commits` (a second commit object) or a
@@ -345,6 +345,29 @@ export async function retryServerErrors(
 }
 
 /**
+ * A request that failed before GitHub answered (undici's bare `fetch failed`)
+ * says neither which request it was nor why. Name both — `GET /path: fetch
+ * failed (UND_ERR_SOCKET)` — keeping the original as `cause`'s source so
+ * {@link droppedConnection} still reads its code. An HTTP refusal (it has a
+ * `status`, and its message already names the path) is returned untouched.
+ *
+ * @param {any} err
+ * @param {string} method
+ * @param {string} path
+ */
+function labelled(err, method, path) {
+  if (!(err instanceof Error) || /** @type {any} */ (err).status !== undefined) return err
+  const code = err?.cause?.code ?? err?.code
+  const why = err?.cause?.message
+  const detail = [code, why && why !== err.message ? why : null].filter(Boolean).join(': ')
+  const out = new Error(`${method} ${path}: ${err.message}${detail ? ` (${detail})` : ''}`, {
+    cause: err.cause ?? err,
+  })
+  if (err?.code !== undefined) Object.assign(out, { code: err.code })
+  return out
+}
+
+/**
  * An authenticated client — the one port every GitHub call goes through:
  *
  *   api(path, init?)          parsed JSON
@@ -365,8 +388,13 @@ export async function retryServerErrors(
  * A rate-limited refusal (403/429, see {@link rateLimitWait}) is waited out
  * and the request repeated, up to {@link RATE_LIMIT_RETRIES} times, and each
  * wait is `report`ed so a publish that is pausing says why. Safe to repeat:
- * GitHub performed nothing for a request it refused. `sleep` is injectable
- * so tests do not wait.
+ * GitHub performed nothing for a request it refused. A GET or HEAD whose
+ * connection dropped ({@link droppedConnection}) — a keep-alive socket gone
+ * stale while a git hook ran — is repeated too, up to
+ * {@link SERVER_ERROR_RETRIES} times: a read performed nothing either. A
+ * write that dropped is never repeated here. A request that fails before
+ * GitHub answers is rethrown naming its method, path and `cause.code`.
+ * `sleep` is injectable so tests do not wait.
  *
  * @param {{ token: string | undefined, fetch?: typeof globalThis.fetch, sleep?: (ms: number) => Promise<void>, report?: (line: string) => void, retries?: number }} input
  */
@@ -380,13 +408,27 @@ export function createClient({
   const auth = { Authorization: `token ${token}` }
   const withAuth = (init = {}) => ({ ...init, headers: { ...auth, ...(init.headers ?? {}) } })
   const raw = async (path, init) => {
+    const method = (init?.method ?? 'GET').toUpperCase()
+    const read = method === 'GET' || method === 'HEAD'
+    let dropRetries = 0
     for (let attempt = 0; ; attempt++) {
       try {
         return await request(path, withAuth(init), fetch)
       } catch (err) {
+        // A read is safe to repeat on a dropped connection — typically a
+        // keep-alive socket gone stale while a git hook ran — because it
+        // performed nothing. A write is not (see serverErrorWait).
+        const dropped = read ? droppedConnection(err) : null
+        if (dropped && dropRetries < SERVER_ERROR_RETRIES) {
+          const wait = 1_000 * 2 ** dropRetries++
+          report(
+            `connection dropped (${dropped}) on ${method} ${path}: waiting ${Math.ceil(wait / 1000)}s (retry ${dropRetries}/${SERVER_ERROR_RETRIES})`,
+          )
+          await sleep(wait)
+          continue
+        }
         const wait = attempt < retries ? rateLimitWait(err, attempt) : null
-        if (wait === null) throw err
-        const method = (init?.method ?? 'GET').toUpperCase()
+        if (wait === null) throw labelled(err, method, path)
         report(
           `rate limited (${/** @type {any} */ (err).status}) on ${method} ${path}: waiting ${Math.ceil(wait / 1000)}s (retry ${attempt + 1}/${retries})`,
         )
