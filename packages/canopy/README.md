@@ -31,6 +31,7 @@ The **Traces** tab shows cambium's OpenTelemetry spans (see cambium's README, [T
 - **One run** (`#traces/<id>`): a waterfall of its spans, parents above children; waits are grey, failed spans red. Click a span for its attributes, status and events.
 - **Stranded.** An open issue with no queue label whose `agent/*` PR was closed unmerged (and no open agent PR closes it) has left the Release Queue and cambium won't pick it up again. The Inbox lists it under **PR closed, issue stranded** with the closed PR; it counts toward the inbox badge. Read from the 50 most recently updated closed PRs per repo.
 - **Links.** Inbox and Queue items and the Workers table link to the newest trace for their issue.
+- **Interactive session.** A `q:human` item cambium wrote a session brief for (`<paths.home>/briefs/<owner>__<name>/issue-<n>.md`; see cambium's README, [Session briefs](../cambium/README.md#session-briefs)) shows the command `cd <repos[].path> && claude "$(cat <brief>)"` in the reading pane with a **Copy** button. The server checks for the file on each `/api/state` and adds `brief: { path, command }` to the item; items without one show nothing.
 
 Nothing is traced until cambium runs with `OTEL_EXPORTER_OTLP_ENDPOINT` pointing at that collector; until then the tab says so. Files are re-parsed only when one changes size or mtime.
 

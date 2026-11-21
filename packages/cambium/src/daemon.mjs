@@ -79,6 +79,7 @@ export function realDeps(config, { echo } = {}) {
     spawner,
     procs: realProcs,
     gc: gcRunner({ config, store, spawner, procs: realProcs, now: Date.now }, log),
+    briefs: { dir: join(config.paths.home, 'briefs') },
     log,
     events,
     heartbeat: (state) => writeHeartbeat(config.paths.heartbeat, state),
