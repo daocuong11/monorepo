@@ -53,7 +53,9 @@ launchd user agents, macOS only. Handled in this order:
 
 - Updates only a global npm install (`<prefix>/lib/node_modules/oakgreen`), into the same prefix. A source checkout or `npm link` is refused with a hint.
 - npm: the one next to the running Node, else `npm` on `PATH`. Version: the registry's `latest` dist-tag.
-- `oakgreen update` runs `npm install --global --prefix <prefix> oakgreen@<latest>`, then restarts each running service (macOS). A stopped service stays stopped. Exit 1 if the install or a restart fails.
+- A tool also installed on its own (`<prefix>/lib/node_modules/@oakgreencc/<tool>`) is upgraded to the version the latest oakgreen depends on, when older. A newer one is left alone. This copy is the one on `PATH` and in the cambium agent.
+- `oakgreen update` runs one `npm install --global --prefix <prefix>` with `oakgreen@<latest>` (if newer) and each such `@oakgreencc/<tool>@<version>`, then restarts each running service (macOS). A stopped service stays stopped. Exit 1 if the install or a restart fails.
+- When oakgreen is current but a standalone tool is behind, only the tool is installed. `--check` lists both.
 
 ## Doctor checks
 
