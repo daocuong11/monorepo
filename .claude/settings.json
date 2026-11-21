@@ -45,6 +45,17 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "ExitWorktree",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "graft hook finish-worktree",
+            "timeout": 60,
+            "statusMessage": "Checking GitHub holds this worktree"
+          }
+        ]
       }
     ],
     "PostToolUse": [
