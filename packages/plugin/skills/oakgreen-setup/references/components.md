@@ -101,6 +101,8 @@ Run (with a yes): `oakgreen start canopy` (writes the agent with defaults on fir
 
 Check: `oakgreen services canopy` running; `curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<port>/` prints `200`; in `curl -fsS http://127.0.0.1:<port>/api/state`, `heartbeat.status` is `"ok"` once cambium has ticked.
 
+Then the name (with a yes): `oakgreen start proxy` serves `http://canopy.localhost/` on port 80, loopback only; nothing to configure. If port 80 is taken it says so: `oakgreen proxy install --port <n>` then `oakgreen reload proxy`. Check: `oakgreen services proxy` running; `curl -fsS -o /dev/null -w '%{http_code}\n' http://canopy.localhost/` prints `200`.
+
 ## canker
 
 Ask: which repo, config as `canker.json` or a `"canker"` key in `package.json`, `maxCrap` (default 30). canker reads a coverage report (Istanbul `coverage-final.json` or lcov), so the repo's tests must write one. With Node's own runner: `mkdir -p coverage && node --test --experimental-test-coverage --test-reporter=lcov --test-reporter-destination=coverage/lcov.info` (the reporter does not create the directory), and `"coverage": ["coverage/lcov.info"]` in canker's config.

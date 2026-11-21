@@ -93,6 +93,20 @@ function fakeLaunchd(agents) {
     exists: (/** @type {string} */ p) =>
       Object.entries(state).some(([l, s]) => s.installed && p.endsWith(`${l}.plist`)),
     sleep: async () => step(),
+    /** `oakgreen proxy install` writing its plist: the agent is now installed. */
+    write: (/** @type {string} */ p) => {
+      const label = /** @type {string} */ (p.split('/').at(-1)).replace(/\.plist$/, '')
+      state[label] ??= {
+        installed: false,
+        loaded: false,
+        pid: null,
+        stopping: 0,
+        unloading: false,
+        stopTicks: 0,
+        disabled: false,
+      }
+      state[label].installed = true
+    },
   }
   return { ports, calls, state }
 }
@@ -135,6 +149,7 @@ test('services: running, loaded but down, installed but not loaded, not installe
       ['cambium', true, true],
       ['mycelium', false, false],
       ['canopy', false, false],
+      ['proxy', false, false],
     ],
   )
 })
@@ -202,7 +217,7 @@ test('unknown service, unknown option, and not macOS', async () => {
   const { ports } = fakeLaunchd({ cambium: {} })
   const u = await run(['restart', 'deadwood'], ports)
   assert.equal(u.code, 2)
-  assert.match(u.err, /unknown service deadwood \(known: otelcol, cambium, mycelium, canopy\)/)
+  assert.match(u.err, /unknown service deadwood \(known: otelcol, cambium, mycelium, canopy, proxy\)/)
   assert.equal((await run(['reload', '--force'], ports)).code, 2)
   const linux = await run(['services'], { ...ports, platform: 'linux' })
   assert.equal(linux.code, 2)
@@ -255,6 +270,8 @@ test('start: installs a missing agent through its tool, enables and loads it; ru
   assert.match(r.out, new RegExp(`✓ cambium {2}already running, pid ${before}`))
   assert.match(r.out, /✓ mycelium loaded, pid \d+/)
   assert.match(r.out, /✓ canopy {3}loaded, pid \d+/)
+  assert.match(r.out, /✓ proxy {4}loaded, pid \d+/)
+  assert.ok(state['com.oakgreencc.proxy'].installed, 'oakgreen writes the proxy agent itself')
   assert.deepEqual(ran, [
     ['mycelium', 'install'],
     ['canopy', 'install'],
