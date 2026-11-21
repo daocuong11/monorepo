@@ -4,8 +4,8 @@
  * its typed result and the checks cambium runs on it before acting, and the comments and root-cause tickets it
  * writes.
  *
- * An item is stuck when its labels break the queue rules (more than one `q:*`, `running` without a queue, `why:*`
- * outside `q:human`, `wait:*` outside `q:intake`, cambium labels left on a closed issue), when its agent PR closed
+ * An item is stuck when its labels break the queue rules (more than one `q:*`, `running` without a queue, `why:*` or
+ * `ask:*` outside `q:human`, `wait:*` outside `q:intake`, cambium labels left on a closed issue), when its agent PR closed
  * or merged and left it open in no queue, or when it has waited in a queue, or its PR has sat untouched, far longer
  * than cambium ever takes to move it.
  */
@@ -14,6 +14,7 @@ import { z } from 'zod'
 import { branchIssue } from '../github.mjs'
 import { MIN } from '../issue-state.mjs'
 import { Q, RUNNING } from '../labels.mjs'
+import { LenientAsk } from '../ask.mjs'
 import { finalJson, formatZodIssue } from './dispatch.mjs'
 
 /**
@@ -28,7 +29,8 @@ import { finalJson, formatZodIssue } from './dispatch.mjs'
 const HOUR = 60 * MIN
 
 /** The labels cambium owns, which only cambium moves. @param {string} l */
-export const cambiumLabel = (l) => l.startsWith('q:') || l === RUNNING || l.startsWith('why:') || l.startsWith('wait:')
+export const cambiumLabel = (l) =>
+  l.startsWith('q:') || l === RUNNING || l.startsWith('why:') || l.startsWith('ask:') || l.startsWith('wait:')
 
 /** The issue an agent PR is for: the first one it closes that the snapshot has, else the one its branch names. @param {PullRequest} pr */
 const issueOfPr = (pr) => pr.closes[0] ?? branchIssue(pr.branch)
@@ -94,7 +96,7 @@ export function findStuck(snap, o) {
         code: 'running-unqueued',
         detail: `labelled \`${RUNNING}\` ${queues.length ? `in ${queues.join(', ')}` : 'in no queue'}`,
       })
-    const why = labels.filter((l) => l.startsWith('why:'))
+    const why = labels.filter((l) => l.startsWith('why:') || l.startsWith('ask:'))
     if (why.length && !labels.includes(Q.human))
       add(n, { code: 'why-outside-human', detail: `${why.join(', ')} without ${Q.human}` })
     const wait = labels.filter((l) => l.startsWith('wait:'))
@@ -223,7 +225,7 @@ const text = z.string().trim().min(1)
 
 export const RescueAction = z.discriminatedUnion('do', [
   z.object({ do: z.literal('requeue'), queue: z.enum(['task', 'intake']), reason: text }),
-  z.object({ do: z.literal('to-human'), reason: text }),
+  z.object({ do: z.literal('to-human'), reason: text, ask: LenientAsk }),
   z.object({
     do: z.literal('close-issue'),
     as: z.enum(['completed', 'not_planned']).default('completed'),
@@ -381,7 +383,7 @@ ${symptomList(stuck.symptoms)}${previous ? `\n\ncambium has rescued this item ${
 How cambium's queues work (labels are the queue; only cambium moves them):
 - Exactly one queue label: \`${Q.intake}\` (triage decides what it is), \`${Q.task}\` (a task worker turns it into a PR), \`${Q.human}\` (waits for a person, with a \`why:*\` label saying why), \`${Q.promote}\` (merged, awaiting the release promotion).
 - \`${RUNNING}\`: a worker holds a lease on it right now. Without a live worker it is a lost lease.
-- \`why:*\` only with \`${Q.human}\`; \`wait:deferred\` / \`wait:blocked\` only with \`${Q.intake}\` (triage parked it).
+- \`why:*\` and \`ask:*\` (what the person is asked to do) only with \`${Q.human}\`; \`wait:deferred\` / \`wait:blocked\` only with \`${Q.intake}\` (triage parked it).
 - Once a task worker publishes its PR, the issue leaves every queue and the PR graph owns it: it merges a green PR (or waits for a merge queue or a human), reworks a red or conflicting one back through \`${Q.task}\`, and closes the issue when the PR merges.
 - cambium's state comment on the issue holds a hidden JSON marker: the graph and node the issue rests at, and its history. It is below.
 
@@ -392,13 +394,13 @@ How to look:
 - Never \`gh\`. Be quick: a verdict with evidence, not an essay.
 
 Actions, in order (cambium checks them before it does anything; an invalid list sends the issue to a human):
-- \`{ "do": "clear-labels", "labels": ["…"], "reason": "…" }\`: remove stray cambium labels (\`q:*\`, \`${RUNNING}\`, \`why:*\`, \`wait:*\`) and nothing else.
+- \`{ "do": "clear-labels", "labels": ["…"], "reason": "…" }\`: remove stray cambium labels (\`q:*\`, \`${RUNNING}\`, \`why:*\`, \`ask:*\`, \`wait:*\`) and nothing else.
 - \`{ "do": "close-pr", "pr": 123, "reason": "…" }\`: close an open agent PR that is superseded or abandoned.
 - At most one of these, last:
   - \`{ "do": "requeue", "queue": "task" | "intake", "reason": "…" }\`: back to a queue at its start, attempt 1: \`task\` when the work is still clear, \`intake\` when it needs triage again.
   - \`{ "do": "adopt-pr", "pr": 123 }\`: hand an open agent PR that holds the work to the PR graph.
   - \`{ "do": "close-issue", "as": "completed" | "not_planned", "reason": "…" }\`: the work is done (say where) or no longer applies.
-  - \`{ "do": "to-human", "reason": "…" }\`: only a person can unstick it; \`reason\` says exactly what they must decide or do.
+  - \`{ "do": "to-human", "reason": "…", "ask": { … } }\`: only a person can unstick it; \`reason\` says exactly what they must decide or do. Where you can, add \`ask\` so they can answer with one comment: \`{ "kind": "decide" | "verify" | "chore" | "approve", "question": "…", "options": [{ "label": "…", "detail": "…" }], "recommendation": "…", "interactive": false }\` (\`options\`, two or more, only for decide; \`interactive\` true only when a live session with the code would help).
 If it is not actually stuck (cambium's check was wrong), say so with \`"stuck": false\` and no actions; a wrong check is itself a root cause worth a ticket.
 
 Root causes: only ones that need a change and that you can name with evidence (a cambium bug, a missing guard, a config gap, a process that keeps mislabelling). A one-off human relabel needs none. Each ticket's \`body\` is a task a worker could do unattended: the evidence, the change, and acceptance checks. \`fingerprint\` names the cause in a few kebab-case words, the same every time it recurs (e.g. \`sweep-skips-foreign-host-lease\`). \`repo\` is where the change belongs, one of: ${repos.join(', ')} (default ${repo}).

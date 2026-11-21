@@ -21,6 +21,11 @@ GitHub holds cambium's state. Only cambium moves these labels; workers have `gra
 | `why:approve`                                 | A merge only a human may make.                                                                  |
 | `why:reject`                                  | Rejected.                                                                                       |
 | `why:rescue`                                  | The rescue graph could not unstick it.                                                          |
+| `ask:decide`                                  | With `q:human`: a choice only a person can make; the state comment lists the options.           |
+| `ask:verify`                                  | With `q:human`: a check only a person can make, such as on a physical device.                   |
+| `ask:chore`                                   | With `q:human`: offline work, such as a store listing or paperwork.                             |
+| `ask:approve`                                 | With `q:human`: a yes or no on something already written.                                       |
+| `ask:session`                                 | With an `ask:*` kind: a live session with the code would help answer it.                        |
 | `wait:deferred`                               | Parked by a `defer` verdict until `deferUntil`.                                                 |
 | `wait:blocked`                                | Parked until its GitHub "blocked by" issues close.                                              |
 | `red-base`                                    | A repair issue cambium opened for a red base branch.                                            |
@@ -28,7 +33,7 @@ GitHub holds cambium's state. Only cambium moves these labels; workers have `gra
 | `priority:critical` … `priority:low`          | Scheduling order (configurable via `priorityLabels`).                                           |
 | _no `q:` label_, open `agent/*` PR            | Submitted: the PR is in review or the merge queue.                                              |
 
-An open issue carries at most one `q:*` label. `oakgreen setup` creates every label except the priorities.
+An open issue carries at most one `q:*` label. `why:*` and `ask:*` labels leave with `q:human`; a new hand-off into `q:human` replaces the `ask:*` labels. Rescue reports `why:*` or `ask:*` without `q:human` as `why-outside-human`. `oakgreen setup` creates every label except the priorities.
 
 ## State comment
 
@@ -68,7 +73,10 @@ The graph engine writes v2 without `stage`. `node` is where the issue rests; `gr
 | `deferUntil`, `deferReason` | Set at `deferred`.                                                   |
 | `blockedBy`                 | Open blocking issues, set at `blocked`.                              |
 | `reply`                     | Human replies quoted to the next triage, until it lands a verdict.   |
+| `ask`                       | At `to-human`: what the person is asked (`kind`, `question`, `options`, `recommendation`, `interactive`). |
 | `traceparent`               | W3C traceparent of the issue's trace; `null` with tracing off.       |
+
+At `to-human`, the comment renders the `ask` under the status line: the question, the numbered options with their tradeoffs, the recommendation, and how to answer.
 
 A marker at a node the current graph version no longer has restarts at the entry node with a `graph-changed` history entry.
 

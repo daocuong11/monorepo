@@ -431,6 +431,7 @@ const toHuman = declare(
         {
           ...withHistory(m, { ...nodeAt(what), at: iso(ctx.tick.now), attempt: m.attempt, outcome, reason, pr, log }),
           lastFailure: reason,
+          ...(m.ask ? { ask: null } : {}),
           host: null,
           start: null,
           input: null,

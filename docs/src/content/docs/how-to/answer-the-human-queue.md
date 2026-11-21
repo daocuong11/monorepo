@@ -5,9 +5,14 @@ sidebar:
   order: 7
 ---
 
-1. Open canopy (`http://127.0.0.1:4317/`) on the **Inbox** tab. It lists `q:human` issues and issues stranded when their PR closed unmerged. `j`/`k` move, `Enter` reads, `o` opens the issue on GitHub.
-2. Read the reason: the `why:*` label and the last failure in cambium's state comment.
-3. Act on it:
+1. Open canopy (`http://127.0.0.1:4317/`) on the **Inbox** tab. It lists `q:human` issues and issues stranded when their PR closed unmerged, grouped by what answering takes. `j`/`k` move, `Enter` reads, `o` opens the issue on GitHub.
+2. Pick a group to suit where you are:
+   - **Needs a session**: open the code and work it through.
+   - **Answer in a comment**: the state comment lists the options and a recommendation; reply with your choice.
+   - **Offline chores**: checks and chores away from the keyboard; comment when each is done.
+   - **Approvals**: review and merge.
+3. Read the reason: the `why:*` label, the ask, and the last failure in cambium's state comment.
+4. Act on it:
 
    | Label | Meaning | What to do |
    | --- | --- | --- |
@@ -25,7 +30,7 @@ The same applies to issues parked as deferred or blocked: a reply gets them tria
 
 ## Requeue by hand
 
-Move the issue's label from `q:human` to `q:task` (straight to work) or `q:intake` (triage again), and remove its `why:*` label.
+Move the issue's label from `q:human` to `q:task` (straight to work) or `q:intake` (triage again), and remove its `why:*` and `ask:*` labels.
 
 ## Re-triage the whole queue daily
 

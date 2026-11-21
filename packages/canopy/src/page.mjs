@@ -1,5 +1,5 @@
 // @ts-check
-import { facetsOf, inboxItems, inboxStats, priorityRank, viewOf } from './inbox.mjs'
+import { facetsOf, groupOf, inboxGroups, inboxItems, inboxStats, priorityRank, viewOf } from './inbox.mjs'
 import { autoApproved, flameFrames, flameTree } from './flame.mjs'
 import { markdown } from './markdown.mjs'
 import { layoutGraph } from './graph-layout.mjs'
@@ -103,6 +103,8 @@ color:var(--text);font-weight:500;border:1px solid color-mix(in srgb,var(--accen
 .ib-list{padding:0}
 .ib-list .row:last-child{border-radius:0 0 5px 5px}
 .ib-list ul{list-style:none;margin:0;padding:0}
+.ib-group{display:flex;justify-content:space-between;gap:var(--s2);padding:6px var(--s3) 4px;border-top:1px solid var(--line);background:var(--chip);font-size:11.5px;font-weight:600;letter-spacing:.02em;color:var(--muted)}
+.ib-group .n{font-weight:400;color:var(--faint)}
 .row{display:grid;gap:3px;padding:10px var(--s3);border-top:1px solid var(--line);cursor:pointer;outline:none}
 
 .row:hover{background:color-mix(in srgb,var(--chip) 70%,transparent)}
@@ -349,7 +351,7 @@ box-shadow:0 12px 40px -8px rgb(0 0 0 / .32);transform:translateX(-104%);visibil
 `
 
 const JS = `
-${[inboxItems, priorityRank, facetsOf, viewOf, inboxStats, markdown, autoApproved, flameTree, flameFrames, layoutGraph].map(String).join('\n')}
+${[inboxItems, priorityRank, groupOf, inboxGroups, facetsOf, viewOf, inboxStats, markdown, autoApproved, flameTree, flameFrames, layoutGraph].map(String).join('\n')}
 const $ = (id) => document.getElementById(id)
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag)
@@ -559,7 +561,9 @@ const TAG_TITLE = { 'kind:human': 'In the Human Queue (q:human)', 'kind:stranded
 
 function inboxSplit(gh, multi, now) {
   const all = inboxItems(gh)
-  const shown = viewOf(all, { sort: ibSort, tags: ibTags })
+  // Grouped by what answering takes (inbox.mjs inboxGroups); the sort holds within each group.
+  const groups = inboxGroups(viewOf(all, { sort: ibSort, tags: ibTags }))
+  const shown = groups.flatMap((g) => g.items)
   ibShown = shown
   // Keep the selection while it is in the list; an issue that has left the inbox stays open (marked as gone)
   // if it was already read, rather than jumping away while someone is reading it.
@@ -599,11 +603,14 @@ function inboxSplit(gh, multi, now) {
       h('button', { class: 'linkish', type: 'button', 'data-clear': '', 'data-fk': 'clear' }, 'Clear'))) : null
 
   const focusable = sel ? sel.key : shown[0] && shown[0].key
-  const rows = shown.map((it) => h('li', { class: 'row', role: 'option', 'data-key': it.key, 'data-fk': 'row:' + it.key,
+  const row = (it) => h('li', { class: 'row', role: 'option', 'data-key': it.key, 'data-fk': 'row:' + it.key,
       'aria-selected': String(it.key === ibSel), tabindex: it.key === focusable ? 0 : -1 },
     h('span', { class: 'row-t', title: it.title }, h('span', { class: 'faint' }, '#' + it.number + ' '), it.title),
     h('span', { class: 'meta' }, whyOf(it), prio(it.priority), multi ? h('span', {}, it.repo.split('/')[1]) : null,
-      h('span', { class: 'faint age', title: it.at || '' }, ago(it.at, now)))))
+      h('span', { class: 'faint age', title: it.at || '' }, ago(it.at, now))))
+  const rows = groups.flatMap((g) => [
+    h('li', { class: 'ib-group', role: 'presentation', title: g.hint }, h('span', {}, g.label), h('span', { class: 'n' }, g.items.length)),
+    ...g.items.map(row)])
   const side = h('div', { class: 'ib-side' },
     h('section', { class: 'ib-list attn' }, tools, active, rows.length
       ? h('ul', { role: 'listbox', 'aria-label': 'Inbox' }, rows)

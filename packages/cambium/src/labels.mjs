@@ -13,6 +13,10 @@ export const RUNNING = 'running'
  * `blockedBy` issues. Any queue move drops them unless it names one again.
  */
 export const WAIT = /** @type {const} */ ({ deferred: 'wait:deferred', blocked: 'wait:blocked' })
+/**
+ * Why an issue is in q:human. Beside it, an `ask:*` label (ask.mjs) may say what the person is asked to do. Both
+ * leave with `q:human`; a new hand-off into it replaces the ask.
+ */
 export const WHY = /** @type {const} */ ({
   budget: 'why:budget',
   reject: 'why:reject',
@@ -33,11 +37,14 @@ export const queueOf = (labels) => labels.find((l) => l.startsWith('q:')) ?? nul
  */
 export function move(labels, target, { running = false, extra = [] } = {}) {
   const want = new Set([...(target ? [target] : []), ...extra, ...(running ? [RUNNING] : [])])
+  // A hand-off into q:human names its reason (`why:*`); its ask, if any, replaces the one there before.
+  const handOff = target === Q.human && extra.some((l) => l.startsWith('why:'))
   const leaving = (/** @type {string} */ l) =>
     !want.has(l) &&
     ((l.startsWith('q:') && l !== target) ||
       l === RUNNING ||
       (l.startsWith('why:') && target !== Q.human) ||
+      (l.startsWith('ask:') && (target !== Q.human || handOff)) ||
       l.startsWith('wait:'))
   return {
     add: [...want].filter((l) => !labels.includes(l)),

@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { cachedIssues } from '../src/github.mjs'
-import { facetsOf, inboxItems, inboxStats, priorityRank, viewOf } from '../src/inbox.mjs'
+import { facetsOf, groupOf, inboxGroups, inboxItems, inboxStats, priorityRank, viewOf } from '../src/inbox.mjs'
 import { issueDetail } from '../src/issue.mjs'
 import { markdown } from '../src/markdown.mjs'
 import { iso, T0 } from './fixtures.mjs'
@@ -48,6 +48,47 @@ test('inboxItems: q:human and stranded as one list, tagged by facet; stranded da
   assert.equal(s.kind, 'stranded')
   assert.equal(s.key, `${REPO}#9`)
   assert.equal(s.at, s.pr.closedAt)
+})
+
+test('inboxGroups: by what answering takes, in a fixed order; items with no ask still show', () => {
+  const xs = inboxItems({
+    columns: {
+      human: [
+        item(11, ['q:human', 'why:triage', 'ask:decide', 'ask:session'], 1),
+        item(12, ['q:human', 'why:triage', 'ask:decide'], 2),
+        item(13, ['q:human', 'why:triage', 'ask:chore'], 3),
+        item(14, ['q:human', 'why:rescue', 'ask:verify', 'ask:session'], 4),
+        item(15, ['q:human', 'why:approve'], 5),
+        item(16, ['q:human', 'why:budget'], 6),
+        item(17, ['q:human', 'why:triage'], 7),
+        item(18, ['q:human'], 8),
+        item(19, ['q:human', 'why:triage', 'ask:decide'], 9),
+      ],
+    },
+    stranded: gh().stranded,
+  })
+  assert.deepEqual(
+    xs.map((x) => groupOf(x)),
+    ['session', 'comment', 'chores', 'chores', 'approvals', 'session', 'other', 'other', 'comment', 'stranded'],
+  )
+  const groups = inboxGroups(viewOf(xs, { sort: 'newest', tags: new Set() }))
+  assert.deepEqual(
+    groups.map((g) => [g.label, keys(g.items)]),
+    [
+      ['Needs a session', [11, 16]],
+      ['Answer in a comment', [12, 19]],
+      ['Offline chores', [13, 14]],
+      ['Approvals', [15]],
+      ['Other', [17, 18]],
+      ['PR closed', [9]],
+    ],
+  )
+  assert.equal(groups.flatMap((g) => g.items).length, xs.length, 'every item is in one group')
+  assert.deepEqual(
+    inboxGroups(inboxItems(gh())).map((g) => g.id),
+    ['session', 'approvals', 'other', 'stranded'],
+    'empty groups are left out',
+  )
 })
 
 test('viewOf sorts newest, oldest, or by priority (then newest)', () => {

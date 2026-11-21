@@ -35,11 +35,26 @@ The header always shows mode and last tick. The tab is kept in the URL hash.
 
 | Tab | Hash | Shows |
 | --- | --- | --- |
-| Inbox | `#inbox`, `#inbox/<owner>/<name>/<n>` | `q:human` items and stranded issues, in a list beside a reading pane. |
+| Inbox | `#inbox`, `#inbox/<owner>/<name>/<n>` | `q:human` items and stranded issues, grouped, in a list beside a reading pane. |
 | Queue | `#queue` | Triage, Running and Pull requests; the `q:intake`, `q:task` and `q:promote` lanes; a band of every issue by stage. |
 | Graphs | `#graphs`, `#graphs/<name>` | Each cambium graph drawn, with the last 24 hours of moves replayed. |
 | Traces | `#traces`, `#traces/<trace id>` | One row per traced run; a span waterfall per run. |
 | Health | `#health` | Last tick, workers, events. |
+
+### Inbox groups
+
+Each item sits in the first group it matches. Empty groups are hidden; the sort applies within each group.
+
+| Group | Labels |
+| --- | --- |
+| Needs a session | `why:budget`, or `ask:decide` with `ask:session` |
+| Answer in a comment | any other `ask:decide` |
+| Offline chores | `ask:verify`, `ask:chore` |
+| Approvals | `why:approve`, `ask:approve` |
+| Other | no `ask:*` label to go by |
+| PR closed | stranded issues |
+
+Approvals are matched before the other groups.
 
 ### Inbox keys
 

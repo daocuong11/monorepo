@@ -143,7 +143,8 @@ test('findStuck: labels that break the queue rules', () => {
       issue({ number: 4, labels: ['q:task', 'wait:deferred'] }),
       issue({ number: 5, state: 'CLOSED', labels: ['q:task', 'running'] }),
       issue({ number: 6, state: 'CLOSED', labels: ['q:promote'] }),
-      issue({ number: 7, labels: ['q:human', 'why:budget'] }),
+      issue({ number: 7, labels: ['q:human', 'why:budget', 'ask:chore'] }),
+      issue({ number: 9, labels: ['q:intake', 'ask:decide'] }),
       issue({
         number: 8,
         labels: ['q:intake', 'wait:blocked'],
@@ -159,6 +160,7 @@ test('findStuck: labels that break the queue rules', () => {
     [3, ['why-outside-human']],
     [4, ['wait-outside-intake']],
     [5, ['closed-labelled']],
+    [9, ['why-outside-human']],
   ])
 })
 
@@ -438,6 +440,22 @@ test('an invalid verdict hands the item to a human with why:rescue', async () =>
   assert.equal(m?.node, 'to-human')
   assert.match(String(m?.lastFailure), /#99 is not an open agent PR/)
   assert.match(comments(h, 7)[0], /needs a person/)
+})
+
+test('a to-human action carries its ask: ask:* labels beside why:rescue, rendered in the state comment', async () => {
+  const h = rig({ issues: [{ number: 7, labels: ['q:task', 'q:human'] }] })
+  const ask = { kind: 'verify', question: 'Does the build run on a real iPhone?', interactive: false }
+  await rescueWith(h, 7, {
+    stuck: true,
+    how: 'x',
+    actions: [
+      { do: 'clear-labels', labels: ['q:task'] },
+      { do: 'to-human', reason: 'only a device check unsticks it', ask },
+    ],
+  })
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['ask:verify', 'q:human', 'why:rescue'])
+  assert.deepEqual(h.gh.marker(7)?.ask, ask)
+  assert.match(h.gh.issue(7).comment?.body ?? '', /\*\*Verify:\*\* Does the build run on a real iPhone\?/)
 })
 
 test('an item unstuck while it was diagnosed: the verdict is not applied', async () => {

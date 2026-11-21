@@ -47,6 +47,50 @@ export function inboxItems(gh) {
   ]
 }
 
+/**
+ * @typedef {{ id: string, label: string, hint: string, items: InboxItem[] }} Group
+ */
+
+/**
+ * Which Inbox group an item is in, by its `why:*` and `ask:*` labels (cambium's ask.mjs): what answering it takes.
+ * `approvals`: a merge only a person may make (`why:approve`, `ask:approve`). `session`: worth a live session
+ * (`why:budget`, or an interactive decision: `ask:decide` with `ask:session`). `comment`: any other decision.
+ * `chores`: offline work or a check (`ask:verify`, `ask:chore`). `other`: no ask to go by. `stranded`: a closed PR.
+ *
+ * @param {InboxItem} it @returns {string}
+ */
+export function groupOf(it) {
+  const has = (/** @type {string} */ l) => it.labels.includes(l)
+  if (it.kind === 'stranded') return 'stranded'
+  if (has('why:approve') || has('ask:approve')) return 'approvals'
+  if (has('why:budget') || (has('ask:decide') && has('ask:session'))) return 'session'
+  if (has('ask:decide')) return 'comment'
+  if (has('ask:verify') || has('ask:chore')) return 'chores'
+  return 'other'
+}
+
+/**
+ * The items in their groups, in a fixed order, each keeping the order it was given in; empty groups are left out.
+ *
+ * @param {InboxItem[]} items @returns {Group[]}
+ */
+export function inboxGroups(items) {
+  const GROUPS = [
+    ['session', 'Needs a session', 'An interactive decision or a spent budget: sit down with the code'],
+    ['comment', 'Answer in a comment', 'A decision cambium wrote up: reply with your choice'],
+    ['chores', 'Offline chores', 'Checks and chores away from the keyboard: comment when done'],
+    ['approvals', 'Approvals', 'A merge only a person may make'],
+    ['other', 'Other', 'No ask to go by: read the state comment'],
+    ['stranded', 'PR closed', 'Agent PR closed unmerged; the issue is in no queue'],
+  ]
+  return GROUPS.map(([id, label, hint]) => ({
+    id,
+    label,
+    hint,
+    items: items.filter((it) => groupOf(it) === id),
+  })).filter((g) => g.items.length)
+}
+
 /** cambium's priorities, most urgent first; anything else sorts after them, and no priority last. */
 export function priorityRank(/** @type {string | null | undefined} */ p) {
   const i = ['critical', 'high', 'medium', 'low'].indexOf(p || '')

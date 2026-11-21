@@ -5,6 +5,7 @@
  * stub below and leaves `q:intake` alone.
  */
 import { z } from 'zod'
+import { askError, LenientAsk } from '../ask.mjs'
 
 /**
  * @typedef {{ repo: string, intake: import('../github.mjs').Issue[], capacity: number, now: number }} DispatchInput
@@ -28,6 +29,8 @@ export const TriageResult = z
     reason: z.string().trim().min(1),
     title: z.string().trim().min(1).optional(),
     acceptance: z.array(z.string().trim().min(1)).optional(),
+    /** For needs-human: what the person is asked to do (ask.mjs). An invalid one is dropped, not fatal. */
+    ask: LenientAsk,
   })
   .refine((r) => r.verdict !== 'duplicate' || r.duplicateOf !== undefined, {
     message: 'a duplicate verdict needs duplicateOf',
@@ -116,7 +119,15 @@ export function readTriage(log, issue) {
     return { ok: false, error: `invalid triage result: duplicateOf: #${issue} cannot duplicate itself` }
   if (parsed.data.verdict === 'blocked' && parsed.data.blockedBy?.includes(issue))
     return { ok: false, error: `invalid triage result: blockedBy: #${issue} cannot block itself` }
-  return { ok: true, result: parsed.data }
+  const { ask, ...rest } = parsed.data
+  if (rest.verdict !== 'needs-human') return { ok: true, result: rest }
+  const bad = askError(/** @type {any} */ (read.json)?.ask)
+  if (bad)
+    return {
+      ok: true,
+      result: { ...rest, reason: `${rest.reason}\n\n(triage's ask was invalid and was dropped: ${bad})` },
+    }
+  return { ok: true, result: ask ? { ...rest, ask } : rest }
 }
 
 /**
@@ -155,11 +166,15 @@ Your one job: decide what happens to GitHub issue #${issue.number} (below), whic
 
 Verdicts:
 - actionable: a worker could do it unattended from what is written (plus what you add), and would know when it is done. It goes to the task queue. When the issue lacks a clear task or checkable acceptance criteria, give \`title\` (an imperative task title) and \`acceptance\` (checks a reviewer can verify; CI green is always required, so do not list only that). cambium posts them on the issue and hands them to the task worker.
-- needs-human: too foggy to ticket; a decision only a human can make (direction, priority, money, access, policy); information no one but a human has; or work that is not a code change in this repository. \`reason\` says exactly what the human must decide or supply. Never for something a machine can check, now or later.
+- needs-human: too foggy to ticket; a decision only a human can make (direction, priority, money, access, policy); information no one but a human has; or work that is not a code change in this repository. \`reason\` says exactly what the human must decide or supply. Never for something a machine can check, now or later. Fill \`ask\` so the person can answer with one comment:
+  - \`kind\`: \`decide\` (a choice only a person can make), \`verify\` (a check only a person can make: a physical device, an account no machine can reach), \`chore\` (offline work: a store listing, paperwork, a console setting) or \`approve\` (a yes or no on something already written).
+  - \`question\`: the one question, answerable in a comment. For \`decide\`, \`options\` (two or more, each a \`label\` and the tradeoff in \`detail\`) and, where you have one, \`recommendation\`.
+  - \`interactive\`: true only when a live session with the code would help the person answer (a design choice to explore); false for chores, checks and plain choices.
+  If the issue waits on another open issue that is itself a human chore or check, it is blocked by that issue, not needs-human: do not ask again what that issue already asks.
 - duplicate: the same work as another issue, open or closed. \`duplicateOf\` is that issue's number (never #${issue.number}); \`reason\` says why they are the same.
 - obsolete: the work no longer applies, and you verified it: the code path is gone, the bug is already fixed on ${baseBranch}, or its verification already passed. cambium closes it as not planned. \`reason\` gives the evidence (commit, file, run).
 - defer: the verdict hangs on something a machine can check later but not yet: a CI or CD run that has not happened, a release, a PR still merging, a deploy, an upstream fix. cambium triages it again after \`recheckHours\` (default ${deferHours}). \`reason\` says exactly what to check next time and what each answer means (e.g. "next main cd run green → obsolete; red → actionable"). Not for waiting on another issue: that is blocked.
-- blocked: it cannot start until other issues in ${repo} are done. \`blockedBy\` lists their numbers (never #${issue.number}); cambium records each as a GitHub "blocked by" link on this issue and triages it again as soon as the last of them closes, not on a timer. \`reason\` says what each blocker must deliver.
+- blocked: it cannot start until other issues in ${repo} are done (including an open issue waiting on a person for a chore or check). \`blockedBy\` lists their numbers (never #${issue.number}); cambium records each as a GitHub "blocked by" link on this issue and triages it again as soon as the last of them closes, not on a timer. \`reason\` says what each blocker must deliver.
 
 How to look:
 - Read the code here (Read, Glob, Grep) to judge what the change touches and whether it already exists.
@@ -171,9 +186,9 @@ How to look:
 
 End your final message with exactly one fenced JSON block, and nothing after it:
 \`\`\`json
-{ "verdict": "actionable" | "needs-human" | "duplicate" | "obsolete" | "defer" | "blocked", "duplicateOf": 123, "blockedBy": [124], "recheckHours": 6, "reason": "…", "title": "…", "acceptance": ["…"] }
+{ "verdict": "actionable" | "needs-human" | "duplicate" | "obsolete" | "defer" | "blocked", "duplicateOf": 123, "blockedBy": [124], "recheckHours": 6, "reason": "…", "title": "…", "acceptance": ["…"], "ask": { "kind": "decide" | "verify" | "chore" | "approve", "question": "…", "options": [{ "label": "…", "detail": "…" }], "recommendation": "…", "interactive": false } }
 \`\`\`
-\`duplicateOf\` only for duplicate; \`blockedBy\` only for blocked; \`recheckHours\` only for defer, and optional; \`title\` and \`acceptance\` only for actionable, and optional. A missing or malformed block sends the issue to a human with the error.
+\`duplicateOf\` only for duplicate; \`blockedBy\` only for blocked; \`recheckHours\` only for defer, and optional; \`title\` and \`acceptance\` only for actionable, and optional; \`ask\` only for needs-human (\`options\` only for decide, \`recommendation\` optional). A missing or malformed block sends the issue to a human with the error.
 ${deferred ? `\nThis is re-triage ${deferred.count + 1}: an earlier triage deferred it to check this:\n${deferred.reason}\nCheck it now. If it still cannot be checked, defer again.\n` : ''}${blocked ? `\nAn earlier triage found it blocked by ${blocked.by.map((n) => `#${n}`).join(', ')}, now closed:\n${blocked.reason}\nJudge it again now that they are done.\n` : ''}${replied ? repliedNote(replied) : ''}${others ? `\nOther issues in cambium's queues right now:\n${others}\n` : ''}
 --- Issue #${issue.number}: ${issue.title} (${issue.url})
 ${issue.body}
