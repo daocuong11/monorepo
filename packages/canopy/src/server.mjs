@@ -1,5 +1,7 @@
 // @ts-check
+import { existsSync } from 'node:fs'
 import { createServer } from 'node:http'
+import { join } from 'node:path'
 import { isSlug } from './config.mjs'
 import { readHeartbeat as defaultReadHeartbeat } from './heartbeat.mjs'
 import { PAGE } from './page.mjs'
@@ -21,8 +23,30 @@ export const POLL_MS = 5000
  *   notes?: string[],
  *   traces?: import('./traces.mjs').TraceStore,
  *   issues?: { get(slug: string, number: number): Promise<import('./github.mjs').IssueRead> },
+ *   briefs?: Briefs,
  * }} AppOptions
+ * @typedef {{ dir: string, paths: Record<string, string>, exists?: (path: string) => boolean }} Briefs
+ *   cambium's session briefs: `<dir>/<owner>__<repo>/issue-<n>.md`, written for the `q:human` items worth an
+ *   interactive session. `paths`: each repo's checkout, for the `cd` in the command.
  */
+
+/** A POSIX shell word: as is when safe, else single-quoted. @param {string} s */
+export const shellWord = (s) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`)
+
+/**
+ * The session brief cambium wrote for this item, and the command that starts a session with it; null when there is
+ * none (not a session candidate, or cambium has not written it yet).
+ *
+ * @param {Briefs} briefs @param {{ repo: string, number: number }} item
+ * @returns {{ path: string, command: string } | null}
+ */
+export function briefOf({ dir, paths, exists = existsSync }, { repo, number }) {
+  const path = join(dir, repo.replace('/', '__'), `issue-${number}.md`)
+  if (!exists(path)) return null
+  const run = `claude "$(cat ${shellWord(path)})"`
+  const cwd = paths[repo]
+  return { path, command: cwd ? `cd ${shellWord(cwd)} && ${run}` : run }
+}
 
 /** Repos named on the command line or in cambium's config, else the ones the heartbeat lists. */
 const reposFor = (/** @type {string[]} */ fixed, /** @type {import('./heartbeat.mjs').Heartbeat} */ hb) =>
@@ -41,12 +65,20 @@ export async function buildState({
   now = Date.now,
   notes = [],
   traces,
+  briefs,
 }) {
   const [heartbeat, traceFile] = await Promise.all([readHeartbeat(statePath), traces?.read()])
   const slugs = reposFor(repos, heartbeat)
   const github = slugs.length
     ? await queues.get(slugs)
     : { repos: [], columns: emptyColumns(), prs: [], stranded: [], fetchedAt: null, cached: false }
+  // Copies: the queue answer is cached and shared between requests.
+  const human = briefs
+    ? github.columns.human.map((i) => {
+        const brief = briefOf(briefs, i)
+        return brief ? { ...i, brief } : i
+      })
+    : github.columns.human
   return {
     now: new Date(now()).toISOString(),
     pollMs: POLL_MS,
@@ -55,7 +87,7 @@ export async function buildState({
       ? notes
       : [...notes, 'no repositories to read: pass --repo owner/name or set repos in cambium config'],
     heartbeat,
-    github,
+    github: { ...github, columns: { ...github.columns, human } },
     traces: traceFile ? traceIndex(traceFile, now()) : null,
   }
 }

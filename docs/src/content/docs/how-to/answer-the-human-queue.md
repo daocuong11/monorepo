@@ -17,6 +17,16 @@ sidebar:
    | `why:rescue` | the rescue graph could not unstick it | read rescue's report comment, fix by hand |
    | **PR closed** | the agent PR closed unmerged; no queue holds the issue | requeue it, or close it |
 
+## Work it in an interactive session
+
+For a `why:budget` item, cambium writes a session brief: the issue, what each attempt tried and why it failed, the last failure, its PRs, and the repository's verify and publish commands. canopy shows it in the reading pane under **Interactive session**.
+
+1. Select **Copy**. The command looks like `cd ~/src/repo && claude "$(cat ~/.cambium/briefs/owner__repo/issue-42.md)"`.
+2. Paste it into a terminal. claude starts in the repository with the brief as its first message.
+3. Once the fix is published, move the issue out of `q:human`. The brief is deleted on the next tick.
+
+Other `q:human` items get no brief and no command.
+
 ## Reply to send it back
 
 With the graph engine and triage on, comment on the issue. A comment from a person (not a bot, not the App) wakes it: cambium moves it back to `q:intake`, and triage reads your reply with the original question. This works for every `why:*` except `why:approve`.

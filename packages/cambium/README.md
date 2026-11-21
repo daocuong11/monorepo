@@ -94,6 +94,12 @@ A worker is `claude -p --output-format stream-json --verbose --thinking-display 
 
 The prompt states the four-point contract (task issue, `pnpm verify`, `graft publish <branch> … --closes <n>`, `graft ci wait`), the attempt, the existing PR if any (`graft advance` onto it), the last failure, the issue's history, the issue body, and the worktree's `AGENTS.md`.
 
+## Session briefs
+
+A `q:human` item worth an interactive session gets a brief at `<paths.home>/briefs/<owner>__<name>/issue-<n>.md` (src/briefs.mjs). One function, `isSessionCandidate`, decides who: today an open issue with `q:human` and `why:budget`. Every tick (paused too; nothing goes to GitHub) cambium renders each candidate's brief from the snapshot and rewrites the file when the text changed, so it follows the issue into `q:human` and every marker change; any other `issue-<n>.md` in a read repo's directory is deleted (the issue left `q:human`, or closed). A repo whose read failed is left alone.
+
+A brief holds the title, link, body (first 4,000 characters) and acceptance checks (triage's, else the body's checkboxes); graph, node, attempts, reworks, `failedSha`, `lastFailure` and the marker history; the issue's agent PRs, plus any the history names; the reasons in the history, as approaches already rejected; the question, options and recommendation when the marker has an `ask`; and the repo path with the verify and publish contract. Token-shaped text (provider tokens, bearer auth, URL credentials, the value of any `*TOKEN*`/`*SECRET*`/`*PASSWORD*`/`*KEY*` assignment) becomes `[redacted]`. Files are written `0600`. canopy shows `cd <repo> && claude "$(cat <brief>)"` for each item with a brief.
+
 ## Configuration
 
 One JSON file. Everything but `repos` is optional; these are the defaults:

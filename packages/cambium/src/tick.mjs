@@ -19,6 +19,7 @@ import { releaseGraphs } from './graphs/release.mjs'
 import { DISPATCH_NOT_BUILT, dispatchNotBuilt } from './phases/dispatch.mjs'
 import { isRepair } from './base-health.mjs'
 import { stopOverdue } from './workers.mjs'
+import { syncBriefs } from './briefs.mjs'
 
 /**
  * @typedef {import('./github.mjs').Issue} Issue
@@ -41,6 +42,7 @@ import { stopOverdue } from './workers.mjs'
  *   telemetry?: import('./tracing.mjs').Telemetry,
  *   updater?: import('./update.mjs').Updater,
  *   gc?: () => Promise<unknown>,
+ *   briefs?: { dir: string, fs?: import('./briefs.mjs').BriefFs },
  *   daemonStartedAt?: number,
  *   pid?: number,
  * }} Deps
@@ -98,6 +100,7 @@ export async function tick(deps) {
     ...(paused ? [] : /** @type {[string, any][]} */ ([['release', release]])),
     ...(paused || !engine.upkeep ? [] : /** @type {[string, StepFn][]} */ ([['upkeep', engine.upkeep]])),
     ...(paused || !deps.gc ? [] : /** @type {[string, StepFn][]} */ ([['gc', gc]])),
+    ...(deps.briefs ? /** @type {[string, StepFn][]} */ ([['briefs', briefs]]) : []),
   ]
   for (const [name, fn] of steps) await runStep(deps, ctx, name, () => fn(deps, ctx))
   const state = heartbeatState(deps, ctx)
@@ -744,4 +747,18 @@ export function heartbeatState(deps, ctx) {
     engine: config.engine,
     graphs: graphDescriptions(),
   }
+}
+
+// ---- Briefs
+
+/**
+ * Session briefs (briefs.mjs) for the `q:human` items worth an interactive session, from this tick's snapshots.
+ * Local files only; runs while paused too, since it changes nothing on GitHub.
+ * @param {Deps} deps @param {Ctx} ctx
+ */
+async function briefs(deps, ctx) {
+  if (!deps.briefs) return
+  const { written, removed } = syncBriefs({ ...deps.briefs, config: deps.config, snaps: ctx.snaps })
+  for (const p of written) deps.log('info', `session brief written: ${p}`)
+  for (const p of removed) deps.log('info', `session brief removed: ${p}`)
 }
