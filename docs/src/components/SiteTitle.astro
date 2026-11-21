@@ -1,0 +1,43 @@
+---
+import Ring from './Ring.astro'
+const { siteTitle, siteTitleHref } = Astro.locals.starlightRoute
+---
+
+<a href={siteTitleHref} class="site-title">
+	<Ring class="mark" strokeWidth={40} />
+	<span class="word" translate="no">{siteTitle}</span>
+</a>
+
+<style>
+	.site-title {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		min-width: 0;
+		color: var(--og-brand);
+		text-decoration: none;
+		white-space: nowrap;
+	}
+	.mark {
+		flex: none;
+		width: 1.75rem;
+		height: 1.75rem;
+		transition: transform 600ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	.word {
+		overflow: hidden;
+		font-size: 1rem;
+		font-weight: 300;
+		letter-spacing: 0.28em;
+		text-transform: uppercase;
+		color: var(--sl-color-white);
+	}
+	.site-title:hover .mark {
+		transform: rotate(-30deg);
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.mark {
+			transition: none;
+		}
+	}
+</style>
