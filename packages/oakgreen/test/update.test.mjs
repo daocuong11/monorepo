@@ -2,20 +2,24 @@
 /** `oakgreen update` with a fake registry, npm and launchd; nothing leaves the process. */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { installOf, latestVersion, newer } from '../src/update.mjs'
-import { run } from './helpers.mjs'
+import { globalTools, installOf, latestManifest, newer, staleTools } from '../src/update.mjs'
+import { run, tempDir } from './helpers.mjs'
 
-/** @param {{ latest?: string, current?: string, global?: boolean, fail?: string }} [o] */
-function fakeUpdater({ latest = '0.1.0', current = '0.0.31', global = true, fail } = {}) {
-  const installs = /** @type {{ prefix: string, version: string }[]} */ ([])
+/**
+ * @param {{ latest?: string, current?: string, global?: boolean, fail?: string,
+ *   pins?: Record<string, string>, tools?: Record<string, string> }} [o]
+ */
+function fakeUpdater({ latest = '0.1.0', current = '0.0.31', global = true, fail, pins = {}, tools = {} } = {}) {
+  const installs = /** @type {{ prefix: string, specs: string[] }[]} */ ([])
   /** @type {import('../src/update.mjs').Updater} */
   const updater = {
     current,
     installOf: () => (global ? { prefix: '/opt/homebrew', dir: '/opt/homebrew/lib/node_modules/oakgreen' } : null),
-    latest: async () => latest,
-    install: async (prefix, version) => {
+    latest: async () => ({ version: latest, dependencies: pins }),
+    globals: () => tools,
+    install: async (prefix, specs) => {
       if (fail) throw new Error(fail)
-      installs.push({ prefix, version })
+      installs.push({ prefix, specs })
     },
   }
   return { updater, installs }
@@ -74,7 +78,7 @@ test('installs into the same prefix, then restarts only the running services', a
   const lc = fakeLaunchctl(['cambium'])
   const r = await run(['update'], ports({ updater, exec: lc.exec }))
   assert.equal(r.code, 0, r.err)
-  assert.deepEqual(installs, [{ prefix: '/opt/homebrew', version: '0.1.0' }])
+  assert.deepEqual(installs, [{ prefix: '/opt/homebrew', specs: ['oakgreen@0.1.0'] }])
   assert.match(r.out, /✓ oakgreen 0\.0\.31 → 0\.1\.0/)
   assert.match(r.out, /✓ cambium {2}restarted, pid 101 → 102/)
   assert.doesNotMatch(r.out, /mycelium|otelcol/)
@@ -82,6 +86,46 @@ test('installs into the same prefix, then restarts only the running services', a
     lc.calls.filter((c) => c[1] === 'kill'),
     [['launchctl', 'kill', 'TERM', 'gui/501/com.oakgreencc.cambium']],
   )
+})
+
+test('standalone tools older than the pins are upgraded in the same install; newer or unpinned ones are left', async () => {
+  const { updater, installs } = fakeUpdater({
+    pins: { '@oakgreencc/cambium': '0.0.45', '@oakgreencc/graft': '0.2.21', '@oakgreencc/canopy': '0.0.29' },
+    tools: { '@oakgreencc/cambium': '0.0.38', '@oakgreencc/graft': '0.2.30', '@oakgreencc/other': '0.0.1' },
+  })
+  const lc = fakeLaunchctl(['cambium'])
+  const r = await run(['update'], ports({ updater, exec: lc.exec }))
+  assert.equal(r.code, 0, r.err)
+  assert.deepEqual(installs, [{ prefix: '/opt/homebrew', specs: ['oakgreen@0.1.0', '@oakgreencc/cambium@0.0.45'] }])
+  assert.match(r.out, /✓ @oakgreencc\/cambium 0\.0\.38 → 0\.0\.45/)
+  assert.doesNotMatch(r.out, /graft|canopy|other/)
+  assert.match(r.out, /✓ cambium {2}restarted/)
+})
+
+test('oakgreen current but a standalone tool behind: upgrades the tool and restarts', async () => {
+  const { updater, installs } = fakeUpdater({
+    latest: '0.0.31',
+    pins: { '@oakgreencc/cambium': '0.0.45' },
+    tools: { '@oakgreencc/cambium': '0.0.38' },
+  })
+  const lc = fakeLaunchctl(['cambium'])
+  const r = await run(['update'], ports({ updater, exec: lc.exec }))
+  assert.equal(r.code, 0, r.err)
+  assert.deepEqual(installs, [{ prefix: '/opt/homebrew', specs: ['@oakgreencc/cambium@0.0.45'] }])
+  assert.doesNotMatch(r.out, /up to date|✓ oakgreen/)
+  assert.equal(lc.calls.filter((c) => c[1] === 'kill').length, 1)
+})
+
+test('--check lists stale standalone tools too', async () => {
+  const { updater, installs } = fakeUpdater({
+    latest: '0.0.31',
+    pins: { '@oakgreencc/cambium': '0.0.45' },
+    tools: { '@oakgreencc/cambium': '0.0.38' },
+  })
+  const r = await run(['update', '--check'], ports({ updater, exec: fakeLaunchctl([]).exec }))
+  assert.equal(r.code, 0)
+  assert.match(r.out, /@oakgreencc\/cambium 0\.0\.38 → 0\.0\.45 available/)
+  assert.deepEqual(installs, [])
 })
 
 test('not a global install: refuses, installs nothing', async () => {
@@ -132,17 +176,40 @@ test('newer compares x.y.z numerically', () => {
   assert.equal(newer('1.0.0-rc.1', '0.9.9'), true)
 })
 
-test('latestVersion reads the latest dist-tag', async () => {
+test('staleTools: only older, exactly pinned tools', () => {
+  assert.deepEqual(
+    staleTools(
+      { '@oakgreencc/a': '1.0.0', '@oakgreencc/b': '1.0.0', '@oakgreencc/c': 'workspace:*', '@oakgreencc/d': '^2.0.0' },
+      { '@oakgreencc/a': '0.9.0', '@oakgreencc/b': '1.0.0', '@oakgreencc/c': '0.1.0', '@oakgreencc/d': '1.0.0' },
+    ),
+    [{ name: '@oakgreencc/a', from: '0.9.0', to: '1.0.0' }],
+  )
+})
+
+test('globalTools reads each scoped package version under the prefix', () => {
+  const prefix = tempDir({
+    'lib/node_modules/@oakgreencc/cambium/package.json': JSON.stringify({ version: '0.0.38' }),
+    'lib/node_modules/@oakgreencc/broken/package.json': '{',
+    'lib/node_modules/oakgreen/package.json': JSON.stringify({ version: '0.0.63' }),
+  })
+  assert.deepEqual(globalTools(prefix), { '@oakgreencc/cambium': '0.0.38' })
+  assert.deepEqual(globalTools(`${prefix}/missing`), {})
+})
+
+test('latestManifest reads the latest dist-tag', async () => {
   /** @type {string[]} */
   const urls = []
   const fetch = /** @type {any} */ (
     async (/** @type {string} */ url) => {
       urls.push(url)
-      return { ok: true, json: async () => ({ version: '0.2.0' }) }
+      return { ok: true, json: async () => ({ version: '0.2.0', dependencies: { '@oakgreencc/cambium': '0.0.45' } }) }
     }
   )
-  assert.equal(await latestVersion({ fetch }), '0.2.0')
+  assert.deepEqual(await latestManifest({ fetch }), {
+    version: '0.2.0',
+    dependencies: { '@oakgreencc/cambium': '0.0.45' },
+  })
   assert.deepEqual(urls, ['https://registry.npmjs.org/oakgreen/latest'])
   const bad = /** @type {any} */ (async () => ({ ok: false, status: 503 }))
-  await assert.rejects(latestVersion({ fetch: bad }), /503/)
+  await assert.rejects(latestManifest({ fetch: bad }), /503/)
 })
