@@ -90,7 +90,7 @@ A file that does not load, or has no `repos`, keeps the running config and logs 
 | `merge`         | top-level `merge`  | Per-repo override.                                                                            |
 | `release`       | see below          | Per-repo release settings (graph engine).                                                     |
 
-`repos[].release`: `{ "enabled", "time", "from", "to" }`. `enabled` and `time` default to the top-level `release`; `from` to `baseBranch`; `to` to `"main"`. A repo whose `from` equals `to` has no promotion PR.
+`repos[].release`: `{ "enabled", "time", "from", "to", "check" }`. `enabled` and `time` default to the top-level `release`; `from` to `baseBranch`; `to` to `"main"`; `check` to the repo's `requiredCheck`. A release is cut at the newest `from` commit where `check` is green; `null` cuts at the tip. A repo whose `from` equals `to` has no promotion PR.
 
 ## `phases`
 

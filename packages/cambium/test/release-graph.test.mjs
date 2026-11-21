@@ -6,7 +6,14 @@ import { readFileSync } from 'node:fs'
 import { resolveConfig } from '../src/config.mjs'
 import { graftGitHub, normalize } from '../src/github.mjs'
 import { toMermaid, validateGraph } from '../src/graph/index.mjs'
-import { lastRunKey, releasePrepare, releasePromote } from '../src/graphs/release.mjs'
+import {
+  lastRunKey,
+  localDate,
+  mergedPrs,
+  releaseName,
+  releasePrepare,
+  releasePromote,
+} from '../src/graphs/release.mjs'
 import { newMarker, parseMarker, renderMarker } from '../src/marker.mjs'
 import { tick } from '../src/tick.mjs'
 import { runIssue } from '../src/graph-engine.mjs'
@@ -26,10 +33,22 @@ const RELEASE = { enabled: true, time: '00:00', from: 'develop', to: 'main' }
 /**
  * The harness on `engine: "graph"` with one repo whose release is on, and a GitHub that also knows the promotion
  * state: `aheadBy`, the merged PRs, and promotion PRs (whose state comment goes through the real marker code).
+ * The cut: `green` (the green commit `greenCommit` answers, or null), `diverged` (`to` diverged from the cut,
+ * with `toFiles` files of content), and the release branches that exist.
  * @param {{ aheadBy?: number | null, merged?: { number: number, title: string }[], prs?: FakePromo[],
- *   release?: Partial<typeof RELEASE> }} [seed]
+ *   release?: Partial<typeof RELEASE>, green?: { sha: string, behind: number, url: string | null } | null,
+ *   diverged?: boolean, toFiles?: number, branches?: string[] }} [seed]
  */
-function promoHarness({ aheadBy = 0, merged = [], prs = [], release = {} } = {}) {
+function promoHarness({
+  aheadBy = 0,
+  merged = [],
+  prs = [],
+  release = {},
+  green = { sha: 'cut-1', behind: 0, url: 'https://run/1' },
+  diverged = false,
+  toFiles = 0,
+  branches = [],
+} = {}) {
   const h = harness({
     config: { engine: 'graph', repos: [{ slug: SLUG, path: '/repo', release: { ...RELEASE, ...release } }] },
   })
@@ -108,7 +127,7 @@ function promoHarness({ aheadBy = 0, merged = [], prs = [], release = {} } = {})
         createdAt: new Date(h.clock.now()).toISOString(),
         head: pr.head,
         base: pr.base,
-        headSha: 'sha-new',
+        headSha: green?.sha ?? null,
         labels: [],
         approved: false,
         comment: null,
@@ -118,6 +137,29 @@ function promoHarness({ aheadBy = 0, merged = [], prs = [], release = {} } = {})
     },
     async editPull(slug, n, change) {
       calls.push({ op: 'editPull', args: [slug, n, change] })
+    },
+    async greenCommit(slug, ref, check, depth) {
+      calls.push({ op: 'read', args: ['greenCommit', slug, ref, check, depth] })
+      return green
+    },
+    async compareRange(slug, base, head) {
+      calls.push({ op: 'read', args: ['compareRange', slug, base, head] })
+      if (base !== 'main') return { status: 'diverged', aheadBy: 1, behindBy: 0, files: toFiles, commits: [] }
+      // The merged PRs as merge commits on the cut's first-parent line, oldest first.
+      const commits = state.merged.map((m, i) => ({
+        sha: `m${i}`,
+        parents: [i ? `m${i - 1}` : 'base', `b${i}`],
+        message: `Merge pull request #${m.number} from o/agent/x\n\n${m.title}`,
+      }))
+      const n = state.aheadBy ?? 0
+      return { status: diverged ? 'diverged' : n ? 'ahead' : 'identical', aheadBy: n, behindBy: 1, files: 0, commits }
+    },
+    async branches(slug, prefix) {
+      calls.push({ op: 'read', args: ['branches', slug, prefix] })
+      return branches
+    },
+    async createBranch(slug, name, sha) {
+      calls.push({ op: 'createBranch', args: [slug, name, sha] })
     },
     async closePull(slug, n, comment) {
       calls.push({ op: 'closePull', args: [slug, n, comment] })
@@ -189,8 +231,20 @@ test('config: per-repo release defaults to the top-level one, from the base bran
       { slug: 'c/d', path: '/y', release: { enabled: false, to: 'prod' } },
     ],
   })
-  assert.deepEqual(c.repos[0].release, { enabled: true, time: '07:30', from: 'develop', to: 'main' })
-  assert.deepEqual(c.repos[1].release, { enabled: false, time: '07:30', from: 'main', to: 'prod' })
+  assert.deepEqual(c.repos[0].release, { enabled: true, time: '07:30', from: 'develop', to: 'main', check: 'ci' })
+  assert.deepEqual(c.repos[1].release, { enabled: false, time: '07:30', from: 'main', to: 'prod', check: 'ci' })
+  const d = resolveConfig({
+    repos: [
+      { slug: 'a/b', path: '/x', requiredCheck: null },
+      { slug: 'c/d', path: '/y', release: { check: 'cd' } },
+    ],
+  })
+  assert.deepEqual(
+    d.repos.map((r) => r.release.check),
+    [null, 'cd'],
+    'check defaults to requiredCheck',
+  )
+  assert.throws(() => resolveConfig({ repos: [{ slug: 'a/b', path: '/x', release: { check: '' } }] }), /release.check/)
   assert.throws(() => resolveConfig({ repos: [{ slug: 'a/b', path: '/x', release: { time: '7' } }] }), /HH:MM/)
 })
 
@@ -208,11 +262,18 @@ test('prepare opens the promotion PR listing the merged PRs, labels it q:promote
   const open = h.gh.calls.find((c) => c.op === 'openPull')
   assert.ok(open, 'a PR was opened')
   const [, spec] = open.args
-  assert.equal(spec.head, 'develop')
+  const branch = `release/${localDate(T0)}-1`
+  assert.deepEqual(h.gh.calls.find((c) => c.op === 'createBranch')?.args, [SLUG, branch, 'cut-1'])
+  assert.equal(spec.head, branch)
   assert.equal(spec.base, 'main')
-  assert.equal(spec.title, 'Promote develop → main')
+  assert.equal(spec.title, `Release ${localDate(T0)}-1`)
   assert.match(spec.body, /3 commits ahead/)
+  assert.match(
+    spec.body,
+    /Cut at cut-1, the newest `develop` commit with a green `ci` \(\[run\]\(https:\/\/run\/1\)\)\./,
+  )
   assert.match(spec.body, /- #11 feat: a\n- #12 fix: b/)
+  assert.deepEqual(h.gh.calls.find((c) => c.args[0] === 'greenCommit')?.args.slice(1), [SLUG, 'develop', 'ci', 50])
   assert.deepEqual(h.pr(500).labels, ['q:promote'])
   const m = h.marker(500)
   assert.equal(m?.graph, 'release-prepare')
@@ -257,11 +318,17 @@ test('traced: prepare is a root its PR takes into the marker; the promote turns 
   assert.equal(spans.find((s) => s.attributes['cambium.node'] === 'merge')?.attributes['cambium.issue.number'], 500)
 })
 
-test('prepare refreshes a fresh open promotion PR instead of opening another', async () => {
-  const h = promoHarness({ aheadBy: 1, merged: [{ number: 13, title: 'c' }], prs: [{ number: 40 }] })
+test('prepare refreshes an open promotion of the same cut instead of opening another', async () => {
+  const h = promoHarness({
+    aheadBy: 1,
+    merged: [{ number: 13, title: 'c' }],
+    prs: [{ number: 40, head: 'release/2026-11-15-2', headSha: 'cut-1' }],
+  })
   await tick(h.deps)
   assert.deepEqual(h.ops(), ['editPull', 'writeState', 'label'])
-  assert.match(h.gh.calls.find((c) => c.op === 'editPull')?.args[2].body, /1 commit ahead\.[\s\S]*- #13 c/)
+  const change = h.gh.calls.find((c) => c.op === 'editPull')?.args[2]
+  assert.equal(change.title, 'Release 2026-11-15-2')
+  assert.match(change.body, /1 commit ahead\.[\s\S]*- #13 c/)
   assert.deepEqual(h.pr(40).labels, ['q:promote'])
   assert.equal(h.marker(40)?.history.at(-1)?.outcome, 'updated')
 })
@@ -294,8 +361,100 @@ test('cleanup closes an unmerged promotion PR older than 24 h, with a comment, t
   assert.equal(h.marker(41)?.history.at(-1)?.outcome, 'stale-closed')
   assert.equal(h.marker(41)?.status, 'done')
   assert.equal(h.pr(42).state, 'OPEN')
-  assert.deepEqual(h.ops(), ['writeState', 'label', 'closePull', 'openPull', 'writeState', 'label'])
+  assert.deepEqual(h.ops(), ['writeState', 'label', 'closePull', 'createBranch', 'openPull', 'writeState', 'label'])
   assert.deepEqual(h.pr(500).labels, ['q:promote'])
+})
+
+test('prepare supersedes an open promotion of an older cut: the new PR opens first, then the old one closes', async () => {
+  const h = promoHarness({
+    aheadBy: 2,
+    branches: [`release/${localDate(T0)}-1`, `release/${localDate(T0)}-3`],
+    prs: [
+      {
+        number: 40,
+        head: 'release/2026-11-15-1',
+        headSha: 'cut-0',
+        labels: ['q:promote'],
+        comment: comment(7002, { graph: 'release-prepare', node: 'prepare', status: 'done', pr: 40 }),
+      },
+      // The old way: develop itself, by hand. Superseded the same way.
+      { number: 41, head: 'develop', headSha: 'tip' },
+    ],
+  })
+  await tick(h.deps)
+  assert.deepEqual(h.ops(), [
+    'createBranch',
+    'openPull',
+    'writeState',
+    'label',
+    'writeState',
+    'label',
+    'closePull',
+    'closePull',
+  ])
+  assert.equal(h.gh.calls.find((c) => c.op === 'openPull')?.args[1].head, `release/${localDate(T0)}-4`)
+  for (const n of [40, 41]) {
+    assert.equal(h.pr(n).state, 'CLOSED')
+    assert.equal(h.pr(n).closedWith, 'Superseded by #500.')
+  }
+  assert.deepEqual(h.pr(40).labels, [], 'q:promote is taken off')
+  assert.equal(h.marker(40)?.history.at(-1)?.outcome, 'superseded')
+  assert.deepEqual(h.pr(500).labels, ['q:promote'])
+})
+
+test('prepare: no green commit in reach, or main already has the cut, opens nothing', async () => {
+  const none = promoHarness({ aheadBy: 2, green: null })
+  await tick(none.deps)
+  assert.deepEqual(none.ops(), [])
+  assert.ok(
+    none.events.some(
+      (e) => e.msg === 'release: no commit in the last 50 on `develop` has a green `ci`; nothing to promote',
+    ),
+  )
+})
+
+test('prepare: main diverged by an empty merge commit is promoted; main holding content is refused with a warning', async () => {
+  const empty = promoHarness({ aheadBy: 2, diverged: true, toFiles: 0 })
+  await tick(empty.deps)
+  assert.deepEqual(empty.ops(), ['createBranch', 'openPull', 'writeState', 'label'])
+  const content = promoHarness({ aheadBy: 2, diverged: true, toFiles: 3 })
+  await tick(content.deps)
+  assert.deepEqual(content.ops(), [])
+  assert.ok(
+    content.events.some(
+      (e) => e.level === 'warn' && /`main` holds content cut-1 lacks \(1 commits, 3 files\)/.test(e.msg),
+    ),
+  )
+})
+
+test('releaseName: one past the highest cut that day; other days and gaps do not count', () => {
+  assert.equal(releaseName('2026-11-20', []), 'release/2026-11-20-1')
+  assert.equal(
+    releaseName('2026-11-20', ['release/2026-11-20-1', 'release/2026-11-20-3', 'release/2026-11-19-7', 'release/x']),
+    'release/2026-11-20-4',
+  )
+})
+
+test('mergedPrs: merge and squash commits on the first-parent line; branch commits are not PRs', () => {
+  const c = (/** @type {string} */ sha, /** @type {string[]} */ parents, /** @type {string} */ message) => ({
+    sha,
+    parents,
+    message,
+  })
+  assert.deepEqual(
+    mergedPrs([
+      c('b1', ['m0'], 'fix: thing (#900)'),
+      c('m1', ['m0', 'b1'], 'Merge pull request #10 from o/agent/a\n\nfix: thing'),
+      c('s2', ['m1'], 'feat: squashed (#11)'),
+      c('m3', ['s2', 'm1'], "Merge branch 'develop' into agent/b"),
+      c('m4', ['s2', 'm3'], 'Merge pull request #12 from o/agent/b\n\nchore: b'),
+    ]),
+    [
+      { number: 10, title: 'fix: thing' },
+      { number: 11, title: 'feat: squashed' },
+      { number: 12, title: 'chore: b' },
+    ],
+  )
 })
 
 test('cleanup is the only 24 h rule: a 23 h old PR stays open', async () => {
@@ -595,4 +754,59 @@ test('graft client: the promotion writes, and the read asks for the repo release
     ['pr', 'merge', '90', '--auto', '--repo', 'o/r'],
   ])
   assert.equal(inputs[3], 'stale')
+})
+
+test('graft client: the cut reads walk first parents to a green check, and the branch is created through graft', async () => {
+  /** @type {string[][]} */
+  const argv = []
+  /** @type {Record<string, unknown>} */
+  const answers = {
+    '/repos/o/r/commits/develop': { sha: 't2', parents: [{ sha: 't1' }] },
+    '/repos/o/r/commits/t1': { sha: 't1', parents: [{ sha: 't0' }] },
+    '/repos/o/r/commits/t2/check-runs?check_name=cd&per_page=100': {
+      check_runs: [
+        { id: 2, name: 'cd', status: 'completed', conclusion: 'failure' },
+        { id: 1, name: 'cd', status: 'completed', conclusion: 'success' },
+      ],
+    },
+    '/repos/o/r/commits/t1/check-runs?check_name=cd&per_page=100': {
+      check_runs: [{ id: 3, name: 'cd', status: 'completed', conclusion: 'success', html_url: 'run3' }],
+    },
+    '/repos/o/r/compare/main...t1': {
+      status: 'diverged',
+      ahead_by: 2,
+      behind_by: 1,
+      files: [{}, {}],
+      commits: [{ sha: 't1', parents: [{ sha: 't0' }], commit: { message: 'm' } }],
+    },
+    '/repos/o/r/git/matching-refs/heads/release/': [{ ref: 'refs/heads/release/2026-11-20-1' }],
+  }
+  const gh = graftGitHub({
+    config: resolveConfig({ repos: [{ slug: 'o/r', path: '/src/r' }] }),
+    exec: async (_cmd, args) => {
+      argv.push(args)
+      return args[1] === 'POST' ? '' : JSON.stringify(answers[args[2]])
+    },
+  })
+  assert.deepEqual(await gh.greenCommit('o/r', 'develop', 'cd', 5), { sha: 't1', behind: 1, url: 'run3' })
+  assert.equal(await gh.greenCommit('o/r', 'develop', 'cd', 1), null, 'the newest re-run is the answer, within depth')
+  assert.deepEqual(await gh.greenCommit('o/r', 'develop', null, 5), { sha: 't2', behind: 0, url: null })
+  assert.deepEqual(await gh.compareRange('o/r', 'main', 't1'), {
+    status: 'diverged',
+    aheadBy: 2,
+    behindBy: 1,
+    files: 2,
+    commits: [{ sha: 't1', parents: ['t0'], message: 'm' }],
+  })
+  assert.deepEqual(await gh.branches('o/r', 'release/'), ['release/2026-11-20-1'])
+  await gh.createBranch('o/r', 'release/2026-11-20-2', 't1')
+  assert.deepEqual(argv.at(-1), [
+    'api',
+    'POST',
+    '/repos/o/r/git/refs',
+    '--body',
+    '{"ref":"refs/heads/release/2026-11-20-2","sha":"t1"}',
+    '--repo',
+    'o/r',
+  ])
 })

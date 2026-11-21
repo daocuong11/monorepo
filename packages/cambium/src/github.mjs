@@ -52,6 +52,13 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
  *   issues: Map<number, Issue>, prs: PullRequest[], release?: Release | null,
  *   base?: import('./base-health.mjs').BaseHealth,
  * }} Snapshot
+ * @typedef {{ sha: string, behind: number, url: string | null }} GreenCommit
+ *   `behind`: how many first-parent commits the ref's tip is past it. `url`: the green run.
+ * @typedef {{
+ *   status: 'ahead' | 'behind' | 'identical' | 'diverged', aheadBy: number, behindBy: number, files: number,
+ *   commits: { sha: string, parents: string[], message: string }[],
+ * }} Range
+ *   `files`: how many files differ between the merge base and `head`. `commits`: oldest first, at most 250.
  *   `base`: the base branch's health, when the repo has a `requiredCheck`.
  * @typedef {{
  *   read(slug: string): Promise<Snapshot>,
@@ -64,6 +71,10 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
  *   openPull(slug: string, pr: { head: string, base: string, title: string, body: string }): Promise<{ number: number, url: string }>,
  *   editPull(slug: string, number: number, change: { title: string, body: string }): Promise<void>,
  *   closePull(slug: string, number: number, comment: string): Promise<void>,
+ *   greenCommit(slug: string, ref: string, check: string | null, depth: number): Promise<GreenCommit | null>,
+ *   compareRange(slug: string, base: string, head: string): Promise<Range>,
+ *   branches(slug: string, prefix: string): Promise<string[]>,
+ *   createBranch(slug: string, name: string, sha: string): Promise<void>,
  *   mergePull(slug: string, number: number): Promise<void>,
  *   behindBase(slug: string, number: number): Promise<{ behind: number, base: string }>,
  *   updatePull(slug: string, number: number): Promise<void>,
@@ -72,6 +83,9 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
  *   closedPulls(slug: string): Promise<PullRequest[]>,
  *   readIssues(slug: string, numbers: number[]): Promise<Map<number, Issue>>,
  * }} GitHub
+ *   `greenCommit`: the newest commit on `ref`'s first-parent line, at most `depth` back, whose `check` concluded
+ *   success (`check` null: the tip). `compareRange`: GitHub's compare of `base...head`. `branches`: the branch
+ *   names starting with `prefix`. `createBranch`: a new branch at `sha`.
  *   `behindBase`: how many commits of its base the PR's head lacks, read live (not from the tick's snapshot), so a
  *   merge earlier in the same tick counts. `updatePull`: merge the base into the PR (`graft pr update`).
  *   `linkIssue`: put `Closes #<issue>` at the top of the PR's body, so the PR names the issue it closes.
@@ -479,6 +493,46 @@ export function graftGitHub({ config, exec: run = exec }) {
       const path = `/repos/${slug}/pulls`
       const made = await json(graft(slug, ['api', 'POST', path, '--body', JSON.stringify({ head, base, title, body })]))
       return { number: made.number, url: made.html_url }
+    },
+    async greenCommit(slug, ref, check, depth) {
+      let commit = await json(graft(slug, ['api', 'GET', `/repos/${slug}/commits/${encodeURIComponent(ref)}`]))
+      for (let behind = 0; commit && behind < depth; behind++) {
+        if (!check) return { sha: commit.sha, behind, url: null }
+        const path = `/repos/${slug}/commits/${commit.sha}/check-runs?check_name=${encodeURIComponent(check)}&per_page=100`
+        const runs = (await json(graft(slug, ['api', 'GET', path]))).check_runs ?? []
+        const newest = runs
+          .filter((/** @type {any} */ r) => r.name === check)
+          .reduce((/** @type {any} */ a, /** @type {any} */ r) => (a && a.id >= r.id ? a : r), null)
+        if (newest?.status === 'completed' && newest.conclusion === 'success')
+          return { sha: commit.sha, behind, url: newest.html_url ?? null }
+        const parent = commit.parents?.[0]?.sha
+        commit = parent ? await json(graft(slug, ['api', 'GET', `/repos/${slug}/commits/${parent}`])) : null
+      }
+      return null
+    },
+    async compareRange(slug, base, head) {
+      const path = `/repos/${slug}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`
+      const c = await json(graft(slug, ['api', 'GET', path]))
+      return {
+        status: c.status,
+        aheadBy: Number(c.ahead_by ?? 0),
+        behindBy: Number(c.behind_by ?? 0),
+        files: (c.files ?? []).length,
+        commits: (c.commits ?? []).map((/** @type {any} */ x) => ({
+          sha: x.sha,
+          parents: (x.parents ?? []).map((/** @type {any} */ p) => p.sha),
+          message: x.commit?.message ?? '',
+        })),
+      }
+    },
+    async branches(slug, prefix) {
+      const path = `/repos/${slug}/git/matching-refs/heads/${prefix}`
+      const refs = await json(graft(slug, ['api', 'GET', path, '--paginate']))
+      return refs.map((/** @type {any} */ r) => String(r.ref).replace(/^refs\/heads\//, ''))
+    },
+    async createBranch(slug, name, sha) {
+      const body = JSON.stringify({ ref: `refs/heads/${name}`, sha })
+      await graft(slug, ['api', 'POST', `/repos/${slug}/git/refs`, '--body', body])
     },
     async editPull(slug, number, { title, body }) {
       await graft(slug, ['api', 'PATCH', `/repos/${slug}/pulls/${number}`, '--body', JSON.stringify({ title, body })])

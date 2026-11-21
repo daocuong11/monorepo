@@ -144,7 +144,7 @@ The worker's final message ends with a JSON block (the last fenced block of the 
 
 ## release-prepare
 
-Subject: the promotion PR (`release.from` → `release.to`). Clock entry: daily at `release.time`.
+Subject: the promotion PR (`release/<date>-N` → `release.to`). Clock entry: daily at `release.time`, or `cambium run release-prepare`.
 
 ```text
 start → cleanup → prepare → end
@@ -153,7 +153,7 @@ start → cleanup → prepare → end
 | Node      | Action                                                                                                                  |
 | --------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `cleanup` | Closes, with a comment, open promotion PRs older than 24 h; removes `q:promote`.                                        |
-| `prepare` | `from` ahead of `to`: opens or refreshes the promotion PR listing PRs merged since `to`, labels it `q:promote`, writes the marker. Nothing ahead: a log line. |
+| `prepare` | `from` ahead of `to`: cuts `release/<date>-N` at the newest `from` commit with a green `release.check`, opens its PR listing the PRs it carries, labels it `q:promote`, writes the marker, then closes the older open promotion with "Superseded by". Same cut already open: refreshes it. No green commit, or `to` holds content the cut lacks: a log line, nothing opened. |
 
 ## release-promote
 
