@@ -49,6 +49,7 @@
  *   deferReason?: string | null,
  *   blockedBy?: number[] | null,
  *   reply?: { since: string, question: string | null } | null,
+ *   ask?: import('./ask.mjs').AskT | null,
  *   fingerprint?: { hash: string, at: string } | null,
  * }} Marker
  *   `mergeRefusal`: the last `graft pr merge` cambium was refused (PR graph `merge`), and on which head.
@@ -58,11 +59,13 @@
  *   GitHub `blockedBy` issues it waits on (no `deferUntil`).
  *   `reply`: while triage is pending or running, what a human reply answers (human-reply.mjs): human comments after
  *   `since` are quoted in the triage prompt as the answer to `question`. Cleared when triage lands a verdict.
+ *   `ask`: at a `to-human` node, what the person is asked to do (ask.mjs); the comment renders it.
  *   `fingerprint`: the triage inputs (triage-inputs.mjs) the last triage saw, taken at `start-triage` and kept by
  *   `to-human` only for a needs-human verdict; re-triage skips the issue while they are unchanged.
  *   `triage`: what the dispatch graph's triage added when it handed the issue to `q:task`; the task prompt shows it.
  * @typedef {{ graph: string, entryNode: string, nodes?: Iterable<string> }} QueueOwner
  */
+import { renderAsk } from './ask.mjs'
 
 const PREFIX = '<!-- cambium:state '
 const RE = /<!-- cambium:state (.*?) -->/s
@@ -193,6 +196,7 @@ export function renderMarker(input, { maxAttempts } = {}) {
         ? ` · re-triage once ${marker.blockedBy.map((n) => `#${n}`).join(', ')} close`
         : ''),
   ]
+  if (marker.ask && marker.node === 'to-human' && marker.status !== 'done') lines.push('', ...renderAsk(marker.ask))
   if (marker.lastFailure)
     lines.push(
       '',

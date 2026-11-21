@@ -11,6 +11,7 @@
 import { z } from 'zod'
 import { defineGraph, defineNode, defineWait, END } from '../graph/index.mjs'
 import { iso, key, markerOf, MIN, setLabels, setMarker } from '../issue-state.mjs'
+import { Ask, askLabels } from '../ask.mjs'
 import { move, Q, WAIT, WHY } from '../labels.mjs'
 import { newMarker, withHistory } from '../marker.mjs'
 import { readTriage, TriageResult, triageComment, triagePrompt } from '../phases/dispatch.mjs'
@@ -69,6 +70,7 @@ async function land(ctx, node, marker, { extra = [], status = 'waiting' } = {}) 
   await setMarker(ctx, slug, issue, {
     ...graphMarker(marker),
     ...(PRE_VERDICT.has(node) ? {} : { reply: null }),
+    ...(node === 'to-human' ? {} : { ask: null }),
     graph: dispatch.name,
     graphVersion: dispatch.version,
     phase: 'dispatch',
@@ -391,17 +393,19 @@ const toTask = declare(
   },
 )
 
+const HumanIn = z.object({ ...failure, ask: Ask.optional() })
 const toHuman = declare(
   defineNode({
     name: 'to-human',
-    input: Failure,
+    input: HumanIn,
     output: Empty,
     /**
-     * Into the Human Queue with `why:triage` and the reason in the state comment. A needs-human verdict keeps the
-     * triage inputs `start-triage` recorded (re-triage skips the issue while they hold); a spent budget drops them.
-     * @param {z.infer<typeof Failure>} what @param {DispatchCtx} ctx
+     * Into the Human Queue with `why:triage` and the reason in the state comment; a needs-human verdict's `ask` adds
+     * its `ask:*` labels and is rendered there too. A needs-human verdict keeps the triage inputs `start-triage`
+     * recorded (re-triage skips the issue while they hold); a spent budget drops them.
+     * @param {z.infer<typeof HumanIn>} input @param {DispatchCtx} ctx
      */
-    run: async (what, ctx) => {
+    run: async ({ ask, ...what }, ctx) => {
       const issue = issueOf(ctx)
       const m = markerOf(issue)
       await land(
@@ -410,12 +414,13 @@ const toHuman = declare(
         {
           ...withHistory(m, { at: iso(ctx.tick.now), attempt: m.attempt, ...what }),
           lastFailure: what.reason,
+          ask: ask ?? null,
           fingerprint: what.outcome === 'needs-human' ? (m.fingerprint ?? null) : null,
           host: null,
           start: null,
           input: null,
         },
-        { extra: [WHY.triage] },
+        { extra: [WHY.triage, ...askLabels(ask)] },
       )
       ctx.log('warn', `→ q:human (${WHY.triage}): ${what.reason.split('\n')[0]}`, {
         repo: ctx.subject.slug,
@@ -424,7 +429,11 @@ const toHuman = declare(
       return {}
     },
   }),
-  { queue: Q.human, running: false, about: 'Into q:human with why:triage and the reason in the state comment.' },
+  {
+    queue: Q.human,
+    running: false,
+    about: 'Into q:human with why:triage (plus ask:* from a needs-human ask) and the reason in the state comment.',
+  },
 )
 
 const DupIn = z.object({ duplicateOf: z.number().int(), reason: z.string(), log: z.string() })
@@ -666,7 +675,17 @@ export const dispatch = defineGraph({
     ['triaging', 'deferred', defer, (o) => ({ ...pick(o.result, ['reason', 'recheckHours']), log: o.log })],
     ['triaging', 'blocked', blocked, (o) => ({ blockedBy: o.result.blockedBy, reason: o.result.reason, log: o.log })],
     ['triaging', 'close-obsolete', obsolete, (o) => ({ reason: o.result.reason, log: o.log })],
-    ['triaging', 'to-human', needsHuman, (o) => ({ reason: o.result.reason, outcome: 'needs-human', log: o.log })],
+    [
+      'triaging',
+      'to-human',
+      needsHuman,
+      (o) => ({
+        reason: o.result.reason,
+        outcome: 'needs-human',
+        log: o.log,
+        ...(o.result.ask ? { ask: o.result.ask } : {}),
+      }),
+    ],
     ['triaging', 'to-human'],
     ['retry-triage', 'start-triage', attemptsLeft, () => ({})],
     ['retry-triage', 'to-human'],

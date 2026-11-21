@@ -13,6 +13,7 @@
  */
 import { z } from 'zod'
 import { advance, defineGraph, defineNode, defineWait, END } from '../graph/index.mjs'
+import { askLabels } from '../ask.mjs'
 import { iso, key, markerOf, setLabels, setMarker } from '../issue-state.mjs'
 import { move, Q, RESCUE_LABEL, WHY } from '../labels.mjs'
 import { newMarker, withHistory } from '../marker.mjs'
@@ -85,10 +86,12 @@ const rescued = (ctx, m, reason) =>
   withHistory(m, { at: iso(ctx.tick.now), attempt: m.attempt, outcome: 'rescued', reason })
 
 /**
- * Into the Human Queue with `why:rescue`, resting at this graph's `to-human`.
+ * Into the Human Queue with `why:rescue`, resting at this graph's `to-human`; an `ask` adds its `ask:*` labels and is
+ * rendered in the state comment.
  * @param {RescueCtx} ctx @param {Issue} issue @param {string} reason @param {string} outcome
+ * @param {import('../ask.mjs').AskT} [ask]
  */
-async function handToHuman(ctx, issue, reason, outcome) {
+async function handToHuman(ctx, issue, reason, outcome, ask) {
   const m = markerOf(issue)
   await place(
     ctx,
@@ -102,11 +105,12 @@ async function handToHuman(ctx, issue, reason, outcome) {
       status: 'waiting',
       enteredAt: iso(ctx.tick.now),
       lastFailure: reason,
+      ask: ask ?? null,
       host: null,
       start: null,
       input: null,
     },
-    move(issue.labels, Q.human, { extra: [WHY.rescue] }),
+    move(issue.labels, Q.human, { extra: [WHY.rescue, ...askLabels(ask)] }),
   )
 }
 
@@ -151,7 +155,7 @@ async function act(ctx, issue, a) {
     case 'requeue':
       return requeue(ctx, issue, a.queue, a.reason)
     case 'to-human':
-      return handToHuman(ctx, issue, a.reason, 'rescued')
+      return handToHuman(ctx, issue, a.reason, 'rescued', a.ask)
     case 'close-issue': {
       const m = markerOf(issue)
       await place(

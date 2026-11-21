@@ -114,14 +114,21 @@ The worker's final message ends with a JSON block (the last fenced block of the 
   recheckHours?: number,
   reason: string,
   title?: string,
-  acceptance?: string[]
+  acceptance?: string[],
+  ask?: {                 // for needs-human
+    kind: 'decide' | 'verify' | 'chore' | 'approve',
+    question: string,
+    options?: { label: string, detail: string }[],   // two or more; required for decide
+    recommendation?: string,
+    interactive: boolean  // a live session with the code would help
+  }
 }
 ```
 
 | Verdict       | Outcome                                                                                                                       |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `actionable`  | Comment with reason, title and acceptance checks; `q:task` at `start-worker`, attempt 1. The issue body is never rewritten.   |
-| `needs-human` | `q:human` + `why:triage`.                                                                                                     |
+| `needs-human` | `q:human` + `why:triage`. With an `ask`: its [`ask:*` labels](/reference/cambium/labels-and-state/#labels) too, and the ask rendered in the state comment. An invalid `ask` is dropped (the reason says why); the issue still lands in `q:human`. |
 | `duplicate`   | Closed as `duplicate` with `Duplicate of #n (<link>). <reason>`.                                                              |
 | `obsolete`    | Closed as `not_planned` with `Obsolete: <reason>`.                                                                            |
 | `defer`       | Stays in `q:intake` at `deferred` with `wait:deferred`, until `deferUntil` (`recheckHours`, else `deferHours`). After `maxDefers`: `q:human` + `why:triage`. |
@@ -133,6 +140,7 @@ The worker's final message ends with a JSON block (the last fenced block of the 
 - A human reply wakes a parked issue, and a `q:human` issue with any `why:*` except `why:approve`, back to `start-triage` at attempt 1. The newest 5 replies (2000 characters each) are quoted to triage.
 - A human reply: a comment after the issue entered its state, whose author is not `graft.botLogin`, not the state comment's author, and not a `Bot` account.
 - Closed or relabelled during triage: verdict dropped.
+- `ask` is read only on `needs-human`. An issue waiting on another open issue that is itself a human chore or check is `blocked` by it, not `needs-human`.
 
 ## release-prepare
 
@@ -228,7 +236,7 @@ unstick → file-causes → report → end
 | `requeue`      | To `q:task` or `q:intake` at the graph's entry, attempt 1, outcome `rescued`.     |
 | `adopt-pr`     | The task graph's `submit`.                                                        |
 | `close-issue`  | `completed` or `not_planned`.                                                     |
-| `to-human`     | `q:human` + `why:rescue`.                                                         |
+| `to-human`     | `q:human` + `why:rescue`. An optional `ask` (same shape as triage's) adds its `ask:*` labels and is rendered in the state comment. |
 
 `clear-labels` and `close-pr` run first; at most one move (`requeue`, `adopt-pr`, `close-issue`, `to-human`) runs last. `"stuck": false` takes no actions. An invalid verdict or a killed worker sends the item to `q:human` + `why:rescue`. If no starting symptom still holds when the worker exits, the verdict is dropped.
 

@@ -200,6 +200,45 @@ test('needs-human → q:human with why:triage and the reason', async () => {
   assert.equal(h.deps.store.worker(SLUG, 7), null)
 })
 
+const DECIDE = {
+  kind: 'decide',
+  question: 'Which tick should get the cache?',
+  options: [
+    { label: 'The task tick', detail: 'Hot path, more risk.' },
+    { label: 'The dispatch tick', detail: 'Cold path, less gain.' },
+  ],
+  recommendation: 'The task tick',
+  interactive: true,
+}
+
+test('needs-human with an ask → ask:* labels beside why:triage; the state comment renders it', async () => {
+  const h = intake()
+  await triage(h, logWith(verdictMessage({ verdict: 'needs-human', reason: 'Two candidates.', ask: DECIDE })))
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['ask:decide', 'ask:session', 'q:human', 'why:triage'])
+  assert.deepEqual(h.gh.marker(7)?.ask, DECIDE)
+  const body = h.gh.issue(7).comment?.body ?? ''
+  assert.match(body, /\*\*Decide:\*\* Which tick should get the cache\?/)
+  assert.match(
+    body,
+    /1\. \*\*The task tick\*\*: Hot path, more risk\.\n2\. \*\*The dispatch tick\*\*: Cold path, less gain\./,
+  )
+  assert.match(body, /\*\*Recommendation:\*\* The task tick/)
+})
+
+test('needs-human with an invalid ask still lands in q:human with why:triage, the ask dropped', async () => {
+  const h = intake()
+  const ask = { kind: 'decide', question: 'Which?', interactive: false }
+  await triage(h, logWith(verdictMessage({ verdict: 'needs-human', reason: 'Two candidates.', ask })))
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:human', 'why:triage'])
+  const m = h.gh.marker(7)
+  assert.equal(m?.node, 'to-human')
+  assert.equal(m?.ask, null)
+  assert.match(
+    String(m?.lastFailure),
+    /^Two candidates\.\n\n\(triage's ask was invalid and was dropped: options: a decide ask needs two or more options\)/,
+  )
+})
+
 test('duplicate → closed as a duplicate with a link to the original', async () => {
   const h = intake()
   await triage(h, logWith(verdictMessage({ verdict: 'duplicate', duplicateOf: 3, reason: 'Same request as #3.' })))
@@ -507,6 +546,19 @@ test('readTriage: the last fenced block, bare JSON, and every way it can be wron
     ok: true,
     result: { verdict: 'obsolete', reason: 'gone' },
   })
+  const chore = { kind: 'chore', question: 'Create the App Store listing.', interactive: false }
+  assert.deepEqual(readTriage(logWith(JSON.stringify({ verdict: 'needs-human', reason: 'r', ask: chore })), 7), {
+    ok: true,
+    result: { verdict: 'needs-human', reason: 'r', ask: chore },
+  })
+  assert.deepEqual(readTriage(logWith(JSON.stringify({ verdict: 'actionable', reason: 'go', ask: chore })), 7), {
+    ok: true,
+    result: { verdict: 'actionable', reason: 'go' },
+  })
+  const bad = readTriage(logWith(JSON.stringify({ verdict: 'needs-human', reason: 'r', ask: { kind: 'ponder' } })), 7)
+  assert.equal(bad.ok, true)
+  assert.match('result' in bad ? bad.result.reason : '', /^r\n\n\(triage's ask was invalid and was dropped: kind:/)
+  assert.equal('result' in bad ? bad.result.ask : 'x', undefined)
 })
 
 test('triagePrompt: no OpenRig vocabulary; the issue, the queue and AGENTS.md', () => {
