@@ -30,6 +30,8 @@ import { dispatch } from './graphs/dispatch.mjs'
 import { releasePrepare, releasePromote, runRelease } from './graphs/release.mjs'
 import { trackPromotion } from './promotion.mjs'
 import { trackBaseHealth } from './base-health.mjs'
+import { rescue } from './graphs/rescue.mjs'
+import { runRescue } from './rescue-engine.mjs'
 
 /**
  * @typedef {import('./tick.mjs').Deps} Deps
@@ -273,10 +275,14 @@ export const GRAPHS = {
   [dispatch.name]: dispatch,
   [releasePrepare.name]: releasePrepare,
   [releasePromote.name]: releasePromote,
+  [rescue.name]: rescue,
 }
 
-/** The graphs whose subject is a repo (its promotion PR), not an issue: `--issue` is optional. */
-export const REPO_GRAPHS = new Set([releasePrepare.name, releasePromote.name])
+/**
+ * The graphs for which `--issue` is optional: the release graphs (their subject is the repo's promotion PR), and
+ * rescue (without it, a list of what is stuck).
+ */
+export const REPO_GRAPHS = new Set([releasePrepare.name, releasePromote.name, rescue.name])
 
 export { prGraph }
 
@@ -298,6 +304,7 @@ export { prGraph }
 export async function runIssue(deps, { graph, slug, number, follow = false, out, sleep = delay, signal }) {
   if (!Object.hasOwn(GRAPHS, graph))
     return { ok: false, error: `unknown graph "${graph}"; known: ${Object.keys(GRAPHS).join(', ')}` }
+  if (graph === rescue.name) return runRescue(deps, { slug, number, out, newCtx })
   if (REPO_GRAPHS.has(graph)) return runRelease(deps, newCtx(deps), { graph, slug, pr: number, out })
   if (!Number.isInteger(number) || number <= 0) return { ok: false, error: `the ${graph} graph needs --issue <n>` }
   if (graph === prGraph.name) return runPr(deps, { slug, number, follow, out, sleep, signal })

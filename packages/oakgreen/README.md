@@ -71,7 +71,7 @@ oakgreen depends on every tool, so updating it updates the stack. It updates its
 | `cambium config`      | the config file exists and parses                                                                                                                            | yes      |
 | `cambium status`      | `cambium status --json --config <file>` exits 0 and reports a heartbeat; not run without a config, since it would create its database                        | yes      |
 | `cambium heartbeat`   | the heartbeat's `tick.finishedAt` is within 3 × `daemon.tickSeconds` (file: `paths.heartbeat`, else `<paths.home>/state.json`, else `~/.cambium/state.json`) | yes      |
-| `queue labels <repo>` | `q:intake q:task q:human q:promote running why:budget why:reject why:approve why:triage wait:deferred wait:blocked red-base` all exist                       | yes      |
+| `queue labels <repo>` | `q:intake q:task q:human q:promote running why:budget why:reject why:approve why:triage why:rescue wait:deferred wait:blocked red-base rescue` all exist     | yes      |
 | `mycelium <source>`   | per enabled source (any of its `MYCELIUM_*` vars set, in the environment or mycelium's env file): every var it needs, plus `MYCELIUM_REPO`                   | yes      |
 | `canker config`       | `canker.json` or `package.json` `"canker"` at the git root of the current directory                                                                          | no       |
 | `deadwood config`     | `deadwood.json` or `package.json` `"deadwood"` at the git root                                                                                               | no       |

@@ -230,8 +230,8 @@ export async function requeue(deps, ctx, slug, issue, what) {
 // ---- Reconcile
 
 /**
- * A triage worker (phase `dispatch`, started by the graph engine before a switch to `legacy`) is only held to its
- * wall-clock cap: its row stays, so its `running` lease is not swept, and the graph engine reads its verdict once
+ * A triage or rescue worker (phase `dispatch` or `rescue`, started by the graph engine before a switch to `legacy`)
+ * is only held to its wall-clock cap: its row stays, so its `running` lease is not swept, and the graph engine reads its verdict once
  * switched back. Legacy never finishes it as a Task.
  * @param {Deps} deps @param {Ctx} ctx
  */
@@ -243,7 +243,7 @@ async function reconcile(deps, ctx) {
     async (w) => {
       const caps = config.phases[/** @type {'task'} */ (w.phase)] ?? config.phases.task
       if (stopOverdue({ procs, store, log: deps.log }, w, caps.wallClockMinutes, ctx.now) !== 'gone') return
-      if (w.phase === 'dispatch') return
+      if (w.phase === 'dispatch' || w.phase === 'rescue') return
       const snap = ctx.snaps.get(w.repo)
       if (snap) await finish(deps, ctx, w, snap)
     },

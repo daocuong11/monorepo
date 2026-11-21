@@ -175,6 +175,16 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
         i.blockedBy.push({ number: blocker, state: b.state, closedAt: null })
       return { state: b.state }
     },
+    async closedPulls(slug) {
+      calls.push({ op: 'closedPulls', args: [slug] })
+      return pulls.filter((p) => p.state === 'CLOSED').map((p) => ({ ...p, closes: [...p.closes] }))
+    },
+    async readIssues(slug, numbers) {
+      calls.push({ op: 'readIssues', args: [slug, [...numbers]] })
+      const out = new Map()
+      for (const n of numbers) if (store.has(n)) out.set(n, toIssue(/** @type {any} */ (store.get(n))))
+      return out
+    },
     async linkIssue(slug, pr, issue) {
       calls.push({ op: 'linkIssue', args: [slug, pr, issue] })
       const p = pulls.find((x) => x.number === pr)

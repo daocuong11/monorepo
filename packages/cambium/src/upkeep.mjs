@@ -12,12 +12,15 @@
  *   so triage looks again under its current rubric: done since (obsolete), now checkable (defer), or now a task.
  *   Not `why:approve` (a merge only a human may make: a re-triage would start a duplicate Task) and not one holding
  *   `running`.
+ * - **Rescue** (rescue-engine.mjs, while `phases.rescue.cap > 0`): rescue workers every tick, and every
+ *   `rescue.everyMinutes` a sweep for stuck items, each diagnosed and unstuck by the rescue graph.
  */
 import { drive } from './graph-engine.mjs'
 import { branchIssue } from './github.mjs'
 import { iso, key, MIN, setLabels } from './issue-state.mjs'
 import { move, Q, RUNNING, WHY } from './labels.mjs'
 import { releaseDue } from './phases/release.mjs'
+import { rescueStep } from './rescue-engine.mjs'
 import { each } from './tick.mjs'
 
 /**
@@ -61,10 +64,14 @@ export function reapVerdict(pr, snap, { now, staleMinutes, orphanDays, busy }) {
   return { act: 'adopt', issue, link: linked === undefined }
 }
 
-/** Both clocks, in order: adopt first, so an issue whose PR the reaper takes is not re-triaged. @param {Deps} deps @param {Ctx} ctx */
+/**
+ * The clocks, in order: adopt first, so an issue whose PR the reaper takes is not re-triaged; rescue last, so it sees
+ * what the others left. @param {Deps} deps @param {Ctx} ctx
+ */
 export async function upkeep(deps, ctx) {
   await reap(deps, ctx)
   await retriage(deps, ctx)
+  await rescueStep(deps, ctx)
 }
 
 /** @param {Deps} deps @param {Ctx} ctx */

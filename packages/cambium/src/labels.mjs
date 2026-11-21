@@ -18,7 +18,11 @@ export const WHY = /** @type {const} */ ({
   reject: 'why:reject',
   approve: 'why:approve',
   triage: 'why:triage',
+  rescue: 'why:rescue',
 })
+
+/** Marks a root-cause ticket the rescue graph filed (graphs/rescue.mjs). Not a `why:` label: those leave with `q:human`. */
+export const RESCUE_LABEL = 'rescue'
 
 /** @param {string[]} labels */
 export const queueOf = (labels) => labels.find((l) => l.startsWith('q:')) ?? null

@@ -40,9 +40,6 @@ export const TriageResult = z
 
 /** @typedef {z.infer<typeof TriageResult>} Triage */
 
-/** @param {z.core.$ZodIssue} i */
-const formatIssue = (i) => (i.path.length ? `${i.path.join('.')}: ${i.message}` : i.message)
-
 /**
  * The JSON in a final message: its last fenced block, else the whole text, else its outermost `{…}`.
  * @param {string} text @returns {unknown} throws a SyntaxError-like Error when there is none
@@ -73,14 +70,12 @@ const clip = (s, n = 300) => {
 }
 
 /**
- * The triage verdict from a worker's stdout (`claude -p --output-format stream-json`): the last `result` event's
- * `result` text, its JSON, validated by {@link TriageResult}. Anything else is an error saying what was wrong.
- *
+ * The JSON a one-shot worker ends with, from its stdout (`claude -p --output-format stream-json`): the last `result`
+ * event's `result` text, its JSON ({@link jsonIn}). Anything else is an error saying what was wrong.
  * @param {string} log the stdout log text
- * @param {number} issue the triaged issue, which cannot be its own duplicate
- * @returns {{ ok: true, result: Triage } | { ok: false, error: string }}
+ * @returns {{ ok: true, json: unknown } | { ok: false, error: string }}
  */
-export function readTriage(log, issue) {
+export function finalJson(log) {
   /** @type {any} */
   let result = null
   for (const line of log.split('\n')) {
@@ -93,16 +88,30 @@ export function readTriage(log, issue) {
   if (!result) return { ok: false, error: 'no result event in the worker log (killed, crashed or truncated)' }
   if (typeof result.result !== 'string')
     return { ok: false, error: `the worker ended without a final message (${result.subtype ?? 'no subtype'})` }
-  /** @type {unknown} */
-  let json
   try {
-    json = jsonIn(result.result)
+    return { ok: true, json: jsonIn(result.result) }
   } catch (err) {
     return { ok: false, error: /** @type {Error} */ (err).message }
   }
-  const parsed = TriageResult.safeParse(json)
+}
+
+/** @param {z.core.$ZodIssue} i */
+export const formatZodIssue = (i) => (i.path.length ? `${i.path.join('.')}: ${i.message}` : i.message)
+
+/**
+ * The triage verdict from a worker's stdout (`claude -p --output-format stream-json`): the last `result` event's
+ * `result` text, its JSON, validated by {@link TriageResult}. Anything else is an error saying what was wrong.
+ *
+ * @param {string} log the stdout log text
+ * @param {number} issue the triaged issue, which cannot be its own duplicate
+ * @returns {{ ok: true, result: Triage } | { ok: false, error: string }}
+ */
+export function readTriage(log, issue) {
+  const read = finalJson(log)
+  if (!read.ok) return read
+  const parsed = TriageResult.safeParse(read.json)
   if (!parsed.success)
-    return { ok: false, error: `invalid triage result: ${parsed.error.issues.map(formatIssue).join('; ')}` }
+    return { ok: false, error: `invalid triage result: ${parsed.error.issues.map(formatZodIssue).join('; ')}` }
   if (parsed.data.verdict === 'duplicate' && parsed.data.duplicateOf === issue)
     return { ok: false, error: `invalid triage result: duplicateOf: #${issue} cannot duplicate itself` }
   if (parsed.data.verdict === 'blocked' && parsed.data.blockedBy?.includes(issue))

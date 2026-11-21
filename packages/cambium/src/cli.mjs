@@ -37,6 +37,9 @@ export const HELP = `cambium ${VERSION} — the scheduler daemon
                                         engine "graph": open or refresh the promotion PR now (the day's run)
   cambium run release-promote [--repo <owner/name>] [--issue <pr>]
                                         engine "graph": merge each approved q:promote promotion PR (or only <pr>)
+  cambium run rescue [--repo <owner/name>] [--issue <n>]
+                                        engine "graph": list the stuck issues and PRs (changes nothing); with
+                                        --issue, rescue that one now with a foreground rescue worker
   cambium gc [--dry-run] [--repo <owner/name>]
                                         remove worktrees GitHub holds all of; archive (to ~/.cambium/gc) then
                                         remove stale ones; skip live workers and live Claude Code sessions
@@ -242,7 +245,8 @@ async function runOne(config, argv, io, depsFor) {
     return fail(
       io,
       'usage: cambium run <graph> --issue <n> [--repo <owner/name>] [--follow]\n' +
-        '       cambium run <release-prepare|release-promote> [--repo <owner/name>] [--issue <pr>]',
+        '       cambium run <release-prepare|release-promote> [--repo <owner/name>] [--issue <pr>]\n' +
+        '       cambium run rescue [--repo <owner/name>] [--issue <n>]',
     )
   const follow = has(argv, '--follow')
   if (config.engine === 'legacy' && (graph !== 'task' || follow))
