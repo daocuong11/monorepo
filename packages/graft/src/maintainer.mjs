@@ -30,6 +30,8 @@
  *   merge       `graft pr merge` past the local merge policy: a base outside
  *               `mergeableBases`, protected paths in the diff, a red base.
  *               GitHub's rulesets still apply; this lifts graft's opinion only.
+ *               Also `graft publish` cutting a branch from, or opening a PR
+ *               against, a base outside `mergeableBases` (a stacked PR).
  *
  * `impossible` paths have no scope. No grant makes the App hold a permission
  * it does not have.

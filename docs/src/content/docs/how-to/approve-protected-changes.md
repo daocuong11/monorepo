@@ -15,7 +15,7 @@ An agent that hits a protected path stops and asks you for a grant. A grant lift
    | --- | --- |
    | `protected` | edit and publish paths CODEOWNERS owns (the PR still needs code-owner review) |
    | `no-verify` | publish without running the repository's git hooks |
-   | `merge` | run `graft pr merge` past the local merge policy (base, protected paths, red base) |
+   | `merge` | run `graft pr merge` past the local merge policy (base, protected paths, red base), and `graft publish` onto a base outside `mergeableBases` |
 
 2. In that Claude Code session, type:
 

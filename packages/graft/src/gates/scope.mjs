@@ -24,7 +24,7 @@
  *     refused at any size, and any path that gains more than
  *     {@link ADDED_BYTES_CEILING} in one publish is refused.
  *   - A publish without `--pr` lands a branch nothing ever runs on. That is
- *     legitimate — stacking, a second commit to an open PR — so it is a note
+ *     legitimate — a second commit to an open PR — so it is a note
  *     on stdout, not a refusal: see {@link noPrNote}.
  *
  * The branch-name half (`--api` as a ref) belongs to a branch-name ruleset
@@ -243,8 +243,8 @@ export function sweepMessage(wouldSweep, { usage } = {}) {
 
 /**
  * The note a publish without `--pr` prints when the branch has no open PR
- * either. Not a refusal — a stacked layer or a second commit to a branch
- * whose PR is already open is exactly this shape — but a branch with no PR is
+ * either. Not a refusal — a second commit to a branch whose PR is already
+ * open is exactly this shape — but a branch with no PR is
  * a branch CI typically never runs on (most workflows trigger on `pull_request` and
  * `merge_group` only), and that silence is how the incident's commit sat
  * unexamined.
@@ -254,6 +254,6 @@ export function sweepMessage(wouldSweep, { usage } = {}) {
 export function noPrNote({ branch, base }) {
   return (
     `note: ${branch} has no open pull request, so no CI runs on it. ` +
-    `Open one with --pr "<title>" (targets ${base}), or stack it on a branch that has one.`
+    `Open one with --pr "<title>" (targets ${base}).`
   )
 }
