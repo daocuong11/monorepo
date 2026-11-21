@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { checkValidatedBase, readReceipt, receiptPath, writeReceipt } from '../src/gates/validated-base.mjs'
 import { VERSION, compareVersions, versionRefusal } from '../src/gates/version.mjs'
+import { stackedBaseRefusal } from '../src/gates/stacked-base.mjs'
 
 const A = 'a'.repeat(40)
 const B = 'b'.repeat(40)
@@ -70,4 +71,34 @@ test('receipt: written under the git dir, read back; garbage or a missing baseSh
   assert.equal(readReceipt({ gitDir }), null)
   writeFileSync(receiptPath(gitDir), JSON.stringify({ ref: 'origin/main' }))
   assert.equal(readReceipt({ gitDir }), null)
+})
+
+test('stacked base: a new branch or PR on a mergeable base passes', () => {
+  const allowedBases = ['develop']
+  assert.equal(stackedBaseRefusal({ base: 'develop', allowedBases, newBranch: true, newPr: true }), null)
+})
+
+test('stacked base: a new PR against another branch is refused, naming the base and the fix', () => {
+  const refusal = String(
+    stackedBaseRefusal({ base: 'agent/1-a', allowedBases: ['develop'], newBranch: true, newPr: true }),
+  )
+  assert.match(refusal, /open a PR against `agent\/1-a`/)
+  assert.match(refusal, /agents merge only into `develop`/)
+  assert.match(refusal, /two issues, the second blocked/)
+})
+
+test('stacked base: a new branch cut from another branch is refused even without a PR', () => {
+  const refusal = stackedBaseRefusal({ base: 'agent/1-a', allowedBases: ['main'], newBranch: true, newPr: false })
+  assert.match(String(refusal), /cut a new branch from `agent\/1-a`/)
+})
+
+test('stacked base: publishing to an existing branch with no new PR is left alone', () => {
+  assert.equal(stackedBaseRefusal({ base: 'agent/1-a', allowedBases: ['main'], newBranch: false, newPr: false }), null)
+})
+
+test('stacked base: an empty mergeableBases refuses every new branch', () => {
+  assert.match(
+    String(stackedBaseRefusal({ base: 'main', allowedBases: [], newBranch: true, newPr: false })),
+    /agents merge only into no branch/,
+  )
 })

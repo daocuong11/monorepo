@@ -17,7 +17,7 @@ Every verb takes `-C <dir>` and `--repo <owner/repo>` (default: the `origin` rem
 
 ## Publishing work
 
-1. **Branch.** Pick a fresh branch name (`agent/<topic>`). The base comes from `.graft.json` `baseBranch`, else the repo's default branch; `--base <b>` stacks on another branch.
+1. **Branch.** Pick a fresh branch name (`agent/<topic>`). The base comes from `.graft.json` `baseBranch`, else the repo's default branch; `--base <b>` picks another base, but only one in `mergeableBases`: graft refuses to cut a branch from, or open a PR against, any other (stacked PRs cannot land). Staged work is two issues, the second blocked by the first.
 2. **Validate.** `graft validate` runs the project's check and records the base it was green on. Done when it exits 0.
 3. **Publish.** Uncommitted changes in the worktree → one Verified commit:
 

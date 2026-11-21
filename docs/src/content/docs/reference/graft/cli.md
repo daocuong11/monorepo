@@ -33,7 +33,7 @@ Lands the worktree's changes to the named paths as one commit on `<branch>`.
 | --- | --- |
 | `--paths a,b` | Paths the commit carries. |
 | `--all` | Every dirty path, untracked included. |
-| `--base <b>` | Branch to create `<branch>` from and open the PR against. Default: `baseBranch`, else the repository's default branch. |
+| `--base <b>` | Branch to create `<branch>` from and open the PR against. Default: `baseBranch`, else the repository's default branch. Must be in `mergeableBases` when the publish creates the branch or opens the PR; a maintainer grant with the `merge` scope lifts this. |
 | `--pr <title>` | Open a PR with this title. |
 | `--pr-body`, `--pr-body-file` | PR body, inline or from a file. |
 | `--draft` | Open the PR as a draft. |
@@ -143,7 +143,7 @@ graft maintainer revoke [--session <id>]
 | --- | --- |
 | `protected` (default) | Editing and publishing protected paths. The PR still needs code-owner review. |
 | `no-verify` | Publishing without the repository's git hooks. |
-| `merge` | `graft pr merge` past the local merge policy (base, protected paths, red base). |
+| `merge` | `graft pr merge` past the local merge policy (base, protected paths, red base), and `graft publish` onto a base outside `mergeableBases`. |
 
 A grant binds one session: the one it is typed into, or `--session`. Default expiry 4 hours, maximum 24. A grant run by the agent itself is refused. Grants and their log live in `<git-common-dir>/graft/`.
 

@@ -25,6 +25,7 @@ Your contract (the repository's AGENTS.md, four points):
 
 Rules:
 - Publish to exactly the branch \`${branch}\` and pass \`--closes ${issue.number}\`: that is how cambium finds your PR.
+- One PR per issue, into the default base: never \`--base\` another branch, and never a second, stacked PR. If the issue asks for staged PRs, do stage one only and say in the PR body what is left; cambium tracks one PR per issue and closes a second as a duplicate.
 - Do not touch labels or the issue body (\`graft issue label\` / \`graft issue edit\` are denied); cambium moves the queue.
 - Exiting without a published PR counts as a failed attempt.
 ${

@@ -8,6 +8,8 @@
  *   1. scope          --paths or --all, named — before any credential is read
  *   2. no-verify      skipping the repo's hooks needs a `no-verify` grant
  *   3. validated base the green you are relying on is about THIS base
+ *   3b. stacked base  a new branch or PR only on a base agents may merge into
+ *                     (gates/stacked-base.mjs); a `merge` grant lifts it
  *   4. the tree       built locally; the pre-commit hook runs here, and what it
  *                     stages ships
  *   5. the candidate  protection → displacement → payload, judged on the tree
@@ -25,9 +27,11 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { withClosingTrailers } from '../closing-refs.mjs'
+import { mergeableBases } from '../config.mjs'
 import { flag, has, positionals } from '../context.mjs'
 import { PublishError } from '../errors.mjs'
 import { BOTH_SCOPES_MESSAGE, noPrNote, sweepMessage } from '../gates/scope.mjs'
+import { stackedBaseRefusal } from '../gates/stacked-base.mjs'
 import { checkValidatedBase, readReceipt } from '../gates/validated-base.mjs'
 import { hookRunner } from '../git-hooks.mjs'
 import { allows, grantAdvice } from '../maintainer.mjs'
@@ -94,6 +98,23 @@ function noVerifyGate({ ctx, argv }) {
   }
   console.log(`--no-verify: hooks skipped under maintainer grant ("${/** @type {any} */ (view).grant.reason}").`)
   return true
+}
+
+/**
+ * Stacked-base gate. See gates/stacked-base.mjs. A `merge` grant lifts it: the PR it makes needs that grant to
+ * merge anyway.
+ */
+async function stackedBaseGate({ ctx, base, newBranch, newPr }) {
+  const refusal = stackedBaseRefusal({
+    base,
+    allowedBases: mergeableBases(ctx.config, await ctx.baseBranch()),
+    newBranch,
+    newPr,
+  })
+  if (!refusal) return
+  const view = ctx.grant()
+  if (!allows(view, 'merge')) throw new PublishError(`${refusal}\n\n${grantAdvice(view, 'merge')}`)
+  console.log(`stacked base \`${base}\` under maintainer grant (merge): "${/** @type {any} */ (view).grant.reason}"`)
 }
 
 /** Validated-base gate. See gates/validated-base.mjs. */
@@ -285,6 +306,7 @@ export async function runPublish(argv, { client: given = null } = {}) {
   // Read before the write, said after the commit line: a branch nobody opened
   // a PR for is a branch CI never runs on.
   const existing = head ? await openPr({ client, owner, repo, branch }) : null
+  await stackedBaseGate({ ctx, base, newBranch: !head, newPr: Boolean(prTitle && !existing) })
 
   const { runner, hooks } = publishHooks({ ctx, skip: skipHooks, branch, remoteSha: head?.sha ?? null })
   const out = await publishWorktree({

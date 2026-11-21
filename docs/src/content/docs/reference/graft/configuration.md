@@ -21,7 +21,7 @@ Every field is optional.
 | --- | --- | --- |
 | `repo` | `null` | `owner/name`. `null`: from the `origin` remote. |
 | `baseBranch` | `null` | Where agent PRs land without `--base`. `null`: the repository's default branch. |
-| `mergeableBases` | `null` | Bases `graft pr merge` may merge into. `null`: `[baseBranch]`. `[]`: none. |
+| `mergeableBases` | `null` | Bases `graft pr merge` may merge into, and the only bases `graft publish` cuts a new branch from or opens a PR against. `null`: `[baseBranch]`. `[]`: none. |
 | `requiredCheck` | `null` | Check that defines a green base, for `graft pr merge` and `graft ci wait`. `null` turns the red-base rule off. |
 | `validate.command` | `null` | Command `graft validate` runs. |
 | `hooks.path` | `null` | Repo-relative hooks directory. `null`: git's `core.hooksPath`, else `.git/hooks`. |
