@@ -95,6 +95,12 @@ A worker is `claude -p --output-format stream-json --verbose --thinking-display 
 
 The prompt states the four-point contract (task issue, `pnpm verify`, `graft publish <branch> … --closes <n>`, `graft ci wait`), the attempt, the existing PR if any (`graft advance` onto it), the last failure, the issue's history, the issue body, and the worktree's `AGENTS.md`.
 
+## Session briefs
+
+A `q:human` item worth an interactive session gets a brief at `<paths.home>/briefs/<owner>__<name>/issue-<n>.md` (src/briefs.mjs). One function, `isSessionCandidate`, decides who: today an open issue with `q:human` and `why:budget`. Every tick (paused too; nothing goes to GitHub) cambium renders each candidate's brief from the snapshot and rewrites the file when the text changed, so it follows the issue into `q:human` and every marker change; any other `issue-<n>.md` in a read repo's directory is deleted (the issue left `q:human`, or closed). A repo whose read failed is left alone.
+
+A brief holds the title, link, body (first 4,000 characters) and acceptance checks (triage's, else the body's checkboxes); graph, node, attempts, reworks, `failedSha`, `lastFailure` and the marker history; the issue's agent PRs, plus any the history names; the reasons in the history, as approaches already rejected; the question, options and recommendation when the marker has an `ask`; and the repo path with the verify and publish contract. Token-shaped text (provider tokens, bearer auth, URL credentials, the value of any `*TOKEN*`/`*SECRET*`/`*PASSWORD*`/`*KEY*` assignment) becomes `[redacted]`. Files are written `0600`. canopy shows `cd <repo> && claude "$(cat <brief>)"` for each item with a brief.
+
 ## Configuration
 
 One JSON file. Everything but `repos` is optional; these are the defaults:
@@ -124,7 +130,7 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
   "priorityLabels": ["priority:critical", "priority:high", "priority:medium", "priority:low"],
   "release": { "enabled": false, "time": "06:00" },
   "reaper": { "everyMinutes": 60, "staleMinutes": 30, "orphanDays": 3 },
-  "retriage": { "enabled": false, "time": "05:00" },
+  "retriage": { "enabled": false, "time": "05:00", "maxSkipDays": 14 },
   "rescue": {
     "everyMinutes": 60,
     "staleHours": 12,
@@ -200,7 +206,7 @@ Two clocks in the graph engine's `upkeep` step, after Watch (`src/upkeep.mjs`), 
 | No issue (none named, or not readable)                          | Close the PR after `reaper.orphanDays` (default 3) untouched. The branch stays.                                                                                                                                                                                                                                |
 | A live worker on the issue, or the issue already tracks this PR | Leave it.                                                                                                                                                                                                                                                                                                      |
 
-**Re-triage** (once a day at `retriage.time` when `retriage.enabled`; off by default). Every `q:human` issue goes back to `q:intake` without its `why:*`, so [triage](#the-dispatch-graph) looks again under its current rubric: done since (obsolete, closed), now checkable (defer), or now a task. Not `why:approve`, a merge only a human may make, where a re-triage would start a duplicate Task. Not one holding `running`. The reaper runs first, so an issue whose PR it adopted is not re-triaged.
+**Re-triage** (once a day at `retriage.time` when `retriage.enabled`; off by default). Every `q:human` issue goes back to `q:intake` without its `why:*`, so [triage](#the-dispatch-graph) looks again under its current rubric: done since (obsolete, closed), now checkable (defer), or now a task. Not `why:approve`, a merge only a human may make, where a re-triage would start a duplicate Task. Not one holding `running`. Not one whose _triage inputs_ are unchanged: `start-triage` records on the marker a `fingerprint` (`{ hash, at }`, `src/triage-inputs.mjs`) of the title and body, the labels other than `q:*` / `why:*` / `wait:*` / `running`, the ids of human comments (as for [human replies](#the-dispatch-graph)), the GitHub "blocked by" issues and their states, the agent PRs naming the issue and their states, and `TRIAGE_RUBRIC`; `to-human` keeps it only for a needs-human verdict. A matching fingerprint younger than `retriage.maxSkipDays` (default 14; `0` never skips) leaves the issue in `q:human` with no worker and no label moves. A marker without one (another route to `q:human`, or written before fingerprints) is re-triaged and gains one. Bump `TRIAGE_RUBRIC` with any change to how triage judges an issue, so everything is looked at again. The log line reads `re-triage: k of n changed; m back to q:intake, s unchanged skipped`. Deferred rechecks are not gated: a defer waits on something outside the issue (a CD run, a release), which the fingerprint cannot see. The reaper runs first, so an issue whose PR it adopted is not re-triaged.
 
 ## Worktree GC
 

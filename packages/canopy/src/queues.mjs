@@ -67,7 +67,9 @@ export const queryVars = (/** @type {string} */ slug) => {
 
 /**
  * @typedef {{ repo: string, number: number, title: string, url: string, createdAt: string | null,
- *   updatedAt: string | null, labels: string[], why: string | null, priority: string | null, wait?: Wait | null }} Item
+ *   updatedAt: string | null, labels: string[], why: string | null, priority: string | null, wait?: Wait | null,
+ *   brief?: { path: string, command: string } }} Item
+ *   `brief`: added by the server (server.mjs `briefOf`) to a `q:human` item cambium wrote a session brief for.
  * @typedef {{ kind: 'deferred' | 'blocked', reason: string | null, until: string | null,
  *   blockers: { number: number, title: string, url: string }[] }} Wait
  *   Why a `waiting` issue is parked: cambium's defer reason and recheck time (`until`, deferred only) from its state

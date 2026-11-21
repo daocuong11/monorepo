@@ -1,6 +1,6 @@
 // @ts-check
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,8 +8,8 @@ import { test } from 'node:test'
 import { main } from '../src/cli.mjs'
 import { resolveSettings } from '../src/config.mjs'
 import { cachedIssues, cachedQueues } from '../src/github.mjs'
-import { group } from '../src/queues.mjs'
-import { buildState, createApp, hostnameOf } from '../src/server.mjs'
+import { emptyColumns, group } from '../src/queues.mjs'
+import { briefOf, buildState, createApp, hostnameOf, shellWord } from '../src/server.mjs'
 import { graphqlAnswer, heartbeat, T0 } from './fixtures.mjs'
 
 const REPO = 'oakgreencc/monorepo'
@@ -198,4 +198,56 @@ test('cli: defaults to 127.0.0.1:4317, honours --port/--host, rejects bad flags'
   assert.equal(main(['--bogus'], quiet), 2)
   assert.equal(main(['--repo', 'bad'], quiet), 2)
   assert.equal(main(['--help'], quiet), 0)
+})
+
+test('session briefs: a q:human item with a brief carries the copy command; one without does not', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'canopy-briefs-'))
+  mkdirSync(join(dir, 'oakgreencc__monorepo'))
+  writeFileSync(join(dir, 'oakgreencc__monorepo', 'issue-4.md'), '# brief')
+  const item = (/** @type {number} */ number, /** @type {string} */ why) => ({
+    repo: REPO,
+    number,
+    title: `#${number}`,
+    url: '',
+    createdAt: null,
+    updatedAt: null,
+    labels: ['q:human', `why:${why}`],
+    why,
+    priority: null,
+  })
+  const answer = {
+    repos: [],
+    columns: { ...emptyColumns(), human: [item(4, 'budget'), item(5, 'triage')] },
+    prs: [],
+    stranded: [],
+    fetchedAt: null,
+    cached: false,
+  }
+  const queues = { get: async () => answer }
+  const briefs = { dir, paths: { [REPO]: '/src/my repo' } }
+  const s = await buildState({ statePath: stateFile(heartbeat()), repos: [REPO], queues, now: () => T0, briefs })
+  const [withBrief, without] = s.github.columns.human
+  assert.equal(withBrief.brief.path, join(dir, 'oakgreencc__monorepo', 'issue-4.md'))
+  assert.equal(withBrief.brief.command, `cd '/src/my repo' && claude "$(cat ${withBrief.brief.path})"`)
+  assert.equal(without.brief, undefined)
+  assert.equal(/** @type {any} */ (answer.columns.human[0]).brief, undefined, 'the cached answer is not touched')
+
+  assert.equal(
+    briefOf({ dir, paths: {} }, { repo: REPO, number: 4 })?.command,
+    `claude "$(cat ${withBrief.brief.path})"`,
+  )
+  assert.equal(shellWord("it's"), `'it'\\''s'`)
+})
+
+test('the page renders the copy command only from an item with a brief', async () => {
+  const { PAGE } = await import('../src/page.mjs')
+  assert.match(PAGE, /if \(sel && sel\.brief\) parts\.push\(sessionPart\(sel\.brief\)\)/)
+  assert.match(PAGE, /'data-copy': b\.command/)
+})
+
+test('resolveSettings: briefs live under the cambium home; repo paths come from its config', () => {
+  const cfg = JSON.stringify({ paths: { home: '~/cam' }, repos: [{ slug: REPO, path: '~/src/mono' }, { slug: 'a/b' }] })
+  const s = resolveSettings({ config: '/c.json' }, { env: {}, home: '/h', read: () => cfg })
+  assert.equal(s.briefs.dir, '/h/cam/briefs')
+  assert.deepEqual(s.briefs.paths, { [REPO]: '/h/src/mono' })
 })

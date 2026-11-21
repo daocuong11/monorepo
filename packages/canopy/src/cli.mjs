@@ -136,6 +136,7 @@ export function main(
     host,
     notes,
     traces: traceStore({ path: settings.tracesPath }),
+    briefs: settings.briefs,
   })
   return { server, host, port }
 }

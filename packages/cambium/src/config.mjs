@@ -41,7 +41,7 @@ import { join, resolve } from 'node:path'
  *   priorityLabels: string[],
  *   release: { enabled: boolean, time: string },
  *   reaper: { everyMinutes: number, staleMinutes: number, orphanDays: number },
- *   retriage: { enabled: boolean, time: string },
+ *   retriage: { enabled: boolean, time: string, maxSkipDays: number },
  *   rescue: RescueConfig,
  *   paths: { home: string, db: string, heartbeat: string, logs: string },
  *   logs: { keepPerIssue: number, daemonMaxBytes: number },
@@ -96,7 +96,7 @@ export function defaults(home = DEFAULT_HOME) {
     priorityLabels: ['priority:critical', 'priority:high', 'priority:medium', 'priority:low'],
     release: { enabled: false, time: '06:00' },
     reaper: { everyMinutes: 60, staleMinutes: 30, orphanDays: 3 },
-    retriage: { enabled: false, time: '05:00' },
+    retriage: { enabled: false, time: '05:00', maxSkipDays: 14 },
     rescue: { everyMinutes: 60, staleHours: 12, graceMinutes: 30, cooldownHours: 24, maxRescues: 2, causeRepo: null },
     paths: {
       home,
@@ -140,6 +140,8 @@ export function resolveConfig(raw = {}) {
   for (const k of /** @type {const} */ (['home', 'db', 'heartbeat', 'logs'])) config.paths[k] = untilde(config.paths[k])
   if (!/^\d{2}:\d{2}$/.test(config.release.time)) throw new Error(`config: release.time must be HH:MM`)
   if (!/^\d{2}:\d{2}$/.test(config.retriage.time)) throw new Error(`config: retriage.time must be HH:MM`)
+  if (typeof config.retriage.maxSkipDays !== 'number' || !(config.retriage.maxSkipDays >= 0))
+    throw new Error(`config: retriage.maxSkipDays must be a number of days ≥ 0`)
   config.repos = (config.repos ?? []).map((r) => {
     if (!r?.slug || !/^[^/\s]+\/[^/\s]+$/.test(r.slug))
       throw new Error(`config: repo slug must be owner/name, got ${r?.slug}`)

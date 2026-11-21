@@ -34,7 +34,7 @@ One JSON file: `--config`, else `$CAMBIUM_CONFIG`, else `~/.cambium/config.json`
   "priorityLabels": ["priority:critical", "priority:high", "priority:medium", "priority:low"],
   "release": { "enabled": false, "time": "06:00" },
   "reaper": { "everyMinutes": 60, "staleMinutes": 30, "orphanDays": 3 },
-  "retriage": { "enabled": false, "time": "05:00" },
+  "retriage": { "enabled": false, "time": "05:00", "maxSkipDays": 14 },
   "rescue": {
     "everyMinutes": 60,
     "staleHours": 12,
@@ -122,6 +122,7 @@ A file that does not load, or has no `repos`, keeps the running config and logs 
 | `reaper.orphanDays`      | `3`       | A PR naming no issue is closed after this long untouched.                       |
 | `retriage.enabled`       | `false`   | Daily return of `q:human` issues (not `why:approve`) to `q:intake`.             |
 | `retriage.time`          | `"05:00"` | Host-local `HH:MM`.                                                             |
+| `retriage.maxSkipDays`   | `14`      | An unchanged `q:human` issue is re-triaged anyway after this many days; `0` never skips. |
 | `rescue.everyMinutes`    | `60`      | Stuck-item sweep interval.                                                      |
 | `rescue.staleHours`      | `12`      | Age for `stale-task`, `stale-intake` and `pr-stale`.                            |
 | `rescue.graceMinutes`    | `30`      | A label change counts only after this long since the marker last moved.         |
@@ -159,6 +160,8 @@ GC skips the checkout itself, worker worktrees and locked worktrees (a Claude Co
 | `logs.daemonMaxBytes`  | `10485760`               | Daemon log rotation size.                               |
 
 Worker logs: `<paths.logs>/<owner>__<name>/issue-<n>/a<attempt>-<stamp>.{prompt.md,out.log,err.log}`.
+
+Session briefs: `<paths.home>/briefs/<owner>__<name>/issue-<n>.md`, one per open `q:human` issue labelled `why:budget`. Each tick rewrites a brief whose content changed and deletes it once the issue leaves `q:human` or closes. A brief holds the issue's title, link, body (first 4,000 characters) and acceptance checks; its attempts, reworks, last failure, failed SHA and history; its agent PRs; the reasons earlier attempts failed; the repository path; and the verify and publish commands. Token-shaped text is replaced with `[redacted]`. Files are mode `0600`.
 
 ## `graft`, `worker`
 

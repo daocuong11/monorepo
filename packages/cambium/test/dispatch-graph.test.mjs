@@ -193,6 +193,9 @@ test('needs-human → q:human with why:triage and the reason', async () => {
   assert.equal(m?.node, 'to-human')
   assert.equal(m?.lastFailure, 'Which tick? Two candidates; pick one.')
   assert.equal(m?.history.at(-1)?.outcome, 'needs-human')
+  // The triage inputs the worker saw, taken when it started: re-triage skips the issue while they hold.
+  assert.match(m?.fingerprint?.hash ?? '', /^[0-9a-f]{16}$/)
+  assert.equal(m?.fingerprint?.at, new Date(T0).toISOString())
   assert.match(h.gh.issue(7).comment?.body ?? '', /Which tick\? Two candidates/)
   assert.equal(h.deps.store.worker(SLUG, 7), null)
 })

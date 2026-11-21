@@ -65,6 +65,10 @@ Approvals are matched before the other groups.
 | `o` | Open on GitHub |
 | `Escape` | Back to the list (narrow screens) |
 
+### Interactive session
+
+A `q:human` item cambium wrote a session brief for (`<home>/briefs/<owner>__<name>/issue-<n>.md`, currently `why:budget` only) shows **Interactive session** in the reading pane: the command `cd <repo path> && claude "$(cat <brief>)"` and a **Copy** button. The repo path comes from `repos[].path` in the cambium config; without one the command has no `cd`. Items without a brief show nothing.
+
 ### Queue placement
 
 | Labels on an open issue | Column |
@@ -96,7 +100,7 @@ Only `GET` and `HEAD` are answered, and only for a loopback `Host` (or the `--ho
 | Field | Shape |
 | --- | --- |
 | `heartbeat` | `{ status, path, message, stale, ageMs, staleAfterMs, data }`. `status`: `ok`, `missing`, `unreadable`, `unknown-version`. `stale` after 3 × `tickSeconds`. |
-| `github` | `{ repos, columns: { intake, waiting, task, running, human, promote }, prs, fetchedAt, cached }` |
+| `github` | `{ repos, columns: { intake, waiting, task, running, human, promote }, prs, fetchedAt, cached }` A `human` item with a session brief carries `brief: { path, command }`. |
 | `traces` | `{ status, path, message, files, malformed, total, errored, byIssue, progress, recent, flow }`. `status`: `ok`, `missing`, `unreadable`. |
 
 ## Inputs
@@ -105,4 +109,5 @@ Only `GET` and `HEAD` are answered, and only for a loopback `Host` (or the `--ho
 | --- | --- |
 | Heartbeat | cambium's `state.json`, schema [`version: 1`](/reference/cambium/heartbeat/). Any other version is reported, not parsed. |
 | Traces | The local collector's OTLP/JSON file and rotated backups (`traces-<time>.jsonl`), newest first, up to 64 MB. Re-parsed only when size or mtime changes. |
+| Session briefs | `<paths.home>/briefs/` from the cambium config, else `~/.cambium/briefs/`. Checked for each `q:human` item on every `/api/state`. |
 | Queues | GitHub labels, through `graft graphql`. Each repository's answer is cached for `--cache` seconds; a failed refresh keeps the last good answer. |

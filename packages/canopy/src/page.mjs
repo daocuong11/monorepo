@@ -164,6 +164,7 @@ h2 .n{color:var(--faint);margin-left:4px}
 .pill{display:inline-block;padding:0 7px;border-radius:9px;background:var(--chip);font-size:12px}
 .pill.ok{background:color-mix(in srgb,var(--ok) 16%,transparent)}.pill.warn{background:color-mix(in srgb,var(--warn) 18%,transparent)}
 .pill.err{background:color-mix(in srgb,var(--err) 16%,transparent)}.pill .faint{color:var(--muted)}
+.session .cmd{display:flex;align-items:flex-start;gap:var(--s2)}.session code{flex:1;padding:var(--s1) var(--s2);border:1px solid var(--line);border-radius:5px;background:var(--panel);overflow-wrap:anywhere;user-select:all}
 .banner{padding:var(--s2) var(--s3);border-radius:6px;border:1px solid var(--line);background:var(--panel)}
 .banner.err{border-color:color-mix(in srgb,var(--err) 45%,var(--line))}.banner.warn{border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}
 .detail{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:var(--s4);align-items:start}
@@ -659,6 +660,15 @@ function inboxFigures(st, multi, now) {
           h('span', {}, p.label))))))
 }
 
+// A q:human item cambium wrote a session brief for (cambium briefs.mjs): the command that starts claude in the repo
+// with it. Only items with a brief get one.
+const sessionPart = (b) => h('div', { class: 'part session' },
+  h('h3', {}, 'Interactive session', h('span', {}, 'cambium wrote a brief')),
+  h('p', { class: 'muted' }, 'Starts claude in the repo, seeded with the issue, its history, the last failure and the approaches already rejected.'),
+  h('div', { class: 'cmd' }, h('code', { class: 'mono' }, b.command),
+    h('button', { class: 'btn', type: 'button', 'data-copy': b.command, title: 'Copy the command' }, 'Copy')),
+  h('p', { class: 'faint mono', title: 'The brief' }, b.path))
+
 function issuePane(sel, gone, d, multi, now, sig) {
   const base = sel || gone, repo = base.repo, data = d && d.data
   const url = (sel && sel.url) || gone.url
@@ -682,6 +692,7 @@ function issuePane(sel, gone, d, multi, now, sig) {
 
   const parts = []
   if (gone) parts.push(h('div', { class: 'banner warn part' }, h('b', {}, 'No longer in the inbox. '), "It has left q:human (or is no longer stranded). Showing it as last read; it won't refresh here."))
+  if (sel && sel.brief) parts.push(sessionPart(sel.brief))
   if (sel && sel.kind === 'stranded') parts.push(h('div', { class: 'banner warn part' }, h('b', {}, 'Stranded: '),
     'agent PR #' + sel.pr.number + ' closed unmerged ' + ago(sel.pr.closedAt, now) + ' and no open agent PR replaces it. With no queue label, cambium will not pick this issue up again. Add a queue label to send it back, or close it.'))
   if (d && d.error) parts.push(h('div', { class: 'banner err part' }, h('b', {}, data ? "Couldn't refresh this issue: " : "Couldn't read this issue from GitHub: "), d.error,
@@ -1698,6 +1709,13 @@ $('main').addEventListener('click', (e) => {
       return
     }
     if (gb.dataset.node) { gxPin = gxPin === gb.dataset.node ? null : gb.dataset.node; gxHover = gb.dataset.node; return gxShowTip(gxHover) }
+  }
+  const cp = e.target.closest('[data-copy]')
+  if (cp) {
+    const done = (t) => { cp.textContent = t }
+    if (navigator.clipboard) navigator.clipboard.writeText(cp.dataset.copy).then(() => done('Copied'), () => done('Select it to copy'))
+    else done('Select it to copy')
+    return
   }
   const mb = e.target.closest('[data-menu]')
   if (mb) { ibMenu = ibMenu === mb.dataset.menu ? null : mb.dataset.menu; if (last) render(last); return }

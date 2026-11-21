@@ -17,6 +17,7 @@ import { newMarker, withHistory } from '../marker.mjs'
 import { readTriage, TriageResult, triageComment, triagePrompt } from '../phases/dispatch.mjs'
 import { humanReplies, quoted, replyContextOf } from '../human-reply.mjs'
 import { traceWorker } from '../tracing.mjs'
+import { fingerprintOf } from '../triage-inputs.mjs'
 import { stopOverdue } from '../workers.mjs'
 import { task } from './task.mjs'
 
@@ -166,6 +167,8 @@ const startTriage = declare(
       await land(ctx, 'triaging', {
         ...m0,
         reply,
+        // The inputs this worker sees; to-human keeps them on a needs-human verdict, so re-triage can skip it.
+        fingerprint: { hash: fingerprintOf(issue, snap, { botLogin: config.graft.botLogin }), at: iso(ctx.tick.now) },
         deferUntil: null,
         host: config.host,
         start: iso(ctx.tick.now),
@@ -398,7 +401,8 @@ const toHuman = declare(
     output: Empty,
     /**
      * Into the Human Queue with `why:triage` and the reason in the state comment; a needs-human verdict's `ask` adds
-     * its `ask:*` labels and is rendered there too.
+     * its `ask:*` labels and is rendered there too. A needs-human verdict keeps the triage inputs `start-triage`
+     * recorded (re-triage skips the issue while they hold); a spent budget drops them.
      * @param {z.infer<typeof HumanIn>} input @param {DispatchCtx} ctx
      */
     run: async ({ ask, ...what }, ctx) => {
@@ -411,6 +415,7 @@ const toHuman = declare(
           ...withHistory(m, { at: iso(ctx.tick.now), attempt: m.attempt, ...what }),
           lastFailure: what.reason,
           ask: ask ?? null,
+          fingerprint: what.outcome === 'needs-human' ? (m.fingerprint ?? null) : null,
           host: null,
           start: null,
           input: null,

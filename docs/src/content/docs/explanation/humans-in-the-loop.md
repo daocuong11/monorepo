@@ -48,7 +48,7 @@ Once an issue is in `q:human`, cambium stops acting on it. It will not rework or
 
 Two mechanisms keep `q:human` from becoming a graveyard.
 
-- **Re-triage**, off by default, sends every `q:human` issue back through triage once a day. The rubric may have improved, the work may have been done meanwhile, or the question may now be checkable. `why:approve` is left alone, since re-triaging it would start a duplicate task.
+- **Re-triage**, off by default, sends every `q:human` issue back through triage once a day. The rubric may have improved, the work may have been done meanwhile, or the question may now be checkable. `why:approve` is left alone, since re-triaging it would start a duplicate task. An issue nothing has touched since triage last said needs-human is skipped: same text, labels, comments, blockers, linked PRs and rubric give the same answer, and each triage costs a model turn. A new rubric version, or `retriage.maxSkipDays` (14 days) without a look, re-triages it anyway, so changes the fingerprint cannot see are caught eventually. Deferred issues are always rechecked: what they wait on lives outside the issue.
 - **Rescue** looks for items stuck in states that should not persist — two queue labels at once, a merged PR with an open issue, a task passed over for half a day. A read-only agent works out how it happened; cambium checks the plan, carries it out, files tickets for the root causes, and reports on the issue. An item rescued twice in a week goes to a person instead of a third diagnosis.
 
 ## Approval, once

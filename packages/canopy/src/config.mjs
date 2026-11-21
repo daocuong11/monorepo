@@ -10,11 +10,13 @@ export const expandHome = (/** @type {string} */ p, home = homedir()) =>
 
 /**
  * Where the heartbeat lives and which repos to read, from flags first, then
- * cambium's own config file. Only `paths` and `repos[].slug` are read from it.
+ * cambium's own config file. Only `paths` and `repos[].slug`/`path` are read from it.
  *
  * @param {{ state?: string, config?: string, repos?: string[], traces?: string }} flags
  * @param {{ env?: Record<string, string | undefined>, home?: string, read?: (p: string) => string }} [deps]
- * @returns {{ statePath: string, tracesPath: string, repos: string[], configPath: string, configError: string | null }}
+ * @returns {{ statePath: string, tracesPath: string, repos: string[], configPath: string, configError: string | null,
+ *   briefs: { dir: string, paths: Record<string, string> } }}
+ *   `briefs`: where cambium writes session briefs (`<home>/briefs`) and each repo's checkout (`repos[].path`).
  */
 export function resolveSettings(
   flags,
@@ -41,7 +43,19 @@ export function resolveSettings(
     ? flags.repos
     : (Array.isArray(cfg?.repos) ? cfg.repos : []).map((/** @type {any} */ r) => r?.slug).filter(Boolean)
   for (const r of listed) if (!SLUG.test(r)) throw new Error(`repo must be owner/name, got ${r}`)
-  return { statePath, tracesPath, repos: [...new Set(/** @type {string[]} */ (listed))], configPath, configError }
+  /** @type {Record<string, string>} */
+  const paths = {}
+  for (const r of Array.isArray(cfg?.repos) ? cfg.repos : [])
+    if (isSlug(r?.slug) && typeof r?.path === 'string' && r.path) paths[r.slug] = resolve(expandHome(r.path, home))
+  const briefs = { dir: resolve(expandHome(join(homeDir, 'briefs'), home)), paths }
+  return {
+    statePath,
+    tracesPath,
+    repos: [...new Set(/** @type {string[]} */ (listed))],
+    configPath,
+    configError,
+    briefs,
+  }
 }
 
 export const isSlug = (/** @type {unknown} */ s) => typeof s === 'string' && SLUG.test(s)

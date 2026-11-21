@@ -18,8 +18,8 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
  * }} Issue
  *   `stateComment.author`: the login that wrote the state comment (cambium's). `comments`: the newest 20, oldest
  *   first, for human-reply detection (human-reply.mjs).
- * @typedef {{ author: string | null, bot: boolean, createdAt: string, body: string }} Comment
- *   `bot`: GitHub says the author is a `Bot` (an App).
+ * @typedef {{ id?: number, author: string | null, bot: boolean, createdAt: string, body: string }} Comment
+ *   `bot`: GitHub says the author is a `Bot` (an App). `id`: GitHub's database id (triage-inputs.mjs).
  * @typedef {{ number: number, state: 'OPEN' | 'CLOSED', closedAt: string | null }} Blocker
  *   An issue GitHub records as blocking this one (the "blocked by" relationship).
  * @typedef {{ name: string, url: string | null, summary: string }} FailingCheck
@@ -117,7 +117,7 @@ fragment I on Issue {
   labels(first: 30) { nodes { name } }
   blockedBy(first: 20) { nodes { number state closedAt } }
   comments(first: 100) { nodes { databaseId body author { login } } }
-  recent: comments(last: 20) { nodes { createdAt body author { login __typename } } }
+  recent: comments(last: 20) { nodes { databaseId createdAt body author { login __typename } } }
 }
 fragment P on PullRequest {
   number url title state createdAt headRefName baseRefName headRefOid reviewDecision
@@ -251,6 +251,7 @@ function toIssue(n, botLogin) {
       closedAt: b.closedAt ?? null,
     })),
     comments: (n.recent?.nodes ?? []).filter(Boolean).map((/** @type {any} */ c) => ({
+      ...(c.databaseId ? { id: c.databaseId } : {}),
       author: c.author?.login ?? null,
       bot: c.author?.__typename === 'Bot',
       createdAt: c.createdAt ?? '',
