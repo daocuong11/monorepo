@@ -120,10 +120,10 @@ const { title = data.title, tagline, actions = [] } = data.hero || {}
 		color: var(--og-ring);
 	}
 	.orbit-inner {
-		inset: -9%;
+		inset: -5%;
 	}
 	.orbit-outer {
-		inset: -20%;
+		inset: -9%;
 	}
 	.orbiter {
 		position: absolute;
@@ -138,8 +138,8 @@ const { title = data.title, tagline, actions = [] } = data.hero || {}
 		color: var(--og-earth);
 	}
 	.teapot {
-		top: 0;
-		left: 50%;
+		top: 85.4%;
+		left: 14.6%;
 		width: 1.375rem;
 		height: 1.375rem;
 		translate: -50% -50%;
@@ -147,11 +147,11 @@ const { title = data.title, tagline, actions = [] } = data.hero || {}
 		opacity: 0.85;
 	}
 	.sputnik {
-		bottom: 14.6%;
-		right: 14.6%;
+		top: 14.6%;
+		left: 14.6%;
 		width: 2.25rem;
 		height: 2.25rem;
-		translate: 50% 50%;
+		translate: -50% -50%;
 		rotate: 150deg;
 		color: var(--og-gold);
 	}
@@ -161,10 +161,10 @@ const { title = data.title, tagline, actions = [] } = data.hero || {}
 			animation: og-spin 40s linear infinite;
 		}
 		.orbit-inner {
-			animation: og-spin 30s linear infinite reverse;
+			animation: og-spin 90s linear infinite reverse;
 		}
 		.orbit-outer {
-			animation: og-spin 24s linear infinite;
+			animation: og-spin 75s linear infinite;
 		}
 		.teapot {
 			animation: og-spin 9s linear infinite;
