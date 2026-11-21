@@ -171,6 +171,18 @@ test('session-check hook: quiet in a bound session; warns in one that is not', a
   assert.equal(parsed.systemMessage, parsed.hookSpecificOutput.additionalContext)
 })
 
+test('session-check hook: says when graft is older than .graft.json minVersion', async (t) => {
+  const dir = repo(t)
+  writeFileSync(join(dir, '.graft.json'), JSON.stringify({ minVersion: '99.0.0' }))
+  const event = { hook_event_name: 'SessionStart', cwd: dir }
+  const env = { ...ISOLATED, ...graftEnv }
+  const out = String(sessionCheck.check(event, { env, running: '0.2.17' }))
+  assert.match(out, /this is graft 0\.2\.17; this project's \.graft\.json requires >= 99\.0\.0/)
+  assert.match(out, /oakgreen update/)
+  writeFileSync(join(dir, '.graft.json'), JSON.stringify({ minVersion: '0.2.17' }))
+  assert.equal(sessionCheck.check(event, { env, running: '0.2.17' }), null)
+})
+
 test('readRawGit: no origin remote → no URL (git would echo the name back)', (t) => {
   const dir = repo(t, { settings: false })
   execFileSync('git', ['-C', dir, 'remote', 'remove', 'origin'], { env: ISOLATED })

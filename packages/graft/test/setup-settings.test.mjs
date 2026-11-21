@@ -88,8 +88,9 @@ test('mergeSettings: keeps unrelated keys, hooks, permissions and non-graft git 
 
 test('missingFromSettings: names each missing piece', () => {
   const missing = missingFromSettings({})
-  assert.equal(missing.length, 7)
+  assert.equal(missing.length, 8)
   assert.ok(missing.some((m) => m.includes('graft credential')))
   assert.ok(missing.some((m) => m.includes('guard-protected')))
   assert.ok(missing.some((m) => m.includes('session-check')))
+  assert.ok(missing.some((m) => m.includes('finish-worktree')))
 })

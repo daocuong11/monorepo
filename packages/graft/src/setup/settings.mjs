@@ -100,6 +100,13 @@ export function claudeHooks() {
         matcher: 'Write|Edit|MultiEdit|NotebookEdit',
         hooks: [hook('graft hook guard-protected', { timeout: 10 })],
       },
+      {
+        // `graft worktree done` first, so a merged worktree's branch is rewound and the remove passes.
+        matcher: 'ExitWorktree',
+        hooks: [
+          hook('graft hook finish-worktree', { timeout: 60, statusMessage: 'Checking GitHub holds this worktree' }),
+        ],
+      },
     ],
     PostToolUse: [
       {
@@ -204,7 +211,7 @@ export function missingFromSettings(settings) {
     .flat()
     .flatMap((g) => /** @type {any} */ (g)?.hooks ?? [])
     .map((h) => String(h?.command ?? ''))
-  for (const name of ['guard-credentials', 'guard-pr-writes', 'guard-protected', 'session-check'])
+  for (const name of ['guard-credentials', 'guard-pr-writes', 'guard-protected', 'finish-worktree', 'session-check'])
     if (!commands.some((c) => c.includes(`hook ${name}`))) missing.push(`hooks: graft hook ${name}`)
   return missing
 }

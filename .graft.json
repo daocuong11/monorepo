@@ -1,5 +1,6 @@
 {
   "baseBranch": "main",
+  "minVersion": "0.2.22",
   "requiredCheck": "verify",
   "hooks": {
     "path": ".githooks",
