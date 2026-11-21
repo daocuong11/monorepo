@@ -8,10 +8,11 @@ import { homedir, hostname } from 'node:os'
 import { join, resolve } from 'node:path'
 
 /**
- * @typedef {{ enabled: boolean, time: string, from: string, to: string }} RepoRelease
+ * @typedef {{ enabled: boolean, time: string, from: string, to: string, check: string | null }} RepoRelease
  *   The promotion PR (`engine: "graph"`): `from` (default: the repo's `baseBranch`) is promoted into `to`
  *   (default `main`) once a day at `time`. `enabled`/`time` default to the top-level `release`. Off when
- *   `from === to`.
+ *   `from === to`. `check` (default: the repo's `requiredCheck`): the check that must be green on the `from`
+ *   commit a release is cut at; `null` cuts at the tip.
  * @typedef {'none' | 'green'} MergePolicy
  *   Who merges a Task PR. `none`: not cambium (a merge queue, auto-merge, or a human; past `mergeQueueMinutes`
  *   the issue goes to `q:human`). `green`: cambium, once its checks are green, through `graft pr merge --auto`
@@ -151,21 +152,24 @@ export function resolveConfig(raw = {}) {
       throw new Error(`config: repo slug must be owner/name, got ${r?.slug}`)
     if (!r.path) throw new Error(`config: repo ${r.slug} needs "path" (a local clone)`)
     const baseBranch = r.baseBranch ?? 'main'
+    const requiredCheck = r.requiredCheck === undefined ? 'ci' : r.requiredCheck
+    if (requiredCheck !== null && (typeof requiredCheck !== 'string' || !requiredCheck))
+      throw new Error(`config: repo ${r.slug} requiredCheck must be a check name or null`)
     /** @type {RepoRelease} */
     const release = {
       enabled: config.release.enabled,
       time: config.release.time,
       from: baseBranch,
       to: 'main',
+      check: requiredCheck,
       ...r.release,
     }
     if (!/^\d{2}:\d{2}$/.test(release.time)) throw new Error(`config: repo ${r.slug} release.time must be HH:MM`)
+    if (release.check !== null && (typeof release.check !== 'string' || !release.check))
+      throw new Error(`config: repo ${r.slug} release.check must be a check name or null`)
     const merge = r.merge ?? config.merge
     if (!MERGE_POLICIES.includes(merge))
       throw new Error(`config: repo ${r.slug} merge must be "none" or "green", got ${JSON.stringify(merge)}`)
-    const requiredCheck = r.requiredCheck === undefined ? 'ci' : r.requiredCheck
-    if (requiredCheck !== null && (typeof requiredCheck !== 'string' || !requiredCheck))
-      throw new Error(`config: repo ${r.slug} requiredCheck must be a check name or null`)
     return { slug: r.slug, path: untilde(r.path), baseBranch, release, merge, requiredCheck }
   })
   if (!MERGE_POLICIES.includes(config.merge))

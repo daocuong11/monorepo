@@ -5,8 +5,20 @@
  * state comment on that PR, written through the same path as an issue's (issue-state.mjs).
  *
  * - `release-prepare`: a clock entry, once a day at the repo's `release.time` (`releaseDue`, with the last run in
- *   the store). `cleanup` closes, with a comment, every open promotion PR older than 24 h; `prepare` opens the
- *   promotion PR (or refreshes the open one) when `from` is ahead of `to`, labels it `q:promote` and exits.
+ *   the store), or by hand (`cambium run release-prepare`). `cleanup` closes, with a comment, every open
+ *   promotion PR older than 24 h; `prepare` cuts a release and opens its PR, labels it `q:promote` and exits.
+ *
+ * A promotion PR whose head is `from` itself changes under its reviewer: whatever merges while they read is in
+ * the merge. So `prepare` promotes a frozen cut:
+ *
+ *   CUT        the newest commit on `from`'s first-parent line whose `release.check` concluded green (`null`:
+ *              the tip). A newer red or pending commit does not block an older green one.
+ *   CONTENT    `to` must hold nothing the cut lacks: an ancestor of it, or diverged only by empty merge
+ *              commits (the last promotion's, which nothing merges back). Otherwise nothing is opened.
+ *   BRANCH     `release/YYYY-MM-DD-N` at the cut, `N` one past the highest that (local) day, never reused, and
+ *              never pushed to: a fix found in review lands on `from`, and the next run cuts again.
+ *   SUPERSEDE  an open promotion of the same cut is refreshed; one of an older cut is closed, with a
+ *              "Superseded by" comment, after the new PR opens.
  * - `release-promote`: `q:promote` is its queue. It enters at `merge` once the PR is approved, merges through
  *   `graft pr merge --auto` (auto-merge, or a merge now when the PR is clean), waits at `merging`, and exits at
  *   `promoted` (merged) or `abandoned` (closed unmerged), taking `q:promote` off.
@@ -83,22 +95,132 @@ async function land(ctx, pr, graph, node, marker, { status = 'waiting' } = {}) {
   await setLabels(ctx, slug, issue, move(pr.labels, decl.queue))
 }
 
-/** Open, and from `from` to `to` or carrying a release marker. @param {Release} r @param {PromotionPr} pr */
-const isPromotion = (r, pr) =>
-  (pr.head === r.from && pr.base === r.to) || Boolean(pr.stateComment?.marker.graph.startsWith('release-'))
+/** A release branch: `release/YYYY-MM-DD-N`. */
+export const RELEASE_BRANCH = /^release\/(\d{4}-\d{2}-\d{2})-(\d+)$/
 
-/** The promotion PR's body: what `to` gets. @param {Release} r */
-export function promotionBody(r) {
+/** How many first-parent commits of `from` are searched for a green cut. */
+export const CUT_DEPTH = 50
+
+/**
+ * Open into `to` from `from` or a release branch, or carrying a release marker.
+ * @param {Release} r @param {PromotionPr} pr
+ */
+const isPromotion = (r, pr) =>
+  (pr.base === r.to && (pr.head === r.from || RELEASE_BRANCH.test(pr.head))) ||
+  Boolean(pr.stateComment?.marker.graph.startsWith('release-'))
+
+/** `YYYY-MM-DD` in the machine's local time. @param {number} ms */
+export function localDate(ms) {
+  const d = new Date(ms)
+  const p = (/** @type {number} */ n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+/**
+ * The next release branch for `date`: one past the highest that day, so a gap is never reused.
+ * @param {string} date `YYYY-MM-DD` @param {string[]} existing branch names
+ */
+export function releaseName(date, existing) {
+  let max = 0
+  for (const name of existing) {
+    const m = RELEASE_BRANCH.exec(name)
+    if (m && m[1] === date) max = Math.max(max, Number(m[2]))
+  }
+  return `release/${date}-${max + 1}`
+}
+
+/**
+ * The PRs a range merged, from its first-parent line (newest commit back): GitHub merge commits (`Merge pull
+ * request #N from …`, title on the next line) and squash merges (`title (#N)`). A branch's own commits are off
+ * that line, so an issue named in one (`fix x (#123)`) is not taken for a PR. Oldest first, each once.
+ * @param {import('../github.mjs').Range['commits']} commits oldest first
+ * @returns {{ number: number, title: string }[]}
+ */
+export function mergedPrs(commits) {
+  const bySha = new Map(commits.map((c) => [c.sha, c]))
+  /** @type {typeof commits} */
+  const line = []
+  for (let c = commits.at(-1); c && line.length < commits.length; c = bySha.get(c.parents[0])) line.unshift(c)
+  /** @type {Map<number, string>} */
+  const seen = new Map()
+  for (const { message } of line) {
+    const [subject, ...rest] = message.split('\n')
+    const merge = /^Merge pull request #(\d+) from \S+/.exec(subject)
+    const squash = merge ? null : /^(.*\S)\s+\(#(\d+)\)$/.exec(subject)
+    const number = Number(merge?.[1] ?? squash?.[2])
+    if (!number || seen.has(number)) continue
+    seen.set(number, merge ? (rest.map((l) => l.trim()).find(Boolean) ?? subject) : /** @type {any} */ (squash)[1])
+  }
+  return [...seen].map(([number, title]) => ({ number, title }))
+}
+
+/**
+ * @typedef {{ branch: string, sha: string, behind: number, url: string | null, check: string | null,
+ *   aheadBy: number, merged: { number: number, title: string }[], truncated: boolean }} Cut
+ */
+
+/** The promotion PR's body: what `to` gets, and why this commit. @param {Release} r @param {Cut} cut */
+export function promotionBody(r, cut) {
+  const why = cut.check
+    ? `the newest \`${r.from}\` commit with a green \`${cut.check}\`${cut.url ? ` ([run](${cut.url}))` : ''}`
+    : `the tip of \`${r.from}\``
   const lines = [
-    `Promotes \`${r.from}\` → \`${r.to}\`: ${r.aheadBy} commit${r.aheadBy === 1 ? '' : 's'} ahead.`,
+    `Promotes \`${cut.branch}\` → \`${r.to}\`: ${cut.aheadBy} commit${cut.aheadBy === 1 ? '' : 's'} ahead.`,
     '',
-    r.merged.length ? `Merged into \`${r.from}\` since \`${r.to}\`:` : `No merged PRs found in the commits ahead.`,
-    ...r.merged.map((p) => `- #${p.number} ${p.title}`),
+    `Cut at ${cut.sha}, ${why}.` +
+      (cut.behind
+        ? ` \`${r.from}\` has ${cut.behind} newer commit${cut.behind === 1 ? '' : 's'} not in this cut.`
+        : ''),
     '',
-    '_Opened by cambium (release-prepare). Approve it and cambium merges it (release-promote); ' +
+    cut.merged.length ? `Merged into \`${r.from}\` since \`${r.to}\`:` : `No merged PRs found in the commits ahead.`,
+    ...cut.merged.map((p) => `- #${p.number} ${p.title}`),
+    ...(cut.truncated ? ['', '_The list covers the oldest 250 commits of the range._'] : []),
+    '',
+    `_Opened by cambium (release-prepare). Nobody pushes to \`${cut.branch}\`: a fix lands on \`${r.from}\` and ` +
+      'the next run cuts again. Approve it and cambium merges it (release-promote); ' +
       'an unmerged promotion PR is closed after 24 h._',
   ]
   return lines.join('\n')
+}
+
+/**
+ * Where `r.from` should be cut, or why it should not: no green commit in reach, `to` already has it, or `to`
+ * holds content the cut lacks.
+ * @param {ReleaseCtx} ctx @param {Release} r
+ * @returns {Promise<{ cut: Omit<Cut, 'branch'> } | { reason: string, warn?: boolean }>}
+ */
+async function findCut(ctx, r) {
+  const { slug, repo } = ctx.subject
+  const check = repo.release.check
+  const green = await ctx.github.greenCommit(slug, r.from, check, CUT_DEPTH)
+  if (!green)
+    return {
+      reason: `no commit in the last ${CUT_DEPTH} on \`${r.from}\` has a green \`${check}\`; nothing to promote`,
+    }
+  const range = await ctx.github.compareRange(slug, r.to, green.sha)
+  if (range.status === 'identical' || range.status === 'behind')
+    return { reason: `\`${r.to}\` already has ${green.sha.slice(0, 9)}; nothing to promote` }
+  if (range.status !== 'ahead') {
+    const back = await ctx.github.compareRange(slug, green.sha, r.to)
+    if (back.files > 0)
+      return {
+        warn: true,
+        reason:
+          `\`${r.to}\` holds content ${green.sha.slice(0, 9)} lacks (${range.behindBy} commits, ${back.files} files); ` +
+          `merge \`${r.to}\` into \`${r.from}\`, then promote`,
+      }
+  }
+  return {
+    cut: {
+      sha: green.sha,
+      behind: green.behind,
+      url: green.url,
+      check,
+      aheadBy: range.aheadBy,
+      merged: mergedPrs(range.commits),
+      truncated: range.aheadBy > range.commits.length,
+    },
+  }
 }
 
 // ---- release-prepare
@@ -154,37 +276,47 @@ const prepare = declare(
       z.object({ to: z.literal('nothing'), reason: z.string() }),
     ]),
     /**
-     * `from` ahead of `to`: open the promotion PR (or refresh the open one), label it `q:promote`, write the
-     * marker. Nothing ahead: a log line.
+     * `from` ahead of `to`: cut a release (see the header), open its PR, label it `q:promote`, write the marker,
+     * then close the promotion it supersedes. Same cut already open: refresh it. Nothing to cut: a log line.
      * @param {z.infer<typeof Closed>} _ @param {ReleaseCtx} ctx
      */
     run: async (_, ctx) => {
       const { slug, release: r } = ctx.subject
-      if (!r.aheadBy) {
-        const reason =
+      /** @param {string} reason @param {boolean} [warn] */
+      const nothing = (reason, warn = false) => {
+        ctx.log(warn ? 'warn' : 'info', `release: ${reason}`, { repo: slug })
+        return /** @type {const} */ ({ to: 'nothing', reason })
+      }
+      if (!r.aheadBy)
+        return nothing(
           r.aheadBy === null
             ? `\`${r.to}\` not found; nothing to promote`
-            : `\`${r.from}\` is not ahead of \`${r.to}\`; nothing to promote`
-        ctx.log('info', `release: ${reason}`, { repo: slug })
-        return { to: 'nothing', reason }
-      }
-      const title = `Promote ${r.from} → ${r.to}`
-      const body = promotionBody(r)
+            : `\`${r.from}\` is not ahead of \`${r.to}\`; nothing to promote`,
+        )
+      const found = await findCut(ctx, r)
+      if (!('cut' in found)) return nothing(found.reason, found.warn)
       const at = iso(ctx.tick.now)
-      const open = r.prs.find((p) => p.state === 'OPEN' && p.head === r.from && p.base === r.to)
-      if (open) {
-        await ctx.github.editPull(slug, open.number, { title, body })
-        const m = markerOn(open, releasePrepare.name, 'prepare')
-        const entry = { at, attempt: m.attempt, outcome: 'updated', pr: open.number }
+      const open = r.prs.filter((p) => p.state === 'OPEN' && isPromotion(r, p))
+      const same = open.find((p) => p.headSha === found.cut.sha && RELEASE_BRANCH.test(p.head))
+      if (same) {
+        const cut = { ...found.cut, branch: same.head }
+        const title = `Release ${same.head.slice('release/'.length)}`
+        await ctx.github.editPull(slug, same.number, { title, body: promotionBody(r, cut) })
+        const m = markerOn(same, releasePrepare.name, 'prepare')
+        const entry = { at, attempt: m.attempt, outcome: 'updated', pr: same.number }
         // Already in release-promote (approved, merging): keep its position, record the refresh.
         if (m.graph === releasePromote.name && m.status !== 'done') {
-          await setMarker(ctx, slug, /** @type {any} */ (open), withHistory(m, entry))
-          await setLabels(ctx, slug, /** @type {any} */ (open), move(open.labels, Q.promote))
-        } else await land(ctx, open, releasePrepare, 'prepare', withHistory(m, entry), { status: 'done' })
-        ctx.log('info', `release: refreshed promotion PR #${open.number}`, where(ctx, open.number))
-        return { to: 'updated', pr: open.number }
+          await setMarker(ctx, slug, /** @type {any} */ (same), withHistory(m, entry))
+          await setLabels(ctx, slug, /** @type {any} */ (same), move(same.labels, Q.promote))
+        } else await land(ctx, same, releasePrepare, 'prepare', withHistory(m, entry), { status: 'done' })
+        ctx.log('info', `release: refreshed promotion PR #${same.number}`, where(ctx, same.number))
+        return { to: 'updated', pr: same.number }
       }
-      const made = await ctx.github.openPull(slug, { head: r.from, base: r.to, title, body })
+      const branch = releaseName(localDate(ctx.tick.now), await ctx.github.branches(slug, 'release/'))
+      const cut = { ...found.cut, branch }
+      await ctx.github.createBranch(slug, branch, cut.sha)
+      const title = `Release ${branch.slice('release/'.length)}`
+      const made = await ctx.github.openPull(slug, { head: branch, base: r.to, title, body: promotionBody(r, cut) })
       /** @type {PromotionPr} */
       const pr = {
         number: made.number,
@@ -192,9 +324,9 @@ const prepare = declare(
         title,
         state: 'OPEN',
         createdAt: at,
-        head: r.from,
+        head: branch,
         base: r.to,
-        headSha: null,
+        headSha: cut.sha,
         labels: [],
         approved: false,
         autoMerge: false,
@@ -210,21 +342,41 @@ const prepare = declare(
         withHistory(m, { at, attempt: m.attempt, outcome: 'opened', pr: pr.number }),
         { status: 'done' },
       )
-      ctx.log('info', `release: opened promotion PR #${pr.number} (${r.from} → ${r.to})`, where(ctx, pr.number))
+      ctx.log('info', `release: opened promotion PR #${pr.number} (${branch} → ${r.to})`, where(ctx, pr.number))
+      // The new PR first, so a failed open leaves the old promotion standing.
+      for (const old of open) {
+        const reason = `superseded by #${pr.number}`
+        if (old.stateComment) {
+          const om = old.stateComment.marker
+          await land(
+            ctx,
+            old,
+            releasePrepare,
+            'cleanup',
+            withHistory(om, { at, attempt: om.attempt, outcome: 'superseded', reason }),
+            { status: 'done' },
+          )
+        } else if (old.labels.includes(Q.promote))
+          await setLabels(ctx, slug, /** @type {any} */ (old), move(old.labels, null))
+        await ctx.github.closePull(slug, old.number, `Superseded by #${pr.number}.`)
+        old.state = 'CLOSED'
+        ctx.log('info', `release: closed promotion PR #${old.number} (${reason})`, where(ctx, old.number))
+      }
       return { to: 'opened', pr: pr.number }
     },
   }),
   // The PR it opens waits in `q:promote`, release-promote's queue.
   {
     queue: Q.promote,
-    about: 'When from is ahead of to, opens the promotion PR (or refreshes the open one) and labels it q:promote.',
+    about:
+      'Cuts release/<date>-N at the newest green commit on from, opens its PR (superseding the open one), labels it q:promote.',
   },
 )
 
 /** Bump `version` when a node is removed or renamed. */
 export const releasePrepare = defineGraph({
   name: 'release-prepare',
-  about: 'Once a day, opens or refreshes the promotion PR from the integration branch to the release branch.',
+  about: 'Once a day, cuts a release branch from the integration branch and opens its PR into the release branch.',
   version: 1,
   entry: { node: 'cleanup', input: () => ({}) },
   nodes: [cleanup, prepare],
