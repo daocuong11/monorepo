@@ -32,6 +32,7 @@ import {
   seenAgain,
 } from '../phases/rescue.mjs'
 import { traceWorker } from '../tracing.mjs'
+import { recordCost } from '../cost.mjs'
 import { stopOverdue } from '../workers.mjs'
 import { dispatch } from './dispatch.mjs'
 import { issueOf, task } from './task.mjs'
@@ -308,6 +309,7 @@ const diagnosing = defineWait({
       return { ready: false }
     if (!snap || !issue) return { ready: false }
     traceWorker(ctx, w)
+    await recordCost(ctx, issue, w, ctx.tick.now)
     if (!stuck) {
       ctx.log('info', 'rescue: no longer stuck; verdict not applied', { repo: slug, issue: number })
       return { ready: true, output: { exit: 'resolved' } }

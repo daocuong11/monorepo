@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { isSlug } from './config.mjs'
+import { costByDay, withCosts } from './cost.mjs'
 import { readHeartbeat as defaultReadHeartbeat } from './heartbeat.mjs'
 import { PAGE } from './page.mjs'
 import { emptyColumns } from './queues.mjs'
@@ -11,6 +12,8 @@ import { traceDetail, traceIndex, traceList } from './traces.mjs'
 export const DEFAULT_HOST = '127.0.0.1'
 export const DEFAULT_PORT = 4317
 export const POLL_MS = 5000
+/** Days of cost-by-phase the page shows, today included. */
+export const COST_DAYS_SHOWN = 7
 
 /**
  * @typedef {{
@@ -69,9 +72,10 @@ export async function buildState({
 }) {
   const [heartbeat, traceFile] = await Promise.all([readHeartbeat(statePath), traces?.read()])
   const slugs = reposFor(repos, heartbeat)
-  const github = slugs.length
+  const read = slugs.length
     ? await queues.get(slugs)
     : { repos: [], columns: emptyColumns(), prs: [], stranded: [], fetchedAt: null, cached: false }
+  const github = withCosts(read, heartbeat.data)
   // Copies: the queue answer is cached and shared between requests.
   const human = briefs
     ? github.columns.human.map((i) => {
@@ -89,6 +93,7 @@ export async function buildState({
     heartbeat,
     github: { ...github, columns: { ...github.columns, human } },
     traces: traceFile ? traceIndex(traceFile, now()) : null,
+    cost: { days: costByDay(heartbeat.data, now(), COST_DAYS_SHOWN), flagUsd: heartbeat.data?.costFlagUsd ?? null },
   }
 }
 

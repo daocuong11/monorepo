@@ -17,6 +17,7 @@ import { withHistory } from '../marker.mjs'
 import { linkIssue, prFor, taskExit, taskPrompt } from '../phases/task.mjs'
 import { PREPARE_FAILED_LINE } from '../prepare.mjs'
 import { traceWorker } from '../tracing.mjs'
+import { recordCost } from '../cost.mjs'
 import { baseRed, isRepair } from '../base-health.mjs'
 import { stopOverdue } from '../workers.mjs'
 
@@ -277,6 +278,7 @@ const workerRunning = declare(
       )
         return { ready: false }
       if (!snap) return { ready: false } // a dead worker waits for a readable snapshot
+      await recordCost(ctx, issue, w, ctx.tick.now)
       if (issue?.state !== 'OPEN') {
         ctx.log('info', 'worker gone; issue is closed or no longer queued', { repo: w.repo, issue: w.issue })
         return { ready: true, output: { exit: 'gone' } }

@@ -80,6 +80,32 @@ At `to-human`, the comment renders the `ask` under the status line: the question
 
 A marker at a node the current graph version no longer has restarts at the entry node with a `graph-changed` history entry.
 
+### Cost
+
+Both engines add `cost` once an issue's first worker has exited with a `result` event. It accumulates for the life of the issue; every marker write keeps it.
+
+```json
+"cost": {
+  "total":  { "usd": 6.1, "input": 210, "output": 64000, "cacheRead": 9100000, "cacheCreation": 240000, "runs": 3 },
+  "triage": { "usd": 0.6, "…": "…", "runs": 1 },
+  "task":   { "usd": 5.5, "…": "…", "runs": 2 },
+  "rescue": { "usd": 0, "…": "…", "runs": 0 },
+  "lastLog": "/Users/me/.cambium/logs/o__r/issue-12/a2-….out.log"
+}
+```
+
+| Field                        | Meaning                                                                                       |
+| ---------------------------- | --------------------------------------------------------------------------------------------- |
+| `total`                      | Sum over every phase.                                                                         |
+| `triage`, `task`, `rescue`   | Per phase. Triage is the `dispatch` worker.                                                   |
+| `usd`                        | The `result` event's `total_cost_usd`, summed.                                                |
+| `input`, `output`            | `usage.input_tokens`, `usage.output_tokens`, summed.                                          |
+| `cacheRead`, `cacheCreation` | `usage.cache_read_input_tokens`, `usage.cache_creation_input_tokens`, summed.                 |
+| `runs`                       | Worker runs counted.                                                                          |
+| `lastLog`                    | Stdout log of the last run counted. The same run is never counted twice.                      |
+
+A worker with no `result` event (killed, or its log truncated) adds nothing. A marker without `cost` counts from zero. The rendered comment shows `cost $<total>`.
+
 ### History outcomes
 
 `submitted`, `failed`, `killed`, `lost`, `spawn-failed`, `ci-red`, `dequeued`, `stalled`, `merged`, `budget`. The graph engine also records `branch-updated`, `merge-armed`, `merge-refused`, `pr-closed`, `base-red`, `human-reply`, `rescued`, `graph-changed`.

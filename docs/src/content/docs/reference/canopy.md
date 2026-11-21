@@ -35,8 +35,8 @@ The header always shows mode and last tick. The tab is kept in the URL hash.
 
 | Tab | Hash | Shows |
 | --- | --- | --- |
-| Inbox | `#inbox`, `#inbox/<owner>/<name>/<n>` | `q:human` items and stranded issues, grouped, in a list beside a reading pane. |
-| Queue | `#queue` | Triage, Running and Pull requests; the `q:intake`, `q:task` and `q:promote` lanes; a band of every issue by stage. |
+| Inbox | `#inbox`, `#inbox/<owner>/<name>/<n>` | `q:human` items, stranded issues and session candidates, grouped, in a list beside a reading pane. |
+| Queue | `#queue` | Triage, Running and Pull requests; the `q:intake`, `q:task` and `q:promote` lanes; a band of every issue by stage; cost per day by phase. |
 | Graphs | `#graphs`, `#graphs/<name>` | Each cambium graph drawn, with the last 24 hours of moves replayed. |
 | Traces | `#traces`, `#traces/<trace id>` | One row per traced run; a span waterfall per run. |
 | Health | `#health` | Last tick, workers, events. |
@@ -47,7 +47,7 @@ Each item sits in the first group it matches. Empty groups are hidden; the sort 
 
 | Group | Labels |
 | --- | --- |
-| Needs a session | `why:budget`, or `ask:decide` with `ask:session` |
+| Needs a session | `why:budget`, `ask:decide` with `ask:session`, or a session candidate (see [Cost](#cost)) |
 | Answer in a comment | any other `ask:decide` |
 | Offline chores | `ask:verify`, `ask:chore` |
 | Approvals | `why:approve`, `ask:approve` |
@@ -83,6 +83,16 @@ A `q:human` item cambium wrote a session brief for (`<home>/briefs/<owner>__<nam
 
 A **stranded** issue is open, carries no queue label, and its `agent/*` PR closed unmerged with no open agent PR closing it. Read from the 50 most recently updated closed PRs per repository.
 
+### Cost
+
+From the heartbeat's [`repos[].cost`](/reference/cambium/heartbeat/#reposcost).
+
+| Where | Shows |
+| --- | --- |
+| Inbox rows, reading pane, lane and Triage/Running cards | What the issue has cost so far; per phase on hover. Red when flagged. |
+| Queue figures | The last 7 UTC days, each a column stacked by phase (triage, task, rescue), summed over repositories. |
+| Inbox | A flagged issue (task spend over cambium's `costFlagUsd`, no merged PR) is a **session candidate**: tagged `flag:cost` (filter "Flag", "over budget"), and listed with kind "session candidate" if it is not already in `q:human` or stranded, and grouped under "Needs a session" (unless it awaits an approval). Its reading pane says so. |
+
 ## HTTP endpoints
 
 Only `GET` and `HEAD` are answered, and only for a loopback `Host` (or the `--host` given).
@@ -90,7 +100,7 @@ Only `GET` and `HEAD` are answered, and only for a loopback `Host` (or the `--ho
 | Endpoint | Returns |
 | --- | --- |
 | `GET /` | One self-contained HTML page; polls `/api/state` every 5 s. |
-| `GET /api/state` | `{ now, pollMs, cacheMs, notes, heartbeat, github, traces }` |
+| `GET /api/state` | `{ now, pollMs, cacheMs, notes, heartbeat, github, traces, cost }` |
 | `GET /api/traces` | Trace file fields plus `traces`: the newest 200 runs. |
 | `GET /api/traces/<trace id>` | `{ summary, spans }`, spans in tree order with `depth`. 404 for an unknown id. |
 | `GET /api/issue/<owner>/<name>/<n>` | `{ issue, fetchedAt, error }` for an issue in a watched repository. 404 otherwise. |
@@ -100,8 +110,9 @@ Only `GET` and `HEAD` are answered, and only for a loopback `Host` (or the `--ho
 | Field | Shape |
 | --- | --- |
 | `heartbeat` | `{ status, path, message, stale, ageMs, staleAfterMs, data }`. `status`: `ok`, `missing`, `unreadable`, `unknown-version`. `stale` after 3 × `tickSeconds`. |
-| `github` | `{ repos, columns: { intake, waiting, task, running, human, promote }, prs, fetchedAt, cached }` A `human` item with a session brief carries `brief: { path, command }`. |
+| `github` | `{ repos, columns: { intake, waiting, task, running, human, promote }, prs, stranded, flagged, fetchedAt, cached }`. A `human` item with a session brief carries `brief: { path, command }`. Each column and stranded item has `cost`: `{ usd, triage, task, rescue, runs, flagged }`, or `null`. `flagged`: session candidates not in `q:human` or stranded. |
 | `traces` | `{ status, path, message, files, malformed, total, errored, byIssue, progress, recent, flow }`. `status`: `ok`, `missing`, `unreadable`. |
+| `cost` | `{ days, flagUsd }`. `days`: the last 7 UTC days, oldest first, each `{ day, triage, task, rescue, total }` in US dollars. `flagUsd`: the heartbeat's `costFlagUsd`, or `null`. |
 
 ## Inputs
 

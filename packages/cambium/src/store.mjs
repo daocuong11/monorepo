@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Local bookkeeping in SQLite: live worker processes and the daemon's mode.
+ * Local bookkeeping in SQLite: live worker processes, the daemon's mode, and the per-day cost ledger (cost.mjs).
  * Never a queue — GitHub labels are the queue. Losing this file costs at most
  * a requeue (the sweep returns `running` issues with no tracked worker).
  */
@@ -28,6 +28,12 @@ CREATE TABLE IF NOT EXISTS workers (
   PRIMARY KEY (repo, issue)
 );
 CREATE TABLE IF NOT EXISTS control (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS costs (
+  repo TEXT NOT NULL, day TEXT NOT NULL, phase TEXT NOT NULL, usd REAL NOT NULL DEFAULT 0,
+  input INTEGER NOT NULL DEFAULT 0, output INTEGER NOT NULL DEFAULT 0, cache_read INTEGER NOT NULL DEFAULT 0,
+  cache_creation INTEGER NOT NULL DEFAULT 0, runs INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (repo, day, phase)
+);
 `
 
 /** @param {any} r @returns {Worker} */
@@ -99,6 +105,34 @@ export function openStore(path) {
     removeWorker(repo, issue) {
       db.prepare('DELETE FROM workers WHERE repo = ? AND issue = ?').run(repo, issue)
     },
+    /**
+     * Add one worker run to a repo's ledger for `day` (`YYYY-MM-DD`, UTC) and phase.
+     * @param {string} repo @param {string} day @param {string} phase @param {import('./cost.mjs').Tally} run
+     */
+    addCost(repo, day, phase, run) {
+      db.prepare(
+        `INSERT INTO costs (repo, day, phase, usd, input, output, cache_read, cache_creation, runs)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(repo, day, phase) DO UPDATE SET usd = usd + excluded.usd, input = input + excluded.input,
+           output = output + excluded.output, cache_read = cache_read + excluded.cache_read,
+           cache_creation = cache_creation + excluded.cache_creation, runs = runs + excluded.runs`,
+      ).run(repo, day, phase, run.usd, run.input, run.output, run.cacheRead, run.cacheCreation, run.runs)
+    },
+    /**
+     * The ledger from `since` (`YYYY-MM-DD`) on, oldest first.
+     * @param {string} since @returns {{ repo: string, day: string, phase: string, usd: number, runs: number }[]}
+     */
+    costs: (since) =>
+      db
+        .prepare('SELECT repo, day, phase, usd, runs FROM costs WHERE day >= ? ORDER BY day, repo, phase')
+        .all(since)
+        .map((/** @type {any} */ r) => ({
+          repo: r.repo,
+          day: r.day,
+          phase: r.phase,
+          usd: Number(r.usd),
+          runs: Number(r.runs),
+        })),
     /** @returns {Mode} */
     mode: () => /** @type {Mode} */ (get('mode') ?? 'running'),
     /** @param {Mode} mode */
