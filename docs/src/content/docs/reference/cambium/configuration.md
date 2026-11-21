@@ -34,7 +34,7 @@ One JSON file: `--config`, else `$CAMBIUM_CONFIG`, else `~/.cambium/config.json`
   "priorityLabels": ["priority:critical", "priority:high", "priority:medium", "priority:low"],
   "release": { "enabled": false, "time": "06:00" },
   "reaper": { "everyMinutes": 60, "staleMinutes": 30, "orphanDays": 3 },
-  "retriage": { "enabled": false, "time": "05:00" },
+  "retriage": { "enabled": false, "time": "05:00", "maxSkipDays": 14 },
   "rescue": {
     "everyMinutes": 60,
     "staleHours": 12,
@@ -122,6 +122,7 @@ A file that does not load, or has no `repos`, keeps the running config and logs 
 | `reaper.orphanDays`      | `3`       | A PR naming no issue is closed after this long untouched.                       |
 | `retriage.enabled`       | `false`   | Daily return of `q:human` issues (not `why:approve`) to `q:intake`.             |
 | `retriage.time`          | `"05:00"` | Host-local `HH:MM`.                                                             |
+| `retriage.maxSkipDays`   | `14`      | An unchanged `q:human` issue is re-triaged anyway after this many days; `0` never skips. |
 | `rescue.everyMinutes`    | `60`      | Stuck-item sweep interval.                                                      |
 | `rescue.staleHours`      | `12`      | Age for `stale-task`, `stale-intake` and `pr-stale`.                            |
 | `rescue.graceMinutes`    | `30`      | A label change counts only after this long since the marker last moved.         |
