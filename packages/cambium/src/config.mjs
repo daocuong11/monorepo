@@ -32,13 +32,17 @@ import { join, resolve } from 'node:path'
  *   tickSeconds: number,
  *   stepTimeoutSeconds: number,
  *   repos: Repo[],
- *   phases: { task: TaskCaps, dispatch: PhaseCaps & { maxRounds: number, deferHours: number, maxDefers: number } },
+ *   phases: {
+ *     task: TaskCaps, dispatch: PhaseCaps & { maxRounds: number, deferHours: number, maxDefers: number },
+ *     rescue: PhaseCaps,
+ *   },
  *   mergeQueueMinutes: number,
  *   merge: MergePolicy,
  *   priorityLabels: string[],
  *   release: { enabled: boolean, time: string },
  *   reaper: { everyMinutes: number, staleMinutes: number, orphanDays: number },
  *   retriage: { enabled: boolean, time: string },
+ *   rescue: RescueConfig,
  *   paths: { home: string, db: string, heartbeat: string, logs: string },
  *   logs: { keepPerIssue: number, daemonMaxBytes: number },
  *   graft: { command: string, app: string | null, botLogin: string | null },
@@ -46,6 +50,15 @@ import { join, resolve } from 'node:path'
  *   update: { auto: boolean, checkMinutes: number },
  *   gc: GcConfig,
  * }} Config
+ * @typedef {{
+ *   everyMinutes: number, staleHours: number, graceMinutes: number, cooldownHours: number, maxRescues: number,
+ *   causeRepo: string | null,
+ * }} RescueConfig
+ *   The rescue graph (graphs/rescue.mjs, `engine: "graph"`, on while `phases.rescue.cap > 0`): every
+ *   `everyMinutes` it looks for stuck items. A label that breaks the queue rules counts after `graceMinutes`; an
+ *   item left waiting counts after `staleHours`. An item rescued in the last `cooldownHours` is left alone, and one
+ *   rescued `maxRescues` times in a week goes to `q:human` without another diagnosis. `causeRepo`: a repo (owner/name)
+ *   root-cause tickets may also be filed in, e.g. the one that holds cambium itself; the item's own repo always can.
  * @typedef {{ everyMinutes: number, graceMinutes: number, staleDays: number }} GcConfig
  *   Worktree garbage collection (gc.mjs): the daemon sweeps every `everyMinutes` (0: only `cambium gc`). A
  *   worktree touched within `graceMinutes` is left alone; one idle `staleDays` with work GitHub lacks is
@@ -76,6 +89,7 @@ export function defaults(home = DEFAULT_HOME) {
         deferHours: 6,
         maxDefers: 8,
       },
+      rescue: { cap: 0, wallClockMinutes: 20, maxTurns: 80, maxAttempts: 1 },
     },
     mergeQueueMinutes: 120,
     merge: 'none',
@@ -83,6 +97,7 @@ export function defaults(home = DEFAULT_HOME) {
     release: { enabled: false, time: '06:00' },
     reaper: { everyMinutes: 60, staleMinutes: 30, orphanDays: 3 },
     retriage: { enabled: false, time: '05:00' },
+    rescue: { everyMinutes: 60, staleHours: 12, graceMinutes: 30, cooldownHours: 24, maxRescues: 2, causeRepo: null },
     paths: {
       home,
       db: join(home, 'cambium.db'),
@@ -162,6 +177,12 @@ export function resolveConfig(raw = {}) {
   for (const k of /** @type {const} */ (['everyMinutes', 'graceMinutes', 'staleDays']))
     if (!(typeof config.gc[k] === 'number' && config.gc[k] >= 0))
       throw new Error(`config: gc.${k} must be a number, at least 0`)
+  for (const k of /** @type {const} */ (['everyMinutes', 'staleHours', 'graceMinutes', 'cooldownHours', 'maxRescues']))
+    if (!(typeof config.rescue[k] === 'number' && config.rescue[k] >= 0))
+      throw new Error(`config: rescue.${k} must be a number, at least 0`)
+  const causeRepo = config.rescue.causeRepo
+  if (causeRepo !== null && (typeof causeRepo !== 'string' || !/^[^/\s]+\/[^/\s]+$/.test(causeRepo)))
+    throw new Error(`config: rescue.causeRepo must be owner/name or null, got ${JSON.stringify(causeRepo)}`)
   if (config.engine !== 'legacy' && config.engine !== 'graph')
     throw new Error(`config: engine must be "legacy" or "graph", got ${JSON.stringify(config.engine)}`)
   const merging = config.repos.filter((r) => r.merge === 'green')

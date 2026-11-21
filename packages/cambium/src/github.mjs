@@ -69,11 +69,16 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
  *   updatePull(slug: string, number: number): Promise<void>,
  *   linkIssue(slug: string, pr: number, issue: number): Promise<void>,
  *   addBlockedBy(slug: string, number: number, blocker: number): Promise<{ state: 'OPEN' | 'CLOSED' }>,
+ *   closedPulls(slug: string): Promise<PullRequest[]>,
+ *   readIssues(slug: string, numbers: number[]): Promise<Map<number, Issue>>,
  * }} GitHub
  *   `behindBase`: how many commits of its base the PR's head lacks, read live (not from the tick's snapshot), so a
  *   merge earlier in the same tick counts. `updatePull`: merge the base into the PR (`graft pr update`).
  *   `linkIssue`: put `Closes #<issue>` at the top of the PR's body, so the PR names the issue it closes.
  *   `addBlockedBy`: record GitHub's "blocked by" dependency of issue `number` on `blocker`; resolves the blocker's state.
+ *   `closedPulls`: the newest {@link CLOSED_PULLS} `agent/*` PRs closed without merging (the rescue graph finds the
+ *   issues they leave stranded). `readIssues`: these issues, whatever their labels or state; a number that is not
+ *   an issue is left out.
  */
 
 const PR_FIELDS = `number url headRefName state headRefOid isInMergeQueue body mergeable reviewDecision createdAt updatedAt
@@ -145,6 +150,15 @@ ${SNAPSHOT_QUERY.slice(SNAPSHOT_QUERY.indexOf('fragment I on Issue'), SNAPSHOT_Q
 /** The queued issues after `$after`: the snapshot's first page holds 100, a busy repo has more. */
 export const ISSUES_PAGE_QUERY = `query($owner: String!, $name: String!, $labels: [String!], $after: String) { repository(owner: $owner, name: $name) {
     issues(labels: $labels, states: OPEN, first: 100, after: $after, orderBy: { field: CREATED_AT, direction: ASC }) { pageInfo { hasNextPage endCursor } nodes { ...I } }
+} }
+${SNAPSHOT_QUERY.slice(SNAPSHOT_QUERY.indexOf('fragment I on Issue'), SNAPSHOT_QUERY.indexOf('fragment P on'))}`
+
+/** How many closed-unmerged PRs {@link CLOSED_PULLS_QUERY} reads, newest first. */
+export const CLOSED_PULLS = 50
+
+/** The newest closed (unmerged) PRs, for the rescue graph. */
+export const CLOSED_PULLS_QUERY = `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {
+    closed: pullRequests(states: CLOSED, first: ${CLOSED_PULLS}, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { ${PR_FIELDS} } }
 } }
 ${SNAPSHOT_QUERY.slice(SNAPSHOT_QUERY.indexOf('fragment I on Issue'), SNAPSHOT_QUERY.indexOf('fragment P on'))}`
 
@@ -493,6 +507,24 @@ export function graftGitHub({ config, exec: run = exec }) {
       if (bodyCloses(body).includes(issue)) return
       const linked = `Closes #${issue}${body ? `\n\n${body}` : ''}`
       await graft(slug, ['api', 'PATCH', path, '--body', JSON.stringify({ body: linked })])
+    },
+    async closedPulls(slug) {
+      const [owner, name] = slug.split('/')
+      const data = await json(graft(slug, ['graphql', CLOSED_PULLS_QUERY, '--vars', JSON.stringify({ owner, name })]))
+      const closed = (data?.data ?? data)?.repository?.closed?.nodes ?? []
+      return normalize({ repository: { open: { nodes: closed } } }).prs
+    },
+    async readIssues(slug, numbers) {
+      if (!numbers.length) return new Map()
+      const [owner, name] = slug.split('/')
+      const ask = (/** @type {number[]} */ ns) =>
+        json(graft(slug, ['graphql', issuesQuery(ns), '--vars', JSON.stringify({ owner, name })]))
+      // A number that resolves to nothing fails the whole query: then one at a time, skipping those.
+      const data = await ask(numbers).catch(async () => {
+        const one = await Promise.all(numbers.map((n) => ask([n]).catch(() => null)))
+        return { repository: Object.assign({}, ...one.map((d) => d?.repository ?? {})) }
+      })
+      return addIssues({ issues: new Map(), prs: [] }, data, numbers, config.graft.botLogin).issues
     },
     async addBlockedBy(slug, number, blocker) {
       // The dependencies API takes the blocker's database id, not its number.

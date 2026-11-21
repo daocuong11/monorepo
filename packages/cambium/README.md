@@ -30,6 +30,7 @@ cambium status
 | `cambium run <task\|pr\|dispatch> --issue <n> [--repo <owner/name>] [--follow]` | `engine: "graph"` only. `task`: advance one issue through the graph runtime in the foreground: a `q:task` issue without a lease starts with a foreground worker; anything else resumes where its marker rests. `pr`: the [PR graph](#the-pr-graph) for the issue's PR. `dispatch`: triage one `q:intake` issue with a foreground triage worker (the dispatch cap does not apply), read its verdict and end the [dispatch graph](#the-dispatch-graph); a tracked triage worker resumes at `triaging`. Stops at the first wait that is not ready; `--follow` re-reads and polls every `tickSeconds` until the graph ends. |
 | `cambium run release-prepare [--repo <owner/name>]`                             | `engine: "graph"` only. Run [release-prepare](#the-release-graphs) now, whatever `release.time`: close stale promotion PRs, open or refresh the promotion PR. Counts as the day's run.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `cambium run release-promote [--repo <owner/name>] [--issue <pr>]`              | `engine: "graph"` only. A [release-promote](#the-release-graphs) turn for each `q:promote` promotion PR (or only `<pr>`): merge an approved one, close out a merged or closed one; report the rest as not ready.                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `cambium run rescue [--repo <owner/name>] [--issue <n>]`                        | `engine: "graph"` only. Without `--issue`: list the items the [rescue](#the-rescue-graph) sweep would find stuck now, with their symptoms (the cooldown aside); changes nothing. With it: rescue that item now with a foreground rescue worker, then carry out its verdict.                                                                                                                                                                                                                                                                                                                                             |
 | `cambium gc [--dry-run] [--repo <owner/name>]`                                  | Collect worktrees now; `--dry-run` only reports. See [Worktree GC](#worktree-gc).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `cambium install [--dry-run]`                                                   | Write the launchd agent (`KeepAlive`, `RunAtLoad`) for `start --config <this config>`; `--dry-run` prints it. It does not call `launchctl`; it prints the command.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `cambium update [--check] [--version <v>]`                                      | Install the latest version (or `<v>`, even an older one) from npm into this global install, then SIGTERM the launchd agent so it finishes its tick and KeepAlive starts the new version. `--check` only reports. No config file needed. See [Self-update](#self-update).                                                                                                                                                                                                                                                                                                                                                |
@@ -59,6 +60,8 @@ A requeue is `q:task` with attempt + 1, or, once `maxAttempts` are spent, `q:hum
 | `q:promote` on a closed issue                       | Merged into `release.from`, not yet in `release.to` ([Awaiting promotion](#awaiting-promotion)). |
 | `running`                                           | A worker holds the lease (with `q:task`).                                                        |
 | `why:budget`, `why:triage` (also `why:reject`, …)   | Why it is in `q:human` (`why:triage`: sent there by triage, see below).                          |
+| `why:rescue`                                        | In `q:human` because the [rescue graph](#the-rescue-graph) could not unstick it.                 |
+| `rescue`                                            | A root-cause ticket the rescue graph filed.                                                      |
 | _no `q:` label_, cambium comment, open `agent/*` PR | Submitted: in the Release Queue, which is the PR's merge-queue state.                            |
 | `priority:critical` … `priority:low`                | Scheduling order (configurable). Unlabelled sorts after every listed priority.                   |
 
@@ -112,7 +115,8 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
       "maxRounds": 3,
       "deferHours": 6,
       "maxDefers": 8
-    }
+    },
+    "rescue": { "cap": 0, "wallClockMinutes": 20, "maxTurns": 80, "maxAttempts": 1 }
   },
   "mergeQueueMinutes": 120,
   "merge": "none",
@@ -120,6 +124,14 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
   "release": { "enabled": false, "time": "06:00" },
   "reaper": { "everyMinutes": 60, "staleMinutes": 30, "orphanDays": 3 },
   "retriage": { "enabled": false, "time": "05:00" },
+  "rescue": {
+    "everyMinutes": 60,
+    "staleHours": 12,
+    "graceMinutes": 30,
+    "cooldownHours": 24,
+    "maxRescues": 2,
+    "causeRepo": null
+  },
   "paths": {
     "home": "~/.cambium",
     "db": "~/.cambium/cambium.db",
@@ -142,6 +154,7 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
 - `merge` (top level, or per repo in `repos[]`): who merges a Task PR. See [The PR graph](#the-pr-graph).
 - `repos[].requiredCheck` (default `"ci"`): the check whose runs on `baseBranch` say whether the base is green; `null` turns the [red-base](#red-base) gate and repair off for that repo.
 - `engine` picks how the Task phase runs: `"legacy"` (the stage tick, the default) or `"graph"` (the [`task` graph](#the-task-graph)). Both make the same moves; see [The task graph](#the-task-graph). Only `"graph"` runs the [`dispatch` graph](#the-dispatch-graph) (gated by `phases.dispatch.cap`); legacy leaves `q:intake` alone.
+- `phases.rescue.cap` (`engine: "graph"`; 0, the default, turns it off) and `rescue`: see [The rescue graph](#the-rescue-graph).
 - Setting `paths.home` moves every default path under it.
 - `release.time` is host-local `HH:MM`.
 - `repos[].release` (`engine: "graph"`): `{ "enabled", "time", "from", "to" }`. `enabled` and `time` default to the top-level `release`, `from` to the repo's `baseBranch`, `to` to `"main"`. A repo whose `from` equals `to` has no promotion PR. Example: `{ "slug": "o/app", "path": "~/app", "baseBranch": "develop", "release": { "enabled": true, "time": "06:00", "from": "develop", "to": "main" } }`.
@@ -175,7 +188,7 @@ The key decides which commands run on this host, so list `package.json` as prote
 
 ## Upkeep
 
-Two clocks in the graph engine's `upkeep` step, after Watch (`src/upkeep.mjs`).
+Two clocks in the graph engine's `upkeep` step, after Watch (`src/upkeep.mjs`), then the [rescue graph](#the-rescue-graph)'s steps.
 
 **Reaper** (every `reaper.everyMinutes`, default 60; 0 turns it off). It looks at each open `agent/*` PR that nothing has updated for `reaper.staleMinutes` (default 30) and that cambium is not tracking. Such a PR comes from a worker killed at its wall-clock cap whose `graft publish` still landed, or from a PR body that never said `Closes #n`. Its issue is the one it closes, else the one its branch names (`agent/<n>-…`):
 
@@ -506,6 +519,69 @@ canopy's Promote lane lists these issues. A repo with `from` = `to` (e.g. releas
 - **No timeouts.** Neither graph has one; the daily `cleanup` is the only 24 h rule.
 - **Read.** With a repo's release on, the snapshot query also asks (in the same query) for the open PRs from `from` to `to`, the PRs labelled `q:promote`, and `to`'s comparison with `from` (`aheadBy`, and the merged PRs on the last 100 commits ahead).
 - **Legacy.** `engine: "legacy"` keeps the stub.
+
+## The rescue graph
+
+With `"engine": "graph"` and `phases.rescue.cap > 0`, upkeep looks for stuck items every `rescue.everyMinutes` (default 60) and runs the `rescue` graph (`src/graphs/rescue.mjs`, steps in `src/rescue-engine.mjs`, detection, prompt and result in `src/phases/rescue.mjs`) for each: a one-shot, read-only `claude -p` worker works out how the item got stuck, what unsticks it and which root causes need a ticket; cambium checks that verdict, carries it out, files the tickets, and documents it all on the item.
+
+```mermaid
+flowchart TD
+  start_(["start"])
+  n0["start-rescue"]
+  n1{{"diagnosing"}}
+  n2["unstick"]
+  n3["file-causes"]
+  n4["report"]
+  n5["to-human"]
+  end_(("end"))
+  start_ --> n0
+  n0 -->|"started"| n1
+  n0 -->|"budgetSpent"| n5
+  n0 --> end_
+  n1 -->|"resolved"| end_
+  n1 -->|"diagnosed"| n2
+  n1 --> n5
+  n2 --> n3
+  n3 --> n4
+  n4 --> end_
+  n5 --> end_
+```
+
+**Stuck.** Detection is cambium's own (`findStuck`), over the snapshot plus the newest 50 closed-unmerged `agent/*` PRs and the issues they name. An item is always an issue; a stuck PR is reported on the issue it closes.
+
+| Symptom               | Found                                                                                                                                                                                               |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `many-queues`         | More than one `q:*` label.                                                                                                                                                                          |
+| `running-unqueued`    | `running` outside `q:task` / `q:intake` (not another host's lease).                                                                                                                                 |
+| `why-outside-human`   | A `why:*` label without `q:human`.                                                                                                                                                                  |
+| `wait-outside-intake` | A `wait:*` label without `q:intake`.                                                                                                                                                                |
+| `closed-labelled`     | A closed issue still carrying cambium labels (`q:promote` aside).                                                                                                                                   |
+| `merged-open`         | Its agent PR merged, the issue open in no queue.                                                                                                                                                    |
+| `stranded`            | Open in no queue, no open agent PR: its PR closed unmerged (or its marker names one).                                                                                                               |
+| `stale-task`          | In `q:task` without a lease for `rescue.staleHours` (default 12) while a task slot was free and the base not red: Schedule passed it over.                                                          |
+| `stale-intake`        | The same in `q:intake`, with a triage slot free, not parked (deferred or blocked).                                                                                                                  |
+| `pr-stale`            | An open agent PR nobody has updated for `rescue.staleHours`, its issue open in no queue (a queued one is the queue's; `q:human`'s is the human's). Untracked PRs are the [reaper](#upkeep)'s first. |
+
+A label change counts after `rescue.graceMinutes` (default 30) since the issue's marker last moved (or since a merged or closed PR last changed), so a transition half-done this tick is not a symptom. An item a live worker holds, or that the tick already moved, is skipped.
+
+**Pacing.** An item rescued in the last `rescue.cooldownHours` (default 24) is left alone. One rescued `rescue.maxRescues` (default 2) times in the last week goes straight to `q:human` + `why:rescue`, without another worker and whatever the cap. The rest start oldest issue first, up to `phases.rescue.cap` rescue workers. Rescue times live in the local store (`control`, `rescue:<repo>#<n>`): losing it costs an extra diagnosis at most.
+
+**Diagnosis.** The worker runs in a read-only checkout (`cambium/rescue-<n>`, phase `rescue`) and is held to `phases.rescue.wallClockMinutes`. Its prompt has the symptoms, the issue, its marker, the PR involved, how cambium's queues work, where cambium's logs and source are, and how to read the issue's timeline (who changed which label when). The item is not claimed meanwhile: its labels are the evidence; the worker's row keeps Schedule and Sweep off it. Its final message ends with:
+
+```json
+{
+  "stuck": true,
+  "how": "the sequence of events, with times and evidence",
+  "actions": [{ "do": "clear-labels", "labels": ["why:budget"] }, { "do": "requeue", "queue": "task", "reason": "…" }],
+  "rootCauses": [{ "title": "…", "body": "…", "fingerprint": "kebab-case-cause", "repo": "owner/name" }]
+}
+```
+
+**Actions**, in order: `clear-labels` (cambium labels only), `close-pr` (an open agent PR), then at most one move, last: `requeue` (to `q:task` or `q:intake` at its graph's entry, attempt 1, history kept, outcome `rescued`), `adopt-pr` (the task graph's `submit`, as the reaper adopts), `close-issue` (`completed` or `not_planned`), or `to-human` (`why:rescue`). `"stuck": false` takes no actions. Before anything is touched, the verdict is checked against the item (`checkPlan`); a missing, invalid or unworkable verdict, or a worker killed at its cap, sends the item to `q:human` + `why:rescue` with the error. When the worker exits the item is checked again: if none of the symptoms it started from still holds (someone fixed it meanwhile), the verdict is dropped.
+
+**Root causes.** Each becomes a ticket in its `repo`: the item's own, or `rescue.causeRepo` (e.g. the repo that holds cambium itself). A ticket is labelled `q:intake` and `rescue`, so [triage](#the-dispatch-graph) takes it from there; its body is the worker's, then how the item got stuck, then a hidden `<!-- cambium:rescue-cause <fingerprint> -->`. When an open issue in that repo already carries the fingerprint, cambium comments there that the cause struck again instead of filing it twice (a repo cambium does not read is de-duplicated by what this host filed).
+
+**Report.** Last, a comment on the item: what cambium saw, how it got stuck, what rescue did, and the root-cause tickets.
 
 ## Graph module (preview)
 
