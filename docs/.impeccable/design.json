@@ -1,0 +1,732 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-21T06:52:31+00:00",
+  "title": "Design System: oakgreen docs",
+  "extensions": {
+    "colorMeta": {
+      "forest-black": {
+        "role": "neutral",
+        "displayName": "Forest Black",
+        "canonical": "#0b190f",
+        "oklch": "oklch(19.7% 0.028 152.2)",
+        "tonalRamp": [
+          "#0b190f",
+          "#10241a",
+          "#24412d",
+          "#557060",
+          "#87a08d",
+          "#b4c6b8",
+          "#d6e3d8",
+          "#eef5ef"
+        ],
+        "cssVar": "--sl-color-black",
+        "theme": "dark"
+      },
+      "rail": {
+        "role": "neutral",
+        "displayName": "Rail",
+        "canonical": "#0f2215",
+        "oklch": "oklch(23.1% 0.036 152.9)",
+        "tonalRamp": [
+          "#060d08",
+          "#1d2820",
+          "#37463b",
+          "#536758",
+          "#748879",
+          "#99aa9d",
+          "#bfcec2",
+          "#e6f2e9"
+        ],
+        "cssVar": "--sl-color-bg-sidebar",
+        "theme": "dark"
+      },
+      "raised": {
+        "role": "neutral",
+        "displayName": "Raised",
+        "canonical": "#10241a",
+        "oklch": "oklch(24.0% 0.033 160.8)",
+        "tonalRamp": [
+          "#0b190f",
+          "#10241a",
+          "#24412d",
+          "#557060",
+          "#87a08d",
+          "#b4c6b8",
+          "#d6e3d8",
+          "#eef5ef"
+        ],
+        "cssVar": "--sl-color-gray-6",
+        "theme": "dark"
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#163020",
+        "oklch": "oklch(28.3% 0.044 155.3)",
+        "tonalRamp": [
+          "#040e07",
+          "#1a291f",
+          "#33483a",
+          "#4f6857",
+          "#6f8a78",
+          "#95ac9c",
+          "#bccfc1",
+          "#e4f3e8"
+        ],
+        "cssVar": "--sl-color-hairline",
+        "theme": "dark"
+      },
+      "hairline-light": {
+        "role": "neutral",
+        "displayName": "Hairline Light",
+        "canonical": "#1d3a25",
+        "oklch": "oklch(31.9% 0.051 151.4)",
+        "tonalRamp": [
+          "#040e06",
+          "#192a1d",
+          "#324837",
+          "#4d6954",
+          "#6e8b74",
+          "#93ad99",
+          "#bad0bf",
+          "#e3f4e6"
+        ],
+        "cssVar": "--sl-color-hairline-light",
+        "theme": "dark"
+      },
+      "deep-green": {
+        "role": "secondary",
+        "displayName": "Deep Green",
+        "canonical": "#173620",
+        "oklch": "oklch(30.2% 0.054 151.4)",
+        "tonalRamp": [
+          "#040e06",
+          "#182a1c",
+          "#314937",
+          "#4c6a53",
+          "#6c8b73",
+          "#92ad98",
+          "#bad0be",
+          "#e2f4e6"
+        ],
+        "cssVar": "--sl-color-accent-low",
+        "theme": "dark"
+      },
+      "ring-green": {
+        "role": "secondary",
+        "displayName": "Ring Green",
+        "canonical": "#1d4128",
+        "oklch": "oklch(34.1% 0.061 151.9)",
+        "tonalRamp": [
+          "#030f05",
+          "#162a1c",
+          "#2e4935",
+          "#496b51",
+          "#698c72",
+          "#90ae97",
+          "#b7d1bd",
+          "#e1f5e5"
+        ],
+        "cssVar": "--og-ring",
+        "theme": "dark"
+      },
+      "brand-green": {
+        "role": "primary",
+        "displayName": "Brand Green",
+        "canonical": "#3c9057",
+        "oklch": "oklch(58.7% 0.119 151.5)",
+        "tonalRamp": [
+          "#001101",
+          "#002f10",
+          "#0c4f27",
+          "#247340",
+          "#499560",
+          "#78b688",
+          "#a5d8b1",
+          "#d3fadb"
+        ],
+        "cssVar": "--og-brand",
+        "theme": "dark"
+      },
+      "label-green": {
+        "role": "primary",
+        "displayName": "Label Green",
+        "canonical": "#56ad70",
+        "oklch": "oklch(67.7% 0.124 151.5)",
+        "tonalRamp": [
+          "#001101",
+          "#002f0f",
+          "#065026",
+          "#1f733e",
+          "#46965f",
+          "#76b786",
+          "#a3d8b0",
+          "#d2fbda"
+        ],
+        "cssVar": "--og-label",
+        "theme": "dark"
+      },
+      "mint-high": {
+        "role": "primary",
+        "displayName": "Mint High",
+        "canonical": "#92d3a6",
+        "oklch": "oklch(81.1% 0.092 153.7)",
+        "tonalRamp": [
+          "#001003",
+          "#072d17",
+          "#1e4d30",
+          "#366f4a",
+          "#58916b",
+          "#82b390",
+          "#add5b8",
+          "#d8f8e1"
+        ],
+        "cssVar": "--sl-color-accent-high",
+        "theme": "dark"
+      },
+      "mint-ink": {
+        "role": "neutral",
+        "displayName": "Mint Ink",
+        "canonical": "#eef5ef",
+        "oklch": "oklch(96.3% 0.011 149.9)",
+        "tonalRamp": [
+          "#0b190f",
+          "#10241a",
+          "#24412d",
+          "#557060",
+          "#87a08d",
+          "#b4c6b8",
+          "#d6e3d8",
+          "#eef5ef"
+        ],
+        "cssVar": "--sl-color-white",
+        "theme": "dark"
+      },
+      "ink-1": {
+        "role": "neutral",
+        "displayName": "Ink 1",
+        "canonical": "#d6e3d8",
+        "oklch": "oklch(90.3% 0.020 150.1)",
+        "tonalRamp": [
+          "#0b190f",
+          "#10241a",
+          "#24412d",
+          "#557060",
+          "#87a08d",
+          "#b4c6b8",
+          "#d6e3d8",
+          "#eef5ef"
+        ],
+        "cssVar": "--sl-color-gray-1",
+        "theme": "dark"
+      },
+      "ink-2": {
+        "role": "neutral",
+        "displayName": "Ink 2",
+        "canonical": "#b4c6b8",
+        "oklch": "oklch(80.9% 0.028 152.3)",
+        "tonalRamp": [
+          "#0b190f",
+          "#10241a",
+          "#24412d",
+          "#557060",
+          "#87a08d",
+          "#b4c6b8",
+          "#d6e3d8",
+          "#eef5ef"
+        ],
+        "cssVar": "--sl-color-gray-2",
+        "theme": "dark"
+      },
+      "ink-3": {
+        "role": "neutral",
+        "displayName": "Ink 3",
+        "canonical": "#87a08d",
+        "oklch": "oklch(68.1% 0.039 152.5)",
+        "tonalRamp": [
+          "#0b190f",
+          "#10241a",
+          "#24412d",
+          "#557060",
+          "#87a08d",
+          "#b4c6b8",
+          "#d6e3d8",
+          "#eef5ef"
+        ],
+        "cssVar": "--sl-color-gray-3",
+        "theme": "dark"
+      },
+      "ink-4": {
+        "role": "neutral",
+        "displayName": "Ink 4",
+        "canonical": "#557060",
+        "oklch": "oklch(51.9% 0.040 158.6)",
+        "tonalRamp": [
+          "#0b190f",
+          "#10241a",
+          "#24412d",
+          "#557060",
+          "#87a08d",
+          "#b4c6b8",
+          "#d6e3d8",
+          "#eef5ef"
+        ],
+        "cssVar": "--sl-color-gray-4",
+        "theme": "dark"
+      },
+      "ink-5": {
+        "role": "neutral",
+        "displayName": "Ink 5",
+        "canonical": "#24412d",
+        "oklch": "oklch(34.6% 0.050 153.0)",
+        "tonalRamp": [
+          "#0b190f",
+          "#10241a",
+          "#24412d",
+          "#557060",
+          "#87a08d",
+          "#b4c6b8",
+          "#d6e3d8",
+          "#eef5ef"
+        ],
+        "cssVar": "--sl-color-gray-5",
+        "theme": "dark"
+      },
+      "code-ground": {
+        "role": "neutral",
+        "displayName": "Code Ground",
+        "canonical": "#0f2116",
+        "oklch": "oklch(22.8% 0.032 155.9)",
+        "tonalRamp": [
+          "#060d08",
+          "#1d2821",
+          "#37463c",
+          "#54675a",
+          "#74887b",
+          "#99aa9e",
+          "#bfcdc4",
+          "#e7f2ea"
+        ],
+        "theme": "dark"
+      },
+      "code-chrome": {
+        "role": "neutral",
+        "displayName": "Code Chrome",
+        "canonical": "#0d1d12",
+        "oklch": "oklch(21.2% 0.031 153.1)",
+        "tonalRamp": [
+          "#070d08",
+          "#1e2821",
+          "#38463c",
+          "#55665a",
+          "#76887a",
+          "#9aaa9e",
+          "#c0cdc3",
+          "#e7f2ea"
+        ],
+        "theme": "dark"
+      },
+      "earth-blue": {
+        "role": "tertiary",
+        "displayName": "Earth Blue",
+        "canonical": "#4f7fd6",
+        "oklch": "oklch(60.4% 0.143 261.3)",
+        "tonalRamp": [
+          "#000728",
+          "#092250",
+          "#1d3f7c",
+          "#345eab",
+          "#5481d1",
+          "#7da5eb",
+          "#a8caff",
+          "#d5f0ff"
+        ],
+        "cssVar": "--og-earth",
+        "theme": "dark"
+      },
+      "sputnik-gold": {
+        "role": "tertiary",
+        "displayName": "Sputnik Gold",
+        "canonical": "#b8860b",
+        "oklch": "oklch(65.2% 0.132 81.6)",
+        "tonalRamp": [
+          "#180600",
+          "#391e00",
+          "#5d3a00",
+          "#845800",
+          "#a7790b",
+          "#c69e55",
+          "#e5c48a",
+          "#ffebbe"
+        ],
+        "cssVar": "--og-gold",
+        "theme": "dark"
+      },
+      "moss-paper": {
+        "role": "neutral",
+        "displayName": "Moss Paper",
+        "canonical": "#f6f8f3",
+        "oklch": "oklch(97.6% 0.007 124.4)",
+        "tonalRamp": [
+          "#0b190f",
+          "#15301e",
+          "#2b4434",
+          "#4a6352",
+          "#7b907f",
+          "#c6d5c8",
+          "#e3ebe2",
+          "#f6f8f3"
+        ],
+        "cssVar": "--sl-color-black",
+        "theme": "light"
+      },
+      "moss-rail": {
+        "role": "neutral",
+        "displayName": "Moss Rail",
+        "canonical": "#eef3eb",
+        "oklch": "oklch(95.8% 0.012 133.4)",
+        "tonalRamp": [
+          "#0a0c09",
+          "#242622",
+          "#40433e",
+          "#5f635c",
+          "#80847d",
+          "#a3a6a0",
+          "#c7cac5",
+          "#edefeb"
+        ],
+        "cssVar": "--sl-color-bg-sidebar",
+        "theme": "light"
+      },
+      "moss-raised": {
+        "role": "neutral",
+        "displayName": "Moss Raised",
+        "canonical": "#e3ebe2",
+        "oklch": "oklch(93.2% 0.015 142.2)",
+        "tonalRamp": [
+          "#0b190f",
+          "#15301e",
+          "#2b4434",
+          "#4a6352",
+          "#7b907f",
+          "#c6d5c8",
+          "#e3ebe2",
+          "#f6f8f3"
+        ],
+        "cssVar": "--sl-color-gray-6",
+        "theme": "light"
+      },
+      "moss-hairline": {
+        "role": "neutral",
+        "displayName": "Moss Hairline",
+        "canonical": "#d3dfd2",
+        "oklch": "oklch(89.1% 0.022 143.2)",
+        "tonalRamp": [
+          "#090c08",
+          "#212721",
+          "#3d443c",
+          "#5b645a",
+          "#7c867b",
+          "#9fa89e",
+          "#c4ccc3",
+          "#eaf0ea"
+        ],
+        "cssVar": "--sl-color-hairline",
+        "theme": "light"
+      },
+      "moss-ring": {
+        "role": "secondary",
+        "displayName": "Moss Ring",
+        "canonical": "#cfdfd1",
+        "oklch": "oklch(88.8% 0.026 149.1)",
+        "tonalRamp": [
+          "#080d08",
+          "#202721",
+          "#3b453c",
+          "#58655a",
+          "#79877b",
+          "#9da99e",
+          "#c2ccc3",
+          "#e9f1ea"
+        ],
+        "cssVar": "--og-ring",
+        "theme": "light"
+      },
+      "moss-accent-low": {
+        "role": "secondary",
+        "displayName": "Moss Accent",
+        "canonical": "#d5e8d9",
+        "oklch": "oklch(91.3% 0.029 151.9)",
+        "tonalRamp": [
+          "#070d08",
+          "#1f2821",
+          "#39463c",
+          "#57665a",
+          "#77877b",
+          "#9ba99e",
+          "#c1cdc3",
+          "#e8f1ea"
+        ],
+        "cssVar": "--sl-color-accent-low",
+        "theme": "light"
+      },
+      "brand-green-light": {
+        "role": "primary",
+        "displayName": "Deep Brand Green",
+        "canonical": "#2e7547",
+        "oklch": "oklch(50.5% 0.102 152.5)",
+        "tonalRamp": [
+          "#001102",
+          "#032e15",
+          "#194e2c",
+          "#307046",
+          "#539366",
+          "#7eb48d",
+          "#aad6b5",
+          "#d6f9df"
+        ],
+        "cssVar": "--og-brand",
+        "theme": "light"
+      },
+      "forest-ink": {
+        "role": "neutral",
+        "displayName": "Forest Ink",
+        "canonical": "#0b190f",
+        "oklch": "oklch(19.7% 0.028 152.2)",
+        "tonalRamp": [
+          "#0b190f",
+          "#15301e",
+          "#2b4434",
+          "#4a6352",
+          "#7b907f",
+          "#c6d5c8",
+          "#e3ebe2",
+          "#f6f8f3"
+        ],
+        "cssVar": "--sl-color-white",
+        "theme": "light"
+      },
+      "forest-ink-2": {
+        "role": "neutral",
+        "displayName": "Forest Ink 2",
+        "canonical": "#2b4434",
+        "oklch": "oklch(36.1% 0.042 155.6)",
+        "tonalRamp": [
+          "#0b190f",
+          "#15301e",
+          "#2b4434",
+          "#4a6352",
+          "#7b907f",
+          "#c6d5c8",
+          "#e3ebe2",
+          "#f6f8f3"
+        ],
+        "cssVar": "--sl-color-gray-2",
+        "theme": "light"
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Home hero title only. Uppercase, Brand Green; family inherits the body stack."
+      },
+      "wordmark": {
+        "displayName": "Wordmark",
+        "purpose": "Site title beside the header ring. Uppercase, Mint Ink."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Content page titles; 2.25rem below 50em."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "h2 in the reading column; h3 1.375rem, h4 1.1875rem (smaller below 50em)."
+      },
+      "lead": {
+        "displayName": "Lead",
+        "purpose": "Home tagline, max 36ch."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "All reading text, 46rem column."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Uppercase sidebar group labels and TOC heading, Label Green."
+      },
+      "table-head": {
+        "displayName": "Table head",
+        "purpose": "Table column heads, Ink 1."
+      },
+      "code": {
+        "displayName": "Code",
+        "purpose": "Inline and block code; Everforest syntax themes."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "state",
+        "value": "150ms ease-out",
+        "purpose": "Background, colour, border and underline changes on links, buttons, cards."
+      },
+      {
+        "name": "mark-turn",
+        "value": "600ms cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Header ring rotates -30deg on site-title hover."
+      },
+      {
+        "name": "ring-spin",
+        "value": "40s linear infinite",
+        "purpose": "Home ring rotation."
+      },
+      {
+        "name": "orbit-inner",
+        "value": "90s linear infinite reverse",
+        "purpose": "Earth orbit, counter-rotating."
+      },
+      {
+        "name": "orbit-outer",
+        "value": "75s linear infinite",
+        "purpose": "Teapot and sputnik orbit."
+      },
+      {
+        "name": "teapot-spin",
+        "value": "9s linear infinite",
+        "purpose": "Teapot spins on its own axis."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "prefers-reduced-motion",
+        "purpose": "Spins run only under no-preference; mark-turn transition removed under reduce."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "md",
+        "value": "50rem",
+        "purpose": "Larger heading scale; home hero becomes a 7fr/5fr grid with an absolutely positioned bleeding ring."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Brand-green pill for the one primary action.",
+      "html": "<a class=\"ds-btn-primary\" href=\"#\">Make your first Verified commit <svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><path d=\"M5 12h14M13 6l6 6-6 6\"/></svg></a>",
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;gap:.5rem;padding:1rem 1.25rem;border-radius:999rem;background:var(--og-brand,#3c9057);border:1px solid var(--og-brand,#3c9057);color:var(--sl-color-black,#0b190f);font-weight:500;text-decoration:none;transition:background-color 150ms ease-out,color 150ms ease-out}.ds-btn-primary:hover{background:color-mix(in srgb,var(--og-brand,#3c9057) 85%,var(--sl-color-white,#eef5ef))}.ds-btn-primary:focus-visible{outline:2px solid var(--og-brand,#3c9057);outline-offset:2px}"
+    },
+    {
+      "name": "Minimal Button",
+      "kind": "button",
+      "refersTo": "button-minimal",
+      "description": "Text-only secondary action beside the primary pill.",
+      "html": "<a class=\"ds-btn-minimal\" href=\"#\">How it fits together</a>",
+      "css": ".ds-btn-minimal{display:inline-flex;padding:1rem .5rem;border-radius:999rem;color:var(--sl-color-white,#eef5ef);font-weight:500;text-decoration:none;transition:color 150ms ease-out}.ds-btn-minimal:hover{color:var(--og-label,#56ad70)}.ds-btn-minimal:focus-visible{outline:2px solid var(--og-brand,#3c9057);outline-offset:2px}"
+    },
+    {
+      "name": "Search Field",
+      "kind": "input",
+      "refersTo": "search-field",
+      "description": "Pill search trigger in the header.",
+      "html": "<button class=\"ds-search\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"11\" cy=\"11\" r=\"7\"/><path d=\"m20 20-4-4\"/></svg><span>Search</span><kbd>⌘K</kbd></button>",
+      "css": ".ds-search{display:flex;align-items:center;gap:.5rem;width:22rem;padding:.5rem 1rem;border:1px solid var(--sl-color-hairline-light,#1d3a25);border-radius:999rem;background:color-mix(in srgb,var(--sl-color-gray-6,#10241a) 70%,transparent);color:var(--sl-color-gray-1,#d6e3d8);font:inherit;font-size:.875rem;cursor:pointer;transition:border-color 150ms ease-out}.ds-search kbd{margin-left:auto;font:inherit;font-size:.75rem;color:var(--sl-color-gray-2,#b4c6b8)}.ds-search:hover{border-color:var(--og-label,#56ad70)}.ds-search:focus-visible{outline:2px solid var(--og-brand,#3c9057);outline-offset:2px}"
+    },
+    {
+      "name": "Sidebar Navigation",
+      "kind": "nav",
+      "refersTo": "nav-link-current",
+      "description": "Rail sidebar: label-voice group heading, pill links, deep-green current page.",
+      "html": "<nav class=\"ds-nav\"><p class=\"ds-nav-label\">How-to guides</p><a href=\"#\">Install the stack</a><a href=\"#\" aria-current=\"page\">Set up graft on a repository</a><a href=\"#\">Approve protected changes</a></nav>",
+      "css": ".ds-nav{display:flex;flex-direction:column;gap:.125rem;width:16rem;padding:1rem;background:var(--sl-color-bg-sidebar,#0f2215);border-right:1px solid var(--sl-color-hairline,#163020)}.ds-nav-label{margin:0 0 .5rem;font-size:.75rem;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--og-label,#56ad70)}.ds-nav a{padding:.3em 1rem;border-radius:999rem;color:var(--sl-color-gray-2,#b4c6b8);text-decoration:none;font-size:.875rem;transition:background-color 150ms ease-out,color 150ms ease-out}.ds-nav a:hover{background:color-mix(in srgb,var(--og-brand,#3c9057) 12%,transparent);color:var(--sl-color-white,#eef5ef)}.ds-nav a[aria-current=page]{background:var(--sl-color-accent-low,#173620);color:var(--sl-color-white,#eef5ef);font-weight:500}.ds-nav a:focus-visible{outline:2px solid var(--og-brand,#3c9057);outline-offset:2px}"
+    },
+    {
+      "name": "Link Card",
+      "kind": "card",
+      "refersTo": "link-card",
+      "description": "Quadrant and pagination cards: hairline, 0.75rem corners, brand-green on hover.",
+      "html": "<a class=\"ds-link-card\" href=\"#\"><span class=\"ds-lc-title\">Tutorials</span><span class=\"ds-lc-body\">Learn by doing: a first Verified commit, then a first task run by an agent.</span></a>",
+      "css": ".ds-link-card{display:flex;flex-direction:column;gap:.5rem;max-width:30rem;padding:1rem;border:1px solid var(--sl-color-hairline-light,#1d3a25);border-radius:.75rem;color:var(--sl-color-white,#eef5ef);text-decoration:none;transition:border-color 150ms ease-out,background-color 150ms ease-out}.ds-lc-title{font-size:1.125rem;font-weight:500}.ds-lc-body{color:var(--sl-color-gray-3,#87a08d)}.ds-link-card:hover{border-color:var(--og-brand,#3c9057);background:color-mix(in srgb,var(--og-brand,#3c9057) 7%,transparent)}.ds-link-card:focus-visible{outline:2px solid var(--og-brand,#3c9057);outline-offset:2px}"
+    },
+    {
+      "name": "Tools Index Entry",
+      "kind": "custom",
+      "refersTo": "link-card",
+      "description": "Home tool list: ruled entry with an untiled label-green icon, no box.",
+      "html": "<div class=\"ds-index\"><div class=\"ds-index-title\"><svg width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z\"/></svg>graft</div><p>Lets an agent write to GitHub as a GitHub App. Commits land Verified.</p></div>",
+      "css": ".ds-index{max-width:32rem;border-top:1px solid var(--sl-color-hairline-light,#1d3a25);padding:1.25rem 0 1.5rem}.ds-index-title{display:flex;align-items:center;gap:.75rem;font-size:1.125rem;font-weight:500;color:var(--sl-color-white,#eef5ef)}.ds-index-title svg{color:var(--og-label,#56ad70)}.ds-index p{margin:.5rem 0 0;color:var(--sl-color-gray-2,#b4c6b8);line-height:1.7}"
+    },
+    {
+      "name": "Inline Code",
+      "kind": "chip",
+      "refersTo": "inline-code",
+      "description": "Deep-green code chip in running text.",
+      "html": "<p class=\"ds-p\">Reads the <code class=\"ds-code\">q:*</code> labels every tick.</p>",
+      "css": ".ds-p{color:var(--sl-color-gray-2,#b4c6b8);line-height:1.7}.ds-code{padding:.1em .35em;border-radius:.3em;background:var(--sl-color-bg-inline-code,#173620);color:var(--sl-color-white,#eef5ef);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.875em}"
+    },
+    {
+      "name": "Tree Ring Mark",
+      "kind": "custom",
+      "refersTo": "nav-link",
+      "description": "Header site title: stroked ring mark plus wide-tracked wordmark; the ring turns on hover.",
+      "html": "<a class=\"ds-site-title\" href=\"#\"><svg class=\"ds-mark\" viewBox=\"0 0 500 500\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"40\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"250\" cy=\"250\" r=\"230\"/><path d=\"M430 250A180 180 0 0 1 262.008 429.599 180 180 0 0 1 71.602 273.962 180 180 0 0 1 214.191 73.598 180 180 0 0 1 423.62 202.503\"/><line x1=\"330\" y1=\"250\" x2=\"430\" y2=\"250\"/><path d=\"M370.161 299.613A130 130 0 0 1 224.154 377.405 130 130 0 0 1 120.005 248.866 130 130 0 0 1 226.382 122.163 130 130 0 0 1 371.008 202.492\"/><path d=\"M314.416 297.44A80 80 0 0 1 225.033 326.004 80 80 0 0 1 170 250a80 80 0 0 1 55.033-76.004 80 80 0 0 1 89.383 28.565\"/></svg><span>oakgreen</span></a>",
+      "css": ".ds-site-title{display:inline-flex;align-items:center;gap:.75rem;color:var(--og-brand,#3c9057);text-decoration:none}.ds-mark{width:1.75rem;height:1.75rem;transition:transform 600ms cubic-bezier(.16,1,.3,1)}.ds-site-title span{font-size:1rem;font-weight:300;letter-spacing:.28em;text-transform:uppercase;color:var(--sl-color-white,#eef5ef)}.ds-site-title:hover .ds-mark{transform:rotate(-30deg)}.ds-site-title:focus-visible{outline:2px solid var(--og-brand,#3c9057);outline-offset:2px}@media (prefers-reduced-motion:reduce){.ds-mark{transition:none}}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Forest Manual",
+    "overview": "The docs are the oakgreen.cc forest at night with a technical manual laid open in it. The ground is near-black green, every surface is a slightly lighter step of the same green, and the only mark is the tree ring: stroked, round-capped, open with a radial notch. Reading pages are calm and dense the way a reference should be: a 46rem column, generous 1.7 leading, hairline rules between sections, and green that points at exactly one thing at a time (the current page, the primary action, a link).\n\nThe brand's play is quarantined to the home page. There the ring turns slowly, large and deep green, bleeding off the right edge while the copy owns the left column, with an earth, a teapot and a sputnik in orbit. Every other page carries the ring only as a faint watermark cropped off the top-right of the title block. Dark is the default theme; light mode is moss paper with forest ink and keeps the same structure.\n\nThe world refuses stock Starlight blue-grey and generic neon-on-black dev-docs styling: no glow, no gradient, no saturated accent on a black void.",
+    "keyCharacteristics": [
+      "One hue family. Grounds, rails, hairlines, marks and actions are all forest greens; blue and gold appear only as orbiters.",
+      "Flat. No shadows anywhere; depth is tonal steps plus 1px hairlines.",
+      "The tree ring is the only ornament: logo, home stage, title watermark.",
+      "Wordmark voice (light weight, wide-tracked uppercase) for the brand name and for navigation group labels only.",
+      "Pills for things you press or navigate to; 0.75rem corners for cards; code at 0.625rem.",
+      "Motion is slow and optional: 40s ring turn on home, 150ms ease-out state changes elsewhere, all gated by reduced-motion."
+    ],
+    "rules": [
+      {
+        "name": "The One Family Rule",
+        "body": "Every surface, line and mark is a green from the forest ramp. A non-green colour is allowed only as Starlight's semantic aside hues (tuned toward the palette) or as a home-page orbiter.",
+        "section": "colors"
+      },
+      {
+        "name": "The Green Points Rule",
+        "body": "Saturated green marks exactly one thing per region: the current page, the primary action, a link, a focus ring. Never use Brand Green as a large fill behind text other than the primary pill.",
+        "section": "colors"
+      },
+      {
+        "name": "The Wordmark Voice Rule",
+        "body": "Wide-tracked uppercase belongs to the brand name, the home hero title and navigation labels. Never set a content heading, a card title or a line above a heading in it.",
+        "section": "typography"
+      },
+      {
+        "name": "The Light Title Rule",
+        "body": "Page titles are light (300); section headings carry the weight (500). Weight goes up as size goes down.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Forest Rule",
+        "body": "No shadows, glows or gradients. If something needs to separate, give it a tonal step or a hairline.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** keep dark the default and give every new token a light-mode value on Moss Paper.",
+      "**Do** separate surfaces with a tonal step or a 1px hairline (`hairline`, `hairline-light`).",
+      "**Do** use the pill (999rem) for anything pressed or navigated to, and 0.75rem for containers.",
+      "**Do** colour the ring through `currentColor`: Brand Green as a mark, Ring Green as texture.",
+      "**Do** use Label Green, not Brand Green, for small text on the dark ground.",
+      "**Do** wrap every animation in `prefers-reduced-motion: no-preference`; state transitions stay at 150ms ease-out."
+    ],
+    "donts": [
+      "**Don't** add shadows, glows or gradients (The Flat Forest Rule).",
+      "**Don't** bring the orbiters, the turning ring or Earth Blue and Sputnik Gold onto reading pages; play stays on home.",
+      "**Don't** reintroduce Starlight's blue-grey or a neon accent on black.",
+      "**Don't** set wide-tracked uppercase on content headings or as a label above a heading.",
+      "**Don't** box the home tools index in bordered tiles; it is a ruled index."
+    ]
+  }
+}
