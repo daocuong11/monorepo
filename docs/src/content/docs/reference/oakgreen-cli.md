@@ -56,7 +56,7 @@ launchd user agents, macOS only. Handled in this order:
 - A tool also installed on its own (`<prefix>/lib/node_modules/@oakgreencc/<tool>`) is upgraded to the version the latest oakgreen depends on, when older. A newer one is left alone. This copy is the one on `PATH` and in the cambium agent.
 - `oakgreen update` runs one `npm install --global --prefix <prefix>` with `oakgreen@<latest>` (if newer) and each such `@oakgreencc/<tool>@<version>`, then restarts each running service (macOS). A stopped service stays stopped. Exit 1 if the install or a restart fails.
 - When oakgreen is current but a standalone tool is behind, only the tool is installed. `--check` lists both.
-- Every run lists the version each service runs: cambium, mycelium and canopy from their standalone copy if there is one, else the one bundled with oakgreen; `proxy` is oakgreen's version. After an install these are the new versions. otelcol is not listed.
+- Every run lists versions: oakgreen (also the proxy service), then graft, canker, deadwood, cambium, mycelium and canopy, each from its standalone copy if there is one, else the one bundled with oakgreen. After an install these are the new versions. otelcol is not listed.
 
 ## Doctor checks
 

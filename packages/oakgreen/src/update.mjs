@@ -18,6 +18,7 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { SERVICES, restart, statusOf } from './services.mjs'
+import { TOOLS } from './tools.mjs'
 
 export const PACKAGE = 'oakgreen'
 export const REGISTRY = 'https://registry.npmjs.org'
@@ -129,33 +130,28 @@ function versionIn(file) {
 }
 
 /**
- * The version each oakgreen service runs, read from disk now (so after an install it is the new one), by service
- * name. A tool's service runs its standalone global copy when there is one (that is the copy on PATH and in its
- * launchd agent), else the copy bundled with oakgreen; `proxy` is oakgreen itself. otelcol is not an oakgreen
- * package, so it is left out.
+ * The version of oakgreen and of each stack tool, read from disk now (so after an install it is the new one). A tool
+ * resolves to its standalone global copy when there is one (that is the copy on PATH and in its launchd agent), else
+ * the copy bundled with oakgreen. The proxy service is oakgreen itself.
  * @param {{ dir?: string, prefix?: string | null }} [o] oakgreen's package directory and global prefix
  * @returns {Record<string, string | null>}
  */
-export function serviceVersions({ dir = PKG_DIR, prefix = installOf(dir)?.prefix ?? null } = {}) {
+export function toolVersions({ dir = PKG_DIR, prefix = installOf(dir)?.prefix ?? null } = {}) {
   const standalone = prefix ? globalTools(prefix) : {}
   const req = createRequire(join(dir, 'package.json'))
   /** @type {Record<string, string | null>} */
-  const out = {}
-  for (const s of SERVICES) {
-    if (s.install === 'oakgreen') out[s.name] = versionIn(join(dir, 'package.json'))
-    else if (s.install) {
-      const pkg = `${SCOPE}/${s.install}`
-      let bundled = null
-      try {
-        bundled = versionIn(req.resolve(`${pkg}/package.json`))
-      } catch {}
-      out[s.name] = standalone[pkg] ?? bundled
-    }
+  const out = { [PACKAGE]: versionIn(join(dir, 'package.json')) }
+  for (const [name, pkg] of Object.entries(TOOLS)) {
+    let bundled = null
+    try {
+      bundled = versionIn(req.resolve(`${pkg}/package.json`))
+    } catch {}
+    out[name] = standalone[pkg] ?? bundled
   }
   return out
 }
 
-/** `  cambium  0.0.45` lines for {@link serviceVersions}. @param {Record<string, string | null>} v */
+/** `  cambium  0.0.45` lines for {@link toolVersions}. @param {Record<string, string | null>} v */
 export function versionLines(v) {
   return Object.entries(v).map(([name, ver]) => `  ${name.padEnd(8)} ${ver ?? 'not installed'}\n`)
 }
@@ -181,7 +177,7 @@ export function realUpdater({ exec, current, fetch }) {
       const r = await exec(npmBin(), ['install', '--global', '--prefix', prefix, ...specs])
       if (r.code !== 0) throw new Error(`npm install ${specs.join(' ')} failed: ${(r.stderr || r.stdout).trim()}`)
     },
-    versions: () => serviceVersions(),
+    versions: () => toolVersions(),
   }
 }
 
@@ -198,7 +194,7 @@ export async function runUpdate({ check }, { updater, services, platform, out })
   const where = updater.installOf()
   const stale = where ? staleTools(latest.dependencies, updater.globals(where.prefix)) : []
   const showVersions = () => {
-    out('services:\n')
+    out('versions:\n')
     for (const l of versionLines(updater.versions())) out(l)
   }
   if (!self && !stale.length) {

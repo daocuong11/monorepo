@@ -2,7 +2,7 @@
 /** `oakgreen update` with a fake registry, npm and launchd; nothing leaves the process. */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { globalTools, installOf, latestManifest, newer, serviceVersions, staleTools } from '../src/update.mjs'
+import { globalTools, installOf, latestManifest, newer, staleTools, toolVersions } from '../src/update.mjs'
 import { run, tempDir } from './helpers.mjs'
 
 /**
@@ -22,7 +22,7 @@ function fakeUpdater({ latest = '0.1.0', current = '0.0.31', global = true, fail
       if (fail) throw new Error(fail)
       installs.push({ prefix, specs })
     },
-    versions: () => ({ cambium: `${version()}-c`, mycelium: `${version()}-m`, canopy: null, proxy: `${version()}-p` }),
+    versions: () => ({ oakgreen: `${version()}-o`, graft: `${version()}-g`, cambium: `${version()}-c`, canker: null }),
   }
   return { updater, installs }
 }
@@ -66,7 +66,7 @@ test('up to date: says so, installs nothing', async () => {
   assert.match(r.out, /oakgreen 0\.0\.31 is up to date/)
   assert.match(
     r.out,
-    /services:\n {2}cambium {2}old-c\n {2}mycelium old-m\n {2}canopy {3}not installed\n {2}proxy {4}old-p\n/,
+    /versions:\n {2}oakgreen old-o\n {2}graft {4}old-g\n {2}cambium {2}old-c\n {2}canker {3}not installed\n/,
   )
   assert.deepEqual(installs, [])
 })
@@ -88,7 +88,7 @@ test('installs into the same prefix, then restarts only the running services', a
   assert.deepEqual(installs, [{ prefix: '/opt/homebrew', specs: ['oakgreen@0.1.0'] }])
   assert.match(r.out, /✓ oakgreen 0\.0\.31 → 0\.1\.0/)
   assert.match(r.out, /✓ cambium {2}restarted, pid 101 → 102/)
-  assert.match(r.out, /services:\n {2}cambium {2}new-c\n[\s\S]* {2}proxy {4}new-p\n/)
+  assert.match(r.out, /versions:\n {2}oakgreen new-o\n {2}graft {4}new-g\n/)
   assert.doesNotMatch(r.out, /(mycelium|otelcol) +restart/)
   assert.deepEqual(
     lc.calls.filter((c) => c[1] === 'kill'),
@@ -222,26 +222,30 @@ test('latestManifest reads the latest dist-tag', async () => {
   await assert.rejects(latestManifest({ fetch: bad }), /503/)
 })
 
-test('serviceVersions: standalone copy wins, else the bundled one; proxy is oakgreen', () => {
+test('toolVersions: oakgreen, then every tool; a standalone copy wins over the bundled one', () => {
+  const bundled = (/** @type {string} */ name, /** @type {string} */ version) => [
+    `lib/node_modules/oakgreen/node_modules/@oakgreencc/${name}/package.json`,
+    JSON.stringify({ name: `@oakgreencc/${name}`, version }),
+  ]
   const prefix = tempDir({
     'lib/node_modules/oakgreen/package.json': JSON.stringify({ name: 'oakgreen', version: '0.0.70' }),
-    'lib/node_modules/oakgreen/node_modules/@oakgreencc/cambium/package.json': JSON.stringify({
-      name: '@oakgreencc/cambium',
-      version: '0.0.45',
-    }),
-    'lib/node_modules/oakgreen/node_modules/@oakgreencc/mycelium/package.json': JSON.stringify({
-      name: '@oakgreencc/mycelium',
-      version: '0.0.20',
-    }),
-    'lib/node_modules/@oakgreencc/cambium/package.json': JSON.stringify({
-      name: '@oakgreencc/cambium',
-      version: '0.0.50',
-    }),
+    ...Object.fromEntries([
+      bundled('graft', '0.2.20'),
+      bundled('canker', '0.0.7'),
+      bundled('deadwood', '0.0.8'),
+      bundled('cambium', '0.0.45'),
+      bundled('mycelium', '0.0.20'),
+      bundled('canopy', '0.0.30'),
+    ]),
+    'lib/node_modules/@oakgreencc/graft/package.json': JSON.stringify({ name: '@oakgreencc/graft', version: '0.2.22' }),
   })
-  assert.deepEqual(serviceVersions({ dir: `${prefix}/lib/node_modules/oakgreen`, prefix }), {
-    cambium: '0.0.50',
+  assert.deepEqual(toolVersions({ dir: `${prefix}/lib/node_modules/oakgreen`, prefix }), {
+    oakgreen: '0.0.70',
+    graft: '0.2.22',
+    canker: '0.0.7',
+    deadwood: '0.0.8',
+    cambium: '0.0.45',
     mycelium: '0.0.20',
-    canopy: '0.0.29',
-    proxy: '0.0.70',
+    canopy: '0.0.30',
   })
 })
