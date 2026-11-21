@@ -84,7 +84,7 @@ oakgreen depends on every tool, so updating it updates the stack. It updates its
 
 - **`oakgreen update --check`** only reports: up to date, or `a → b available`.
 - **`oakgreen update`** runs `npm install --global --prefix <prefix> oakgreen@<latest>`, then (macOS) restarts each service that is running, as `oakgreen restart` does; a stopped one stays stopped. Exit 1 if the install or a restart fails.
-- Every run lists the version each service runs (`services:`): cambium, mycelium and canopy from their standalone global copy if there is one, else the copy bundled with oakgreen; `proxy` is oakgreen itself. After an install these are the new versions. otelcol is not an oakgreen package and is not listed.
+- Every run lists versions (`versions:`): oakgreen (also the proxy service), then graft, canker, deadwood, cambium, mycelium and canopy, each from its standalone global copy if there is one, else the copy bundled with oakgreen. After an install these are the new versions. otelcol is not an oakgreen package and is not listed.
 - cambium's own `cambium update` / `update.auto` cover a separately installed `@oakgreencc/cambium`.
 
 ## Doctor
