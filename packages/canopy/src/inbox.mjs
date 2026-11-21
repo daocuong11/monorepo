@@ -4,26 +4,30 @@
 // in the page with `toString()`; tests call them directly.
 
 /**
- * @typedef {import('./queues.mjs').Item & { kind: 'human' | 'stranded', key: string, at: string | null,
- *   tags: string[], pr?: import('./queues.mjs').Stranded['pr'] }} InboxItem
- *   `at` is the time the list sorts by: last update for `q:human`, the PR's close for a stranded issue.
- *   `tags` are filter ids, `<facet>:<value>`.
+ * @typedef {import('./queues.mjs').Item & { kind: 'human' | 'stranded' | 'cost', key: string, at: string | null,
+ *   tags: string[], pr?: import('./queues.mjs').Stranded['pr'], cost?: import('./cost.mjs').ItemCost | null }} InboxItem
+ *   `kind: 'cost'`: a session candidate, in the Inbox only because its task spend is over cambium's `costFlagUsd`
+ *   with no merged PR (cost.mjs `withCosts`). `at` is the time the list sorts by: last update for `q:human`, the
+ *   PR's close for a stranded issue, none for a session candidate. `tags` are filter ids, `<facet>:<value>`.
  * @typedef {{ id: string, value: string, n: number, on: boolean }} Tag
  * @typedef {{ facet: string, tags: Tag[] }} Facet
  * @typedef {'newest' | 'oldest' | 'priority'} Sort
  */
 
 /**
- * `q:human` items and stranded issues as one list, each with its filter tags. Facets: `kind`, `why`,
- * `priority`, `repo`, and `label` for any other label cambium's vocabulary doesn't already cover.
+ * `q:human` items, stranded issues and session candidates as one list, each with its filter tags. Facets: `kind`,
+ * `flag` (`flag:cost` on any item over the cost threshold), `why`, `priority`, `repo`, and `label` for any other
+ * label cambium's vocabulary doesn't already cover.
  *
- * @param {{ columns: { human: import('./queues.mjs').Item[] }, stranded?: import('./queues.mjs').Stranded[] }} gh
+ * @param {{ columns: { human: import('./queues.mjs').Item[] }, stranded?: import('./queues.mjs').Stranded[],
+ *   flagged?: import('./queues.mjs').Item[] }} gh
  * @returns {InboxItem[]}
  */
 export function inboxItems(gh) {
   const own = /^(q:|why:|priority:)|^running$/
   const tagsOf = (/** @type {any} */ i, /** @type {string} */ kind) => [
     `kind:${kind}`,
+    ...(i.cost?.flagged ? ['flag:cost'] : []),
     ...(i.why ? [`why:${i.why}`] : []),
     ...(i.priority ? [`priority:${i.priority}`] : []),
     `repo:${i.repo}`,
@@ -44,6 +48,13 @@ export function inboxItems(gh) {
       at: i.pr.closedAt || i.updatedAt || i.createdAt,
       tags: tagsOf(i, 'stranded'),
     })),
+    ...(gh.flagged || []).map((i) => ({
+      ...i,
+      kind: /** @type {const} */ ('cost'),
+      key: `${i.repo}#${i.number}`,
+      at: i.updatedAt || i.createdAt || null,
+      tags: tagsOf(i, 'cost'),
+    })),
   ]
 }
 
@@ -54,7 +65,8 @@ export function inboxItems(gh) {
 /**
  * Which Inbox group an item is in, by its `why:*` and `ask:*` labels (cambium's ask.mjs): what answering it takes.
  * `approvals`: a merge only a person may make (`why:approve`, `ask:approve`). `session`: worth a live session
- * (`why:budget`, or an interactive decision: `ask:decide` with `ask:session`). `comment`: any other decision.
+ * (`why:budget`, an interactive decision: `ask:decide` with `ask:session`, or a session candidate: task spend over
+ * cambium's `costFlagUsd` with no merged PR). `comment`: any other decision.
  * `chores`: offline work or a check (`ask:verify`, `ask:chore`). `other`: no ask to go by. `stranded`: a closed PR.
  *
  * @param {InboxItem} it @returns {string}
@@ -63,7 +75,7 @@ export function groupOf(it) {
   const has = (/** @type {string} */ l) => it.labels.includes(l)
   if (it.kind === 'stranded') return 'stranded'
   if (has('why:approve') || has('ask:approve')) return 'approvals'
-  if (has('why:budget') || (has('ask:decide') && has('ask:session'))) return 'session'
+  if (has('why:budget') || (has('ask:decide') && has('ask:session')) || it.cost?.flagged) return 'session'
   if (has('ask:decide')) return 'comment'
   if (has('ask:verify') || has('ask:chore')) return 'chores'
   return 'other'
@@ -106,7 +118,7 @@ export function priorityRank(/** @type {string | null | undefined} */ p) {
  * @returns {Facet[]}
  */
 export function facetsOf(items, selected) {
-  const order = ['kind', 'why', 'priority', 'repo', 'label']
+  const order = ['kind', 'flag', 'why', 'priority', 'repo', 'label']
   /** @type {Map<string, number>} */
   const counts = new Map()
   for (const it of items) for (const t of it.tags) counts.set(t, (counts.get(t) || 0) + 1)
@@ -160,7 +172,8 @@ export function viewOf(items, { sort, tags }) {
 /**
  * The whole inbox at a glance: why items are there, how urgent, and how long ago their issues were opened.
  * Parts come in a fixed order (never by size), so a slice keeps its place and color as the counts move:
- * reasons alphabetically by `why:` value, then items with no `why:` label, then stranded issues;
+ * reasons alphabetically by `why:` value, then items with no `why:` label, then stranded issues, then session
+ * candidates;
  * priorities most urgent first, then unranked, then none. Empty parts are left out, except age buckets.
  * Age is from the issue's creation: GitHub's answer doesn't say when an item entered q:human.
  *
@@ -186,6 +199,7 @@ export function inboxStats(items, now) {
   let oldest = /** @type {string | null} */ (null)
   for (const it of items) {
     if (it.kind === 'stranded') bump('why:~stranded', 'PR closed', 'kind:stranded')
+    else if (it.kind === 'cost') bump('why:~cost', 'over budget', 'kind:cost')
     else if (it.why) bump(`why:${it.why}`, it.why, `why:${it.why}`)
     else bump('why:~none', 'no why:', null)
     if (it.priority) bump(`priority:${it.priority}`, it.priority, `priority:${it.priority}`)
@@ -206,7 +220,7 @@ export function inboxStats(items, now) {
   return {
     total: items.length,
     reasons: of('why').sort((a, b) => {
-      const last = (/** @type {Part} */ p) => ['why:~none', 'why:~stranded'].indexOf(p.key)
+      const last = (/** @type {Part} */ p) => ['why:~none', 'why:~stranded', 'why:~cost'].indexOf(p.key)
       return last(a) - last(b) || a.label.localeCompare(b.label)
     }),
     priorities: of('priority').sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label)),

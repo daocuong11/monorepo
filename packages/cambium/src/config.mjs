@@ -49,7 +49,10 @@ import { join, resolve } from 'node:path'
  *   worker: { command: string, args: string[], graftApp: string | null, fetch: boolean, env: Record<string, string> },
  *   update: { auto: boolean, checkMinutes: number },
  *   gc: GcConfig,
+ *   costFlagUsd: number,
  * }} Config
+ *   `costFlagUsd`: an issue whose task-phase spend (cost.mjs) is over this many US dollars with no merged PR is
+ *   flagged in the heartbeat, and canopy's Inbox, as a session candidate. 0 turns the flag off.
  * @typedef {{
  *   everyMinutes: number, staleHours: number, graceMinutes: number, cooldownHours: number, maxRescues: number,
  *   causeRepo: string | null,
@@ -109,6 +112,7 @@ export function defaults(home = DEFAULT_HOME) {
     worker: { command: 'claude', args: [], graftApp: null, fetch: true, env: {} },
     update: { auto: false, checkMinutes: 360 },
     gc: { everyMinutes: 60, graceMinutes: 60, staleDays: 14 },
+    costFlagUsd: 10,
   }
 }
 
@@ -185,6 +189,8 @@ export function resolveConfig(raw = {}) {
   const causeRepo = config.rescue.causeRepo
   if (causeRepo !== null && (typeof causeRepo !== 'string' || !/^[^/\s]+\/[^/\s]+$/.test(causeRepo)))
     throw new Error(`config: rescue.causeRepo must be owner/name or null, got ${JSON.stringify(causeRepo)}`)
+  if (!(typeof config.costFlagUsd === 'number' && config.costFlagUsd >= 0))
+    throw new Error(`config: costFlagUsd must be a number, at least 0, got ${JSON.stringify(config.costFlagUsd)}`)
   if (config.engine !== 'legacy' && config.engine !== 'graph')
     throw new Error(`config: engine must be "legacy" or "graph", got ${JSON.stringify(config.engine)}`)
   const merging = config.repos.filter((r) => r.merge === 'green')

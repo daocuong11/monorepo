@@ -392,6 +392,17 @@ function* events(stream) {
 }
 
 /**
+ * The last `result` event in a worker's stream-json log (cost, usage, turns), or null when there is none: a killed
+ * worker or a truncated log. Never throws.
+ * @param {string | Iterable<string | Record<string, any>>} stream @returns {Record<string, any> | null}
+ */
+export function resultEvent(stream) {
+  let result = null
+  for (const e of events(stream)) if (e.type === 'result') result = e
+  return result
+}
+
+/**
  * @typedef {{ id: string, name: string, input: any, start: number, end: number | null, error: boolean, parentToolId: string | null }} ToolUse
  * @typedef {{ id: string, toolUseId: string | null, type?: string, description?: string, start: number, end: number | null, status?: string }} BgTask
  * @typedef {{ id: string, start: number, end: number, thinking: string, text: string, tools: string[], parentToolId: string | null }} Turn

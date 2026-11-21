@@ -9,7 +9,7 @@ Written at the end of every tick to `paths.heartbeat` (default `~/.cambium/state
 
 - `version` changes only on an incompatible change. Current: `1`.
 - Times are ISO 8601 UTC strings. Durations are milliseconds.
-- `engine` and `graphs` were added within version 1; older heartbeats lack them.
+- `engine`, `graphs`, `costFlagUsd` and `repos[].cost` were added within version 1; older heartbeats lack them.
 
 ## Top level
 
@@ -24,11 +24,12 @@ Written at the end of every tick to `paths.heartbeat` (default `~/.cambium/state
 | `steps`   | array  | `{ name, ok, ms, error }` in order: read, reconcile, watch, sweep, schedule, release. Paused: read only. Draining: no schedule. |
 | `counts`  | object | Summed over repos read this tick (below).                               |
 | `caps`    | object | `{ task, dispatch }`.                                                   |
-| `repos`   | array  | Per repo: `{ slug, ok, error, counts }`; `counts` is `null` when the read failed. Also `base` (red-base state). |
+| `repos`   | array  | Per repo: `{ slug, ok, error, counts, base, cost }`; `counts` is `null` when the read failed; `base` is red-base state; `cost` is below. |
 | `workers` | array  | Tracked workers (below).                                                |
 | `events`  | array  | Last 100 log lines, oldest first: `{ at, level, msg, repo?, issue? }`; `level` is `info` \| `warn` \| `error`. |
 | `engine`  | string | `legacy` \| `graph`.                                                    |
 | `graphs`  | array  | Every graph cambium defines, as `describeGraph()` returns it.           |
+| `costFlagUsd` | number | `config.costFlagUsd`.                                               |
 
 ## `counts`
 
@@ -41,6 +42,21 @@ Written at the end of every tick to `paths.heartbeat` (default `~/.cambium/state
 | `running`  | Open issues labelled `running`.                                   |
 | `review`   | Open `agent/*` PRs.                                               |
 | `workers`  | Tracked worker processes on this host (top level only).           |
+
+## `repos[].cost`
+
+`{ issues, days }`. Both are empty when nothing has cost anything.
+
+`issues`: open issues in `q:intake`, `q:task` or `q:human`, or labelled `running`, whose marker has a [cost](/reference/cambium/labels-and-state/#cost). Most expensive first.
+
+| Field                   | Meaning                                                                         |
+| ----------------------- | ------------------------------------------------------------------------------- |
+| `number`, `title`, `url`| The issue.                                                                      |
+| `labels`                | Its labels.                                                                     |
+| `cost`                  | The marker's `cost`: `total`, `triage`, `task`, `rescue`, `lastLog`.            |
+| `flagged`               | Task-phase `usd` over `costFlagUsd` and no merged PR closes it: a session candidate. |
+
+`days`: the repo's spend per UTC day over the last 14 days, oldest first; days with no spend are left out. Each is `{ day, triage, task, rescue, total }` in US dollars. It comes from the SQLite ledger, so a lost database starts it again.
 
 ## `workers[]`
 

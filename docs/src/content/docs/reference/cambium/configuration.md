@@ -53,7 +53,8 @@ One JSON file: `--config`, else `$CAMBIUM_CONFIG`, else `~/.cambium/config.json`
   "graft": { "command": "graft", "app": null, "botLogin": null },
   "worker": { "command": "claude", "args": [], "graftApp": null, "fetch": true, "env": {} },
   "update": { "auto": false, "checkMinutes": 360 },
-  "gc": { "everyMinutes": 60, "graceMinutes": 60, "staleDays": 14 }
+  "gc": { "everyMinutes": 60, "graceMinutes": 60, "staleDays": 14 },
+  "costFlagUsd": 10
 }
 ```
 
@@ -76,6 +77,7 @@ A file that does not load, or has no `repos`, keeps the running config and logs 
 | `mergeQueueMinutes`  | `120`      | A submitted PR not merged after this long goes to `q:human` (`why:approve`).                              |
 | `merge`              | `"none"`   | Who merges a Task PR: `"none"` (merge queue, auto-merge or a human) or `"green"` (cambium, once CI is green; graph engine). Overridable per repo. |
 | `priorityLabels`     | four `priority:*` | Scheduling order, first is highest. Unlabelled issues sort after all of them.                     |
+| `costFlagUsd`        | `10`       | US dollars. An issue whose task-phase [cost](/reference/cambium/labels-and-state/#cost) is over this, with no merged PR, is flagged in the heartbeat and in canopy's Inbox as a session candidate. `0` turns the flag off. |
 
 ## `repos[]`
 
@@ -153,7 +155,7 @@ GC skips the checkout itself, worker worktrees and locked worktrees (a Claude Co
 | Key                    | Default                  | Meaning                                                 |
 | ---------------------- | ------------------------ | ------------------------------------------------------- |
 | `paths.home`           | `~/.cambium`             | Setting it moves every default path under it.           |
-| `paths.db`             | `<home>/cambium.db`      | SQLite store.                                           |
+| `paths.db`             | `<home>/cambium.db`      | SQLite store: workers, mode, the daily cost ledger.     |
 | `paths.heartbeat`      | `<home>/state.json`      | [Heartbeat](/reference/cambium/heartbeat/) file.        |
 | `paths.logs`           | `<home>/logs`            | Daemon and worker logs.                                 |
 | `logs.keepPerIssue`    | `20`                     | Worker runs kept per issue.                             |

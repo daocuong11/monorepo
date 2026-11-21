@@ -28,6 +28,9 @@ export async function setMarker(deps, slug, issue, marker) {
   // takes it, so later ticks parent on the same trace. One that already has a trace keeps it.
   const tp = /** @type {any} */ (deps).subject?.traceparent
   if (tp && !marker.traceparent) marker = { ...marker, traceparent: tp }
+  // Cost accumulates for the life of the issue (cost.mjs): a write that starts a fresh marker keeps it.
+  const cost = issue.stateComment?.marker?.cost
+  if (cost && !marker.cost) marker = { ...marker, cost }
   const maxAttempts = deps.config.phases[marker.phase]?.maxAttempts
   const id = await deps.github.writeState(
     slug,

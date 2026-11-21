@@ -20,6 +20,7 @@ import { DISPATCH_NOT_BUILT, dispatchNotBuilt } from './phases/dispatch.mjs'
 import { isRepair } from './base-health.mjs'
 import { stopOverdue } from './workers.mjs'
 import { syncBriefs } from './briefs.mjs'
+import { costDays, costOf, dayOf, overBudget, recordCost } from './cost.mjs'
 
 /**
  * @typedef {import('./github.mjs').Issue} Issue
@@ -272,6 +273,7 @@ export async function finish(deps, ctx, w, snap) {
     const t = await deps.spawner.cleanup({ repo, worktree: w.worktree, branch: w.branch })
     if (!t.removed) deps.log('warn', `kept worktree ${w.worktree}: ${t.reason}`, { repo: w.repo, issue: w.issue })
   }
+  await recordCost(deps, issue, w, ctx.now)
   if (issue?.state !== 'OPEN') {
     deps.log('info', 'worker gone; issue is closed or no longer queued', { repo: w.repo, issue: w.issue })
     return done()
@@ -650,6 +652,7 @@ async function release(deps, ctx) {
  *   repos: {
  *     slug: string, ok: boolean, error: string | null, counts: Counts | null,
  *     base: import('./base-health.mjs').BaseHealth | null,
+ *     cost: { issues: IssueCost[], days: import('./cost.mjs').CostDay[] },
  *   }[],
  *   workers: {
  *     repo: string, issue: number, phase: string, pid: number, alive: boolean, attempt: number, branch: string,
@@ -659,8 +662,47 @@ async function release(deps, ctx) {
  *   events: Event[],
  *   engine: 'legacy' | 'graph',
  *   graphs: import('./graph/describe.mjs').GraphDescription[],
+ *   costFlagUsd: number,
  * }} HeartbeatState
+ * @typedef {{
+ *   number: number, title: string, url: string, labels: string[], cost: import('./cost.mjs').Cost, flagged: boolean,
+ * }} IssueCost
+ *   An active (`q:intake`, `q:task`, `running`) or `q:human` issue that has cost something. `flagged`: its task
+ *   spend is over `costFlagUsd` and it has no merged PR (cost.mjs `overBudget`).
  */
+
+/** Days of the per-repo cost ledger the heartbeat carries, today included. */
+export const COST_DAYS = 14
+
+/**
+ * The repo's issues worth a cost line, most expensive first.
+ * @param {Snapshot} snap @param {number} flagUsd @returns {IssueCost[]}
+ */
+export function issueCosts(snap, flagUsd) {
+  /** @type {IssueCost[]} */
+  const out = []
+  for (const issue of snap.issues.values()) {
+    if (issue.state !== 'OPEN') continue
+    const q = queueOf(issue.labels)
+    if (q !== Q.intake && q !== Q.task && q !== Q.human && !issue.labels.includes(RUNNING)) continue
+    const marker = issue.stateComment?.marker
+    const cost = costOf(marker)
+    if (!cost.total.runs) continue
+    const merged = snap.prs.some(
+      (p) =>
+        p.state === 'MERGED' && (p.closes.includes(issue.number) || (marker?.pr != null && p.number === marker.pr)),
+    )
+    out.push({
+      number: issue.number,
+      title: issue.title,
+      url: issue.url,
+      labels: issue.labels,
+      cost,
+      flagged: overBudget(cost, flagUsd, merged),
+    })
+  }
+  return out.sort((a, b) => b.cost.total.usd - a.cost.total.usd || a.number - b.number)
+}
 
 /** @param {Snapshot} snap @returns {Counts} */
 function countsOf(snap) {
@@ -694,6 +736,8 @@ const graphDescriptions = () => {
 export function heartbeatState(deps, ctx) {
   const { config } = deps
   const finished = deps.clock.now()
+  const since = dayOf(ctx.now - (COST_DAYS - 1) * 86_400_000)
+  const ledger = deps.store.costs(since)
   const repos = config.repos.map((r) => {
     const snap = ctx.snaps.get(r.slug)
     return {
@@ -702,6 +746,10 @@ export function heartbeatState(deps, ctx) {
       error: ctx.readErrors.get(r.slug) ?? null,
       counts: snap ? countsOf(snap) : null,
       base: snap?.base ?? null,
+      cost: {
+        issues: snap ? issueCosts(snap, config.costFlagUsd) : [],
+        days: costDays(ledger.filter((row) => row.repo === r.slug)),
+      },
     }
   })
   const total = { intake: 0, task: 0, human: 0, promote: 0, running: 0, review: 0 }
@@ -746,6 +794,7 @@ export function heartbeatState(deps, ctx) {
     events: deps.events?.() ?? [],
     engine: config.engine,
     graphs: graphDescriptions(),
+    costFlagUsd: config.costFlagUsd,
   }
 }
 

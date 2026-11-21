@@ -51,7 +51,10 @@
  *   reply?: { since: string, question: string | null } | null,
  *   ask?: import('./ask.mjs').AskT | null,
  *   fingerprint?: { hash: string, at: string } | null,
+ *   cost?: import('./cost.mjs').Cost | null,
  * }} Marker
+ *   `cost`: what this issue's workers have cost so far, per phase (`triage`, `task`, `rescue`) and in `total`, from
+ *   each worker's `result` event (cost.mjs). Every write keeps it; a marker without one counts from zero.
  *   `mergeRefusal`: the last `graft pr merge` cambium was refused (PR graph `merge`), and on which head.
  *   `reworks`: how many times the PR graph sent this issue's PR back to a worker.
  *   `defers`, `deferUntil`, `deferReason`: the dispatch graph's `deferred` node: how many times triage deferred, until
@@ -191,6 +194,7 @@ export function renderMarker(input, { maxAttempts } = {}) {
       (marker.pr ? ` · PR #${marker.pr}` : '') +
       (marker.host ? ` · host \`${marker.host}\`` : '') +
       (marker.start ? ` · started ${marker.start}` : '') +
+      (marker.cost?.total?.usd ? ` · cost $${marker.cost.total.usd.toFixed(2)}` : '') +
       (marker.node === 'deferred' && marker.deferUntil ? ` · re-triage after ${marker.deferUntil}` : '') +
       (marker.node === 'blocked' && marker.blockedBy?.length
         ? ` · re-triage once ${marker.blockedBy.map((n) => `#${n}`).join(', ')} close`

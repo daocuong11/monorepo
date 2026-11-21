@@ -64,7 +64,11 @@ main{padding:var(--s4) var(--s4) var(--s5);display:grid;gap:var(--s4);max-width:
 .stage-cell .sub{color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .stage-cell.go{appearance:none;background:none;border:0;padding:0;margin:0;font:inherit;text-align:left;cursor:pointer;border-radius:3px}
 .stage-cell.go:hover b{color:var(--warn)}.stage-cell.go:hover .nm{color:var(--text)}.stage-cell.go:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-.fig-flow{flex:3 1 420px}.fig-day{flex:2 1 260px}
+.fig-flow{flex:3 1 420px}.fig-day{flex:2 1 260px}.fig-cost{flex:2 1 260px}
+.cost-hist{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;font-size:11px;text-align:center}
+.hb.stk{flex-direction:column;justify-content:flex-end;align-items:stretch}.hb.stk i{flex:none;border-radius:0;background:var(--c)}
+.hb.stk i:first-child{border-radius:3px 3px 0 0}
+.cost{font-variant-numeric:tabular-nums}
 .ranked{list-style:none;margin:2px 0 0;padding:0;display:grid;gap:3px;font-size:12px}
 .ranked li{display:grid;grid-template-columns:minmax(0,9.5em) minmax(0,1fr) 3.5ch;gap:var(--s2);align-items:center}
 .ranked .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
@@ -377,6 +381,7 @@ const MODE = { running: 'ok', draining: 'warn', paused: 'warn' }
 const CHECK = { SUCCESS: ['ok', 'checks pass'], FAILURE: ['err', 'checks fail'], ERROR: ['err', 'checks errored'], PENDING: ['warn', 'checks running'], EXPECTED: ['warn', 'checks expected'] }
 const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many)
 let traceIdx = {}
+let costFlagUsd = null
 const traceLink = (repo, issue) => {
   const id = repo && issue ? traceIdx[repo + '#' + issue] : null
   return id ? h('a', { href: '#traces/' + id, title: 'Open the newest trace for this issue' }, 'trace') : null
@@ -434,6 +439,7 @@ function item(i, multi, now) {
       multi ? h('span', {}, i.repo) : null,
       i.why ? h('span', { class: 'warn' }, 'why:' + i.why) : null,
       i.priority ? h('span', {}, 'priority:' + i.priority) : null,
+      costChip(i.cost),
       h('span', { class: 'faint' }, ago(i.updatedAt || i.createdAt, now)),
       traceLink(i.repo, i.number)))
 }
@@ -452,6 +458,7 @@ function waitItem(i, multi, now) {
         : when ? h('span', { title: w.until }, when) : null,
       multi ? h('span', {}, i.repo) : null,
       prio(i.priority),
+      costChip(i.cost),
       traceLink(i.repo, i.number)),
     w.reason ? h('div', { class: 'why-wait', title: w.reason }, w.reason.length > 200 ? w.reason.slice(0, 200) + '…' : w.reason) : null)
 }
@@ -461,10 +468,11 @@ const list = (xs, render, multi, now) => xs.length ? h('ul', {}, xs.map((x) => r
 
 
 const strandedOf = (gh) => gh.stranded || []
-const needsYou = (gh) => gh.columns.human.length + strandedOf(gh).length
+const flaggedOf = (gh) => gh.flagged || []
+const needsYou = (gh) => gh.columns.human.length + strandedOf(gh).length + flaggedOf(gh).length
 
 function inbox(s, now) {
-  const gh = s.github, xs = gh.columns.human, st = strandedOf(gh), multi = isMulti(gh)
+  const gh = s.github, xs = [...gh.columns.human, ...flaggedOf(gh)], st = strandedOf(gh), multi = isMulti(gh)
   const failed = gh.repos.filter((r) => !r.ok).map((r) => r.slug)
   const calm = (title, ...rest) => h('section', { class: 'calm' }, h('p', {}, h('b', {}, title)), h('p', { class: 'muted' }, ...rest))
   if (!xs.length && !st.length && !gh.repos.length) return [calm('No repositories to read.', "Pass --repo owner/name to canopy, or list repos in cambium's config.")]
@@ -555,10 +563,11 @@ const selectedUrl = () => {
 
 const PRIO = { critical: 'prio-critical', high: 'prio-high' }
 const prio = (p) => (p ? h('span', { class: PRIO[p] || null }, 'priority:' + p) : null)
-const whyOf = (it) => (it.kind === 'stranded' ? h('span', { class: 'why' }, 'PR closed') : it.why ? h('span', { class: 'why' }, 'why:' + it.why) : h('span', { class: 'faint' }, 'no why: label'))
-const tagText = (t) => (t.id === 'kind:human' ? 'q:human' : t.id === 'kind:stranded' ? 'stranded' : t.id.startsWith('label:') || t.id.startsWith('repo:') ? t.value : t.id)
-const FACET_NAME = { kind: 'Kind', why: 'Reason', priority: 'Priority', repo: 'Repo', label: 'Label' }
-const TAG_TITLE = { 'kind:human': 'In the Human Queue (q:human)', 'kind:stranded': 'Agent PR closed unmerged; no queue label' }
+const whyOf = (it) => (it.kind === 'stranded' ? h('span', { class: 'why' }, 'PR closed') : it.kind === 'cost' ? h('span', { class: 'why' }, 'session candidate') : it.why ? h('span', { class: 'why' }, 'why:' + it.why) : h('span', { class: 'faint' }, 'no why: label'))
+const tagText = (t) => (t.id === 'kind:human' ? 'q:human' : t.id === 'kind:stranded' ? 'stranded' : t.id === 'kind:cost' ? 'session candidate' : t.id === 'flag:cost' ? 'over budget' : t.id.startsWith('label:') || t.id.startsWith('repo:') ? t.value : t.id)
+const FACET_NAME = { kind: 'Kind', flag: 'Flag', why: 'Reason', priority: 'Priority', repo: 'Repo', label: 'Label' }
+const TAG_TITLE = { 'kind:human': 'In the Human Queue (q:human)', 'kind:stranded': 'Agent PR closed unmerged; no queue label',
+  'kind:cost': "Here only because its task spend is over cambium's costFlagUsd with no merged PR", 'flag:cost': "Task spend over cambium's costFlagUsd with no merged PR" }
 
 function inboxSplit(gh, multi, now) {
   const all = inboxItems(gh)
@@ -607,7 +616,7 @@ function inboxSplit(gh, multi, now) {
   const row = (it) => h('li', { class: 'row', role: 'option', 'data-key': it.key, 'data-fk': 'row:' + it.key,
       'aria-selected': String(it.key === ibSel), tabindex: it.key === focusable ? 0 : -1 },
     h('span', { class: 'row-t', title: it.title }, h('span', { class: 'faint' }, '#' + it.number + ' '), it.title),
-    h('span', { class: 'meta' }, whyOf(it), prio(it.priority), multi ? h('span', {}, it.repo.split('/')[1]) : null,
+    h('span', { class: 'meta' }, whyOf(it), prio(it.priority), costChip(it.cost), multi ? h('span', {}, it.repo.split('/')[1]) : null,
       h('span', { class: 'faint age', title: it.at || '' }, ago(it.at, now))))
   const rows = groups.flatMap((g) => [
     h('li', { class: 'ib-group', role: 'presentation', title: g.hint }, h('span', {}, g.label), h('span', { class: 'n' }, g.items.length)),
@@ -681,7 +690,7 @@ function issuePane(sel, gone, d, multi, now, sig) {
     h('button', { class: 'linkish back', type: 'button', 'data-back': '', 'data-fk': 'back' }, 'Back to the inbox'),
     h('h2', { class: 'pane-title', id: 'pane-title' }, h('span', { class: 'faint' }, '#' + base.number + ' '), base.title),
     h('div', { class: 'meta' },
-      sel ? whyOf(sel) : h('span', { class: 'why' }, 'left the inbox'), prio(sel ? sel.priority : null),
+      sel ? whyOf(sel) : h('span', { class: 'why' }, 'left the inbox'), prio(sel ? sel.priority : null), costChip(sel && sel.cost),
       multi ? h('span', {}, repo) : null,
       data && data.author ? h('span', {}, 'opened by ', h('b', {}, data.author), ' ', h('span', { class: 'faint', title: data.createdAt || '' }, ago(data.createdAt, now))) : null,
       sel ? h('span', { class: 'faint', title: sel.at || '' }, (sel.kind === 'stranded' ? 'PR closed ' : 'updated ') + ago(sel.at, now)) : null),
@@ -693,6 +702,8 @@ function issuePane(sel, gone, d, multi, now, sig) {
   const parts = []
   if (gone) parts.push(h('div', { class: 'banner warn part' }, h('b', {}, 'No longer in the inbox. '), "It has left q:human (or is no longer stranded). Showing it as last read; it won't refresh here."))
   if (sel && sel.brief) parts.push(sessionPart(sel.brief))
+  if (sel && sel.cost && sel.cost.flagged) parts.push(h('div', { class: 'banner warn part' }, h('b', {}, 'Session candidate: '),
+    'task workers have spent ' + usd(sel.cost.task) + ' on this issue' + (costFlagUsd != null ? ', over the ' + usd(costFlagUsd) + ' threshold,' : '') + ' with no merged PR. More attempts may not get it there; consider working it in a session.'))
   if (sel && sel.kind === 'stranded') parts.push(h('div', { class: 'banner warn part' }, h('b', {}, 'Stranded: '),
     'agent PR #' + sel.pr.number + ' closed unmerged ' + ago(sel.pr.closedAt, now) + ' and no open agent PR replaces it. With no queue label, cambium will not pick this issue up again. Add a queue label to send it back, or close it.'))
   if (d && d.error) parts.push(h('div', { class: 'banner err part' }, h('b', {}, data ? "Couldn't refresh this issue: " : "Couldn't read this issue from GitHub: "), d.error,
@@ -766,7 +777,7 @@ function workCard(i, multi, now, w, ageMs) {
     w && w.killedReason ? h('div', { class: 'err' }, 'killed: ' + w.killedReason) : w && !w.alive ? h('div', { class: 'err' }, 'worker exited; cambium reconciles it next tick') : null,
     h('div', { class: 'meta' },
       p && p.errors ? h('span', { class: 'err' }, plural(p.errors, 'failed span', 'failed spans')) : null,
-      p && p.costUsd != null ? h('span', {}, usd(p.costUsd)) : null,
+      i.cost ? costChip(i.cost) : p && p.costUsd != null ? h('span', { title: 'This run so far, from its trace' }, usd(p.costUsd)) : null,
       p ? h('span', { class: 'faint', title: new Date(p.end).toISOString() }, 'active ' + ago(new Date(p.end).toISOString(), now)) : null,
       prio(i.priority),
       multi ? h('span', {}, i.repo) : null,
@@ -866,7 +877,30 @@ function queueFigures(s, a, liveTask, now) {
         r.costUsd != null ? h('span', {}, h('b', { style: 'color:var(--text)' }, usd(r.costUsd)), ' spent') : null,
         r.errored ? h('button', { type: 'button', class: 'linkish', 'data-go': 'traces' }, h('span', { class: 'err' }, plural(r.errored, 'run', 'runs') + ' with a failed span')) : h('span', { class: 'faint' }, 'no failed spans')))
   }
-  return h('section', { class: 'figs', 'aria-label': 'Queue at a glance' }, flow, day)
+  return h('section', { class: 'figs', 'aria-label': 'Queue at a glance' }, flow, day, costFigure(s.cost))
+}
+
+// Spend per day by phase, from cambium's per-repo daily ledger: one stacked column per UTC day, today last.
+function costFigure(cost) {
+  const days = (cost && cost.days) || []
+  if (!days.length) return h('div', { class: 'fig fig-cost' }, h('h3', {}, 'Cost'),
+    h('p', { class: 'fig-sub', style: 'margin:0' }, cost ? 'cambium reports no cost yet.' : 'This canopy server sends no cost figures; restart it to pick up the new version.'))
+  const max = Math.max(0.01, ...days.map((d) => d.total))
+  const sum = (k) => days.reduce((n, d) => n + (d[k] || 0), 0)
+  const total = sum('total')
+  const parts = COST_PHASES.map(([k, label, c]) => ({ label, n: usd(sum(k)), c }))
+  const dayName = (day) => new Date(day + 'T00:00:00Z').toLocaleDateString([], { weekday: 'short', timeZone: 'UTC' })
+  const H = 30
+  return h('div', { class: 'fig fig-cost' },
+    h('h3', { title: 'What workers cost per UTC day, by phase, summed over every repo' }, 'Cost', h('span', {}, 'last ' + days.length + ' days by phase · ' + usd(total))),
+    h('div', { class: 'cost-hist', role: 'img', 'aria-label': 'Cost per day: ' + days.map((d) => d.day + ' ' + usd(d.total)).join(', ') },
+      days.map((d) => h('div', { class: 'hcol', title: d.day + ': ' + usd(d.total) + (d.total ? ' (' + COST_PHASES.filter(([k]) => d[k]).map(([k, label]) => label.toLowerCase() + ' ' + usd(d[k])).join(', ') + ')' : '') },
+        h('b', { class: d.total ? null : 'zero' }, d.total ? usd(d.total) : '–'),
+        h('span', { class: 'hb stk' }, d.total ? COST_PHASES.slice().reverse().filter(([k]) => d[k]).map(([k, , c]) =>
+          h('i', { style: '--c:' + c + ';height:' + Math.max(2, Math.round((d[k] / max) * H)) + 'px' })) : null),
+        h('span', {}, dayName(d.day))))),
+    key(parts, (p) => p.c),
+    costFlagUsd ? h('div', { class: 'fig-sub' }, 'Task spend over ' + usd(costFlagUsd) + ' without a merged PR is flagged in the Inbox.') : null)
 }
 
 const slots = (n, cap) => (cap ? h('span', { class: 'lane-label' }, n + ' of ' + cap + ' slots') : null)
@@ -944,6 +978,14 @@ function events(d) {
 }
 
 const usd = (n) => (n == null ? '–' : '$' + (n < 10 ? n.toFixed(2) : Math.round(n)))
+// What an issue has cost so far (cambium's heartbeat), per phase on hover; red once flagged.
+const COST_PHASES = [['triage', 'Triage', 'var(--flow-1)'], ['task', 'Task', 'var(--flow-3)'], ['rescue', 'Rescue', 'var(--warn)']]
+function costChip(c) {
+  if (!c || !c.usd) return null
+  const title = 'Spent on this issue so far: ' + COST_PHASES.filter(([k]) => c[k]).map(([k, label]) => label.toLowerCase() + ' ' + usd(c[k])).join(' · ') +
+    (c.flagged ? '. Task spend is over the threshold with no merged PR.' : '')
+  return h('span', { class: 'cost' + (c.flagged ? ' err' : ''), title }, usd(c.usd))
+}
 const runName = (t) => (t.repo && t.issue ? t.repo.split('/')[1] + '#' + t.issue : t.root)
 const runUrl = (t) => (t.repo && t.issue ? 'https://github.com/' + t.repo + '/issues/' + t.issue : null)
 const OUTCOME = { ok: 'ok', merged: 'ok', error: 'err', failed: 'err', stalled: 'warn', budgetSpent: 'warn' }
@@ -1812,6 +1854,7 @@ addEventListener('hashchange', async () => {
 function render(s) {
   last = s
   traceIdx = (s.traces && s.traces.byIssue) || {}
+  costFlagUsd = s.cost && s.cost.flagUsd != null ? s.cost.flagUsd : null
   const now = Date.parse(s.now) || Date.now()
   const d = s.heartbeat.data
   const body = [...banners(s, now)]

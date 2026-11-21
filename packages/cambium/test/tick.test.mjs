@@ -571,6 +571,7 @@ scenario('heartbeat: the documented shape', async () => {
   const s = await tick(h.deps)
   assert.deepEqual(Object.keys(s).sort(), [
     'caps',
+    'costFlagUsd',
     'counts',
     'daemon',
     'engine',
@@ -615,6 +616,8 @@ scenario('heartbeat: the documented shape', async () => {
     'worktree',
   ])
   assert.deepEqual(s.repos[0].counts, { intake: 0, task: 1, human: 1, promote: 0, running: 1, review: 0 })
+  assert.deepEqual(s.repos[0].cost, { issues: [], days: [] }, 'nothing has cost anything yet')
+  assert.equal(s.costFlagUsd, 10)
   assert.equal(Date.parse(s.tick.nextAt) - Date.parse(s.tick.finishedAt), 30_000)
 })
 

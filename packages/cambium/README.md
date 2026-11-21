@@ -83,6 +83,8 @@ Each issue cambium touches gets one comment it owns and edits in place. Its firs
 
 Set `graft.botLogin` to the Clock App's login and only markers written by it are trusted.
 
+**Cost.** When a task, triage or rescue worker exits, cambium reads the `result` event at the end of its stream-json log (`total_cost_usd`, `usage`) and adds it to the marker's `cost`: `{ total, triage, task, rescue, lastLog }`, each phase a tally `{ usd, input, output, cacheRead, cacheCreation, runs }` (`src/cost.mjs`). It lives on GitHub, so it survives a restart, and every marker write keeps it. `lastLog` is the last run counted, so a re-checked exit is never counted twice. A worker with no `result` (killed, truncated log) adds nothing; a marker from before `cost` counts from zero. Each run also goes into a per-repo, per-UTC-day ledger in SQLite (`costs` table) for the heartbeat's daily figures; losing the database loses only that history. The rendered comment shows `cost $<total>`.
+
 ## Workers
 
 A worker is `claude -p --output-format stream-json --verbose --thinking-display summarized --max-turns <maxTurns> --allowedTools Read,Edit,Write,Glob,Grep,Bash --disallowedTools "Bash(graft issue label:*),Bash(graft issue edit:*),Bash(gh:*)" <worker.args>`:
@@ -149,10 +151,12 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
   "graft": { "command": "graft", "app": null, "botLogin": null },
   "worker": { "command": "claude", "args": [], "graftApp": null, "fetch": true, "env": {} },
   "update": { "auto": false, "checkMinutes": 360 },
-  "gc": { "everyMinutes": 60, "graceMinutes": 60, "staleDays": 14 }
+  "gc": { "everyMinutes": 60, "graceMinutes": 60, "staleDays": 14 },
+  "costFlagUsd": 10
 }
 ```
 
+- `costFlagUsd`: an open issue whose task-phase cost is over this many US dollars with no merged PR closing it is `flagged` in the heartbeat; canopy lists it in the Inbox as a session candidate. `0` turns the flag off.
 - `worker.env` is extra environment for every worker (string values only), e.g. Claude Code's own telemetry ([Tracing](#claude-codes-own-spans-under-the-worker)).
 
 - The daemon re-reads the file before every tick, so caps, limits, `tickSeconds`, `repos`, priority labels, `release` and `worker` take effect without a restart (logged as `config reloaded: <keys>`). `host`, `engine`, `paths`, `logs` and `graft` are baked in at start: a change to them logs `restart cambium to apply` once and is not applied. A file that does not load, or has no `repos`, keeps the running config and logs one warning until it is fixed.
@@ -311,7 +315,9 @@ Written at the end of every tick to `paths.heartbeat` (default `~/.cambium/state
 }
 ```
 
-`engine` and `graphs` were added within `version: 1`; a reader of an older heartbeat finds neither.
+`repos[].cost` is `{ issues, days }`. `issues`: open issues in `q:intake`, `q:task`, `q:human` or `running` whose marker has a cost, most expensive first, each `{ number, title, url, labels, cost, flagged }` (`cost` as on the marker; `flagged` per `costFlagUsd`). `days`: the last 14 UTC days of the repo's ledger with any spend, oldest first, each `{ day, triage, task, rescue, total }` in US dollars. The top-level `costFlagUsd` echoes the config.
+
+`engine`, `graphs`, `costFlagUsd` and `repos[].cost` were added within `version: 1`; a reader of an older heartbeat finds none of them.
 
 The mode lives in the SQLite file (`paths.db`, table `control`), so `cambium status --json` returns `{ "mode", "heartbeat" }` even when the daemon is down. The daemon's own log is `<paths.logs>/cambium.log` (one `.1` kept); launchd's stderr goes to `<paths.logs>/cambium.launchd.err.log`.
 

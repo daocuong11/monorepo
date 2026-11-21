@@ -18,6 +18,7 @@ import { readTriage, TriageResult, triageComment, triagePrompt } from '../phases
 import { humanReplies, quoted, replyContextOf } from '../human-reply.mjs'
 import { traceWorker } from '../tracing.mjs'
 import { fingerprintOf } from '../triage-inputs.mjs'
+import { recordCost } from '../cost.mjs'
 import { stopOverdue } from '../workers.mjs'
 import { task } from './task.mjs'
 
@@ -278,6 +279,7 @@ const triaging = declare(
       )
         return { ready: false }
       if (!snap) return { ready: false }
+      await recordCost(ctx, issue, w, ctx.tick.now)
       if (issue?.state !== 'OPEN' || !issue.labels.includes(Q.intake)) {
         ctx.log('info', 'triage worker gone; issue is closed or left q:intake', { repo: w.repo, issue: w.issue })
         return { ready: true, output: { exit: 'gone' } }

@@ -83,12 +83,15 @@ function normalize(/** @type {any} */ hb) {
       ok: Boolean(r?.ok),
       error: r?.error ?? null,
       counts: r?.counts ?? null,
+      // Absent before cambium kept cost accounts: no issues, no days.
+      cost: { issues: arr(r?.cost?.issues), days: arr(r?.cost?.days) },
     })),
     workers: arr(hb.workers).map((w) => ({ ...obj(w), logs: obj(w?.logs) })),
     events: arr(hb.events),
     engine: typeof hb.engine === 'string' ? hb.engine : null,
     // null: this cambium predates `graphs` (an older heartbeat), which the page says rather than showing none.
     graphs: Array.isArray(hb.graphs) ? hb.graphs.map(graphOf).filter((g) => g !== null) : null,
+    costFlagUsd: typeof hb.costFlagUsd === 'number' ? hb.costFlagUsd : null,
   }
 }
 
