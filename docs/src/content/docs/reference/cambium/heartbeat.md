@@ -1,0 +1,79 @@
+---
+title: Heartbeat
+description: The shape of cambium's state.json, written at the end of every tick.
+sidebar:
+  order: 5
+---
+
+Written at the end of every tick to `paths.heartbeat` (default `~/.cambium/state.json`), whole and renamed into place. canopy and `oakgreen doctor` read it.
+
+- `version` changes only on an incompatible change. Current: `1`.
+- Times are ISO 8601 UTC strings. Durations are milliseconds.
+- `engine` and `graphs` were added within version 1; older heartbeats lack them.
+
+## Top level
+
+| Field     | Type   | Meaning                                                                 |
+| --------- | ------ | ----------------------------------------------------------------------- |
+| `version` | number | `1`.                                                                    |
+| `host`    | string | `config.host`.                                                          |
+| `pid`     | number | Daemon pid.                                                             |
+| `mode`    | string | `running` \| `paused` \| `draining`.                                    |
+| `daemon`  | object | `{ startedAt, tickSeconds }`; `startedAt` is `null` outside the daemon. |
+| `tick`    | object | `{ n, startedAt, finishedAt, durationMs, nextAt }`. `n` counts ticks since start; `nextAt` = `finishedAt` + `tickSeconds`. |
+| `steps`   | array  | `{ name, ok, ms, error }` in order: read, reconcile, watch, sweep, schedule, release. Paused: read only. Draining: no schedule. |
+| `counts`  | object | Summed over repos read this tick (below).                               |
+| `caps`    | object | `{ task, dispatch }`.                                                   |
+| `repos`   | array  | Per repo: `{ slug, ok, error, counts }`; `counts` is `null` when the read failed. Also `base` (red-base state). |
+| `workers` | array  | Tracked workers (below).                                                |
+| `events`  | array  | Last 100 log lines, oldest first: `{ at, level, msg, repo?, issue? }`; `level` is `info` \| `warn` \| `error`. |
+| `engine`  | string | `legacy` \| `graph`.                                                    |
+| `graphs`  | array  | Every graph cambium defines, as `describeGraph()` returns it.           |
+
+## `counts`
+
+| Field      | Meaning                                                           |
+| ---------- | ----------------------------------------------------------------- |
+| `intake`   | Open issues labelled `q:intake`.                                  |
+| `task`     | Open issues labelled `q:task`.                                    |
+| `human`    | Open issues labelled `q:human`.                                   |
+| `promote`  | Open `q:promote`, plus closed issues awaiting promotion.          |
+| `running`  | Open issues labelled `running`.                                   |
+| `review`   | Open `agent/*` PRs.                                               |
+| `workers`  | Tracked worker processes on this host (top level only).           |
+
+## `workers[]`
+
+| Field          | Meaning                                                        |
+| -------------- | -------------------------------------------------------------- |
+| `repo`         | `owner/name`.                                                  |
+| `issue`        | Issue number.                                                  |
+| `phase`        | `task`, `dispatch`, `rescue`.                                  |
+| `pid`, `alive` | Process and whether it is alive.                               |
+| `attempt`      | Attempt number.                                                |
+| `branch`       | Agent branch.                                                  |
+| `worktree`     | Absolute worktree path.                                        |
+| `startedAt`    | Start time.                                                    |
+| `elapsedMs`    | Time since start.                                              |
+| `wallClockMs`  | Wall-clock cap.                                                |
+| `killedReason` | Set once killed, until the transition is written.              |
+| `logs`         | `{ stdout, stderr }` paths.                                    |
+
+## `graphs[]`
+
+```jsonc
+{
+  "name": "task",
+  "version": 2,
+  "about": "Turns a q:task issue into a published PR; …",
+  "entry": { "queue": "q:task", "node": "start-worker" },
+  "nodes": [{ "name": "worker-running", "kind": "wait", "queue": "q:task", "running": true, "about": "…" }],
+  "edges": [{ "from": "start-worker", "to": "worker-running", "when": "started" }]
+}
+```
+
+`to: null` ends the graph. `when` is the condition's function name, `null` for the fallback edge.
+
+## `cambium status --json`
+
+Returns `{ "mode", "heartbeat" }`. The mode comes from the SQLite database, so it is available while the daemon is down. Exit 1 when the heartbeat is missing or older than 3 ticks.
