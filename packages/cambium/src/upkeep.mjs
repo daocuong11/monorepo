@@ -11,7 +11,8 @@
  * - **Re-triage** (daily at `retriage.time` when `retriage.enabled`): every `q:human` issue goes back to `q:intake`,
  *   so triage looks again under its current rubric: done since (obsolete), now checkable (defer), or now a task.
  *   Not `why:approve` (a merge only a human may make: a re-triage would start a duplicate Task) and not one holding
- *   `running`.
+ *   `running`. Not one whose triage inputs (triage-inputs.mjs) are unchanged since triage answered needs-human,
+ *   unless that was `retriage.maxSkipDays` (default 14) or more ago: it stays, no worker, no label moves.
  * - **Rescue** (rescue-engine.mjs, while `phases.rescue.cap > 0`): rescue workers every tick, and every
  *   `rescue.everyMinutes` a sweep for stuck items, each diagnosed and unstuck by the rescue graph.
  */
@@ -22,6 +23,7 @@ import { move, Q, RUNNING, WHY } from './labels.mjs'
 import { releaseDue } from './phases/release.mjs'
 import { rescueStep } from './rescue-engine.mjs'
 import { each } from './tick.mjs'
+import { retriageDecision } from './triage-inputs.mjs'
 
 /**
  * @typedef {import('./tick.mjs').Deps} Deps
@@ -119,7 +121,7 @@ export async function reap(deps, ctx) {
 
 /** @param {Deps} deps @param {Ctx} ctx */
 export async function retriage(deps, ctx) {
-  const { enabled, time } = deps.config.retriage
+  const { enabled, time, maxSkipDays } = deps.config.retriage
   if (!enabled) return
   const last = deps.store.get('retriage.lastRun')
   if (!releaseDue(ctx.now, last === null ? null : Number(last), time)) return
@@ -133,10 +135,12 @@ export async function retriage(deps, ctx) {
         !i.labels.includes(RUNNING) &&
         !ctx.touched.has(key(slug, i.number)),
     )
+    const o = { now: ctx.now, maxSkipDays, botLogin: deps.config.graft.botLogin }
+    const changed = human.filter((i) => retriageDecision(i, snap, o).retriage)
     let moved = 0
     await each(
       deps,
-      human,
+      changed,
       async (issue) => {
         await setLabels(deps, slug, issue, move(issue.labels, Q.intake))
         moved++
@@ -144,8 +148,11 @@ export async function retriage(deps, ctx) {
       (issue) => ({ repo: slug, issue: issue.number }),
     )
     if (human.length)
-      deps.log('info', `re-triage: ${moved} of ${human.length} q:human issues back to q:intake (${iso(ctx.now)})`, {
-        repo: slug,
-      })
+      deps.log(
+        'info',
+        `re-triage: ${changed.length} of ${human.length} changed; ${moved} back to q:intake, ` +
+          `${human.length - changed.length} unchanged skipped (${iso(ctx.now)})`,
+        { repo: slug },
+      )
   }
 }

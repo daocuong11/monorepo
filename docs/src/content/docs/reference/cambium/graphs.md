@@ -249,7 +249,27 @@ Every `reaper.everyMinutes`, for each open untracked `agent/*` PR idle `reaper.s
 
 ### Re-triage
 
-Daily at `retriage.time` when `retriage.enabled`. Every `q:human` issue returns to `q:intake` without its `why:*`, except `why:approve` and issues holding `running`.
+Daily at `retriage.time` when `retriage.enabled`. Every `q:human` issue returns to `q:intake` without its `why:*`, except `why:approve`, issues holding `running`, and issues whose triage inputs are unchanged.
+
+When triage answers needs-human, the marker keeps a fingerprint of what triage saw:
+
+- title and body
+- labels, except `q:*`, `why:*`, `wait:*` and `running`
+- human comments (not `graft.botLogin`, not a bot)
+- GitHub "blocked by" issues and their states
+- agent PRs naming the issue and their states
+- the triage rubric version
+
+| Fingerprint                                  | Re-triage |
+| -------------------------------------------- | --------- |
+| Matches, taken less than `retriage.maxSkipDays` ago | Skipped: no worker, no label moves. |
+| Differs (an input changed, or a new rubric)  | Yes.      |
+| Matches, taken `retriage.maxSkipDays` or more ago | Yes.  |
+| None (another route to `q:human`, or written before fingerprints) | Yes. |
+
+The log reports `re-triage: k of n changed`, with the moved and skipped counts.
+
+Deferred rechecks are not gated: a defer waits on something outside the issue (a CD run, a release, a deploy), which the fingerprint cannot see.
 
 ## Red base
 
