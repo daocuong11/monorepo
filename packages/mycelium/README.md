@@ -100,6 +100,20 @@ Prod uses the read-only `log-reader` principal (SeKtor's `SEKTOR_LOG_READER_USER
 
 One cursor per source in `$MYCELIUM_STATE`, else `$XDG_STATE_HOME/mycelium/state.json`, else `~/.local/state/mycelium/state.json`. The cursor moves after each envelope is filed, so a crash re-reads at most the one in flight. With no cursor, a source starts `MYCELIUM_BACKFILL_HOURS` (default 24) back.
 
+## Status file
+
+`run` writes what it is doing to `$MYCELIUM_STATUS`, else `~/.mycelium/status.json`, atomically: at start, after every pass and at a clean stop. canopy's Intake tab reads it; it holds no credentials. `--dry-run`, `poll` and `notify` write none.
+
+```js
+{
+  version: 1, pid, host, repo, startedAt, updatedAt, stoppedAt,  // stoppedAt null while running
+  sources: [{ name, configured, needs, target, intervalMs, last, nextAt }],  // every source, configured or not
+  notify: { channels, intervalMs, last, nextAt } | null,
+}
+```
+
+`needs` is what an unconfigured source lacks (`not configured; set …`). `target` is what a configured one reads: `2 channels, 1 forum`, `app <id>`, the Play package, or `<stage> · bug reports[ and crashes] · <api host>`; never a token, key or password. `last` is `{ at, ms, ok, created, commented, skipped }` after a good pass, `{ at, ms, ok: false, error }` after a failed one (`message` instead of the tally for `notify`), `null` before the first. `nextAt` is when the next pass is due, `null` once stopped. A status file that cannot be written never stops intake.
+
 ## Configuration
 
 From the environment, over the settings file `$MYCELIUM_ENV` (default `~/.mycelium/env`): `KEY=value` lines with the same keys, `#` comments, values bare or quoted. A variable set in the environment wins. Keep the file `0600`. A source with missing settings is skipped by `run` and refused by `poll`.
@@ -108,6 +122,7 @@ From the environment, over the settings file `$MYCELIUM_ENV` (default `~/.myceli
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `MYCELIUM_ENV`                                               | the settings file; environment only, default `~/.mycelium/env`                                                                        |
 | `MYCELIUM_REPO`                                              | `owner/name` that receives intents (or `--repo`)                                                                                      |
+| `MYCELIUM_STATUS`                                            | status file, default `~/.mycelium/status.json` (see [Status file](#status-file))                                                      |
 | `MYCELIUM_STATE`                                             | cursor file (or `--state`)                                                                                                            |
 | `MYCELIUM_BACKFILL_HOURS`                                    | first-run window, default 24                                                                                                          |
 | `MYCELIUM_<SOURCE>_INTERVAL_S`                               | `run` interval; defaults discord 60, asc 900, testflight 900, play 1800, vitals 3600, devicelog 300 (`MYCELIUM_DEVICELOG_INTERVAL_S`) |

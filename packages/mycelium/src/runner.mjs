@@ -146,9 +146,13 @@ export async function pass(source, { intake, state, now, backfillMs, dryRun = fa
  *   signal?: AbortSignal,
  *   report?: (line: string) => void,
  *   jobs?: { name: string, intervalMs: number, run: (now: number) => Promise<string> }[],
+ *   observe?: (r: import('./status.mjs').PassReport) => void,
  * }} ctx
  */
-export async function runLoop(sources, { now = Date.now, sleep, signal, report = () => {}, jobs = [], ...ctx }) {
+export async function runLoop(
+  sources,
+  { now = Date.now, sleep, signal, report = () => {}, jobs = [], observe = () => {}, ...ctx },
+) {
   const due = new Map([...sources, ...jobs].map((s) => [s.name, 0]))
   while (!signal?.aborted) {
     for (const s of sources) {
@@ -156,11 +160,14 @@ export async function runLoop(sources, { now = Date.now, sleep, signal, report =
       const t = now()
       if (t < /** @type {number} */ (due.get(s.name))) continue
       ctx.intake.reset()
+      const at = { name: s.name, at: t, nextAt: t + s.intervalMs }
       try {
-        const tally = await pass(s, { ...ctx, now: t })
-        report(`${s.name}: ${tally.created} created, ${tally.commented} commented, ${tally.skipped} skipped`)
+        const { created, commented, skipped } = await pass(s, { ...ctx, now: t })
+        report(`${s.name}: ${created} created, ${commented} commented, ${skipped} skipped`)
+        observe({ ...at, ms: now() - t, tally: { created, commented, skipped } })
       } catch (err) {
         report(`${s.name}: ${/** @type {Error} */ (err).message}`)
+        observe({ ...at, ms: now() - t, error: /** @type {Error} */ (err).message })
       }
       due.set(s.name, t + s.intervalMs)
     }
@@ -169,10 +176,14 @@ export async function runLoop(sources, { now = Date.now, sleep, signal, report =
       if (signal?.aborted) break
       const t = now()
       if (t < /** @type {number} */ (due.get(j.name))) continue
+      const at = { name: j.name, at: t, nextAt: t + j.intervalMs }
       try {
-        report(await j.run(t))
+        const message = await j.run(t)
+        report(message)
+        observe({ ...at, ms: now() - t, message })
       } catch (err) {
         report(`${j.name}: ${/** @type {Error} */ (err).message}`)
+        observe({ ...at, ms: now() - t, error: /** @type {Error} */ (err).message })
       }
       due.set(j.name, t + j.intervalMs)
     }

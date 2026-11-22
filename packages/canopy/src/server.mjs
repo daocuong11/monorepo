@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { isSlug } from './config.mjs'
 import { costByDay, withCosts } from './cost.mjs'
 import { readHeartbeat as defaultReadHeartbeat } from './heartbeat.mjs'
+import { readIntake as defaultReadIntake, intakeActivity } from './intake.mjs'
 import { PAGE } from './page.mjs'
 import { emptyColumns } from './queues.mjs'
 import { traceDetail, traceIndex, traceList } from './traces.mjs'
@@ -21,6 +22,8 @@ export const COST_DAYS_SHOWN = 7
  *   repos: string[],
  *   queues: { get(slugs: string[]): Promise<import('./queues.mjs').QueueView>, ttlMs?: number },
  *   readHeartbeat?: (path: string) => Promise<import('./heartbeat.mjs').Heartbeat>,
+ *   intakePath?: string,
+ *   readIntake?: (path: string, o: { now: number }) => Promise<import('./intake.mjs').IntakeStatus>,
  *   now?: () => number,
  *   host?: string,
  *   notes?: string[],
@@ -51,6 +54,20 @@ export function briefOf({ dir, paths, exists = existsSync }, { repo, number }) {
   return { path, command: cwd ? `cd ${shellWord(cwd)} && ${run}` : run }
 }
 
+/** What mycelium filed is worked out again once this old, as the Graphs flow is. */
+const ACTIVITY_FRESH_MS = 15_000
+/** @type {WeakMap<import('./traces.mjs').TraceFile, { at: number, activity: ReturnType<typeof intakeActivity> }>} */
+const activities = new WeakMap()
+/** @param {import('./traces.mjs').TraceFile | undefined} f @param {number} now */
+function activityOf(f, now) {
+  if (f?.status !== 'ok') return null
+  const hit = activities.get(f)
+  if (hit && now >= hit.at && now - hit.at < ACTIVITY_FRESH_MS) return hit.activity
+  const activity = intakeActivity(f.traces, now)
+  activities.set(f, { at: now, activity })
+  return activity
+}
+
 /** Repos named on the command line or in cambium's config, else the ones the heartbeat lists. */
 const reposFor = (/** @type {string[]} */ fixed, /** @type {import('./heartbeat.mjs').Heartbeat} */ hb) =>
   fixed.length ? fixed : [...new Set((hb.data?.repos ?? []).map((/** @type {any} */ r) => r.slug).filter(isSlug))]
@@ -69,8 +86,14 @@ export async function buildState({
   notes = [],
   traces,
   briefs,
+  intakePath,
+  readIntake = defaultReadIntake,
 }) {
-  const [heartbeat, traceFile] = await Promise.all([readHeartbeat(statePath), traces?.read()])
+  const [heartbeat, traceFile, intake] = await Promise.all([
+    readHeartbeat(statePath),
+    traces?.read(),
+    intakePath ? readIntake(intakePath, { now: now() }) : null,
+  ])
   const slugs = reposFor(repos, heartbeat)
   const read = slugs.length
     ? await queues.get(slugs)
@@ -93,6 +116,7 @@ export async function buildState({
     heartbeat,
     github: { ...github, columns: { ...github.columns, human } },
     traces: traceFile ? traceIndex(traceFile, now()) : null,
+    intake: intake && { ...intake, activity: activityOf(traceFile, now()) },
     cost: { days: costByDay(heartbeat.data, now(), COST_DAYS_SHOWN), flagUsd: heartbeat.data?.costFlagUsd ?? null },
   }
 }

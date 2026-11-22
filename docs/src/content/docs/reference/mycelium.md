@@ -63,6 +63,7 @@ Read from the environment, over the settings file `$MYCELIUM_ENV` (default `~/.m
 | `MYCELIUM_ENV` | Settings file. Environment only. |
 | `MYCELIUM_REPO` | `owner/name` that receives intents (or `--repo`). |
 | `MYCELIUM_STATE` | Cursor file (or `--state`). |
+| `MYCELIUM_STATUS` | Status file, default `~/.mycelium/status.json`. |
 | `MYCELIUM_BACKFILL_HOURS` | First-run window. Default 24. |
 | `MYCELIUM_<SOURCE>_INTERVAL_S` | `run` interval per source (`DISCORD`, `ASC`, `TESTFLIGHT`, `PLAY`, `VITALS`, `DEVICELOG`). |
 | `MYCELIUM_NOTIFY_INTERVAL_S` | Notifier interval in `run`. Default 60. |
@@ -132,3 +133,16 @@ An intent closed before acknowledgement gets only the outcome. What was posted i
 ## State
 
 One cursor per source in `$MYCELIUM_STATE`, else `$XDG_STATE_HOME/mycelium/state.json`, else `~/.local/state/mycelium/state.json`. The cursor moves after each envelope is filed. With no cursor, a source starts `MYCELIUM_BACKFILL_HOURS` back.
+
+## Status file
+
+`mycelium run` writes `$MYCELIUM_STATUS`, else `~/.mycelium/status.json`, at start, after every pass and at a clean stop. canopy's Intake tab reads it. It holds no credentials. `--dry-run` writes none.
+
+| Field | Shape |
+| --- | --- |
+| `version` | `1` |
+| `pid`, `host`, `repo` | The process, its host and `MYCELIUM_REPO`. |
+| `startedAt`, `updatedAt`, `stoppedAt` | ISO times; `stoppedAt` is `null` while running. |
+| `sources[]` | Every source, configured or not: `{ name, configured, needs, target, intervalMs, last, nextAt }`. `needs`: what an unconfigured source lacks. `target`: what it reads (channel count, app id, package, stage); never a credential. |
+| `sources[].last` | `{ at, ms, ok, created, commented, skipped }`, or `{ at, ms, ok: false, error }`; `null` before the first pass. |
+| `notify` | `{ channels, intervalMs, last, nextAt }`, or `null` when no channel is on. |

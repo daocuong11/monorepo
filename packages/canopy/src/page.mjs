@@ -277,6 +277,30 @@ color:var(--text);background:color-mix(in srgb,var(--fam,var(--muted)) 32%,var(-
 .fl-note{font-size:12px;color:var(--faint);margin-top:var(--s2)}
 .attrs{margin:0;padding:var(--s2) 0 var(--s3) var(--s4);display:grid;grid-template-columns:max-content minmax(0,1fr);gap:2px var(--s3);font-size:12px}
 .attrs dt{color:var(--muted)}.attrs dd{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
+/* Intake tab: mycelium's sources. Configured sources are a table whose dots carry each one's state; the rest are a
+   quiet ruled list naming what each lacks. What mycelium filed wears bark, its span family colour on the Traces tab. */
+.fig-into{flex:2 1 260px}.fig-into p{margin:0}.into-repo{font-size:15px;color:var(--strong)}
+.ranked.bark .tr i{background:var(--fam-mycelium)}
+.src-name{display:inline-flex;align-items:baseline;gap:6px}.src-name b{font-weight:500;color:var(--strong)}
+td.wrap{white-space:normal;min-width:16ch;overflow-wrap:anywhere}
+tr.src-err td{border-top:0;padding-top:0;white-space:normal;overflow-wrap:anywhere}
+.subhead{display:flex;align-items:baseline;gap:6px;margin:var(--s5) 0 0;font-size:12.5px;font-weight:500;color:var(--label)}.subhead .n{color:var(--faint);font-weight:400}
+.off-list{list-style:none;margin:var(--s1) 0 0;padding:0}
+.off-list li{display:grid;grid-template-columns:minmax(0,15em) minmax(0,1fr);gap:2px var(--s3);padding:6px 0;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+.off-list li:first-child{border-top:0}.off-list .src-name b{color:var(--text);font-weight:400}.off-list .mono{overflow-wrap:anywhere}
+table.fit{width:auto}table.fit td,table.fit th{padding-right:var(--s5)}
+/* Phone: each table row stacks into a block (the header row hidden, cells labelled), so state never scrolls offscreen. */
+@media (max-width:640px){.off-list li{grid-template-columns:minmax(0,1fr)}.fig-into{flex-basis:100%}
+table.stack-sm,table.stack-sm tbody,table.filings,table.filings tbody{display:block}table.stack-sm thead,table.filings thead{display:none}
+tr.src-row,table.filings tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px var(--s3);padding:10px 0;border-top:1px solid var(--line)}
+tbody>tr.src-row:first-child,table.filings tr:first-child{border-top:0}
+tr.src-row td,table.filings td{border:0;padding:0;white-space:normal;min-width:0}
+tr.src-row .c-name{display:flex;align-items:flex-start}tr.src-row .c-name .dot{flex:none;margin-top:6px}tr.src-row .src-name{flex-wrap:wrap;column-gap:6px}
+tr.src-row .c-state{grid-column:2;grid-row:1;justify-self:end}tr.src-row .c-reads,tr.src-row .c-last{grid-column:1/-1}
+tr.src-row td[data-k]::before{content:attr(data-k) " ";color:var(--faint)}
+table.stack-sm tr.src-err{display:block}table.stack-sm tr.src-err td{display:block;padding:0 0 10px}
+.filings .c-src{grid-row:1;color:var(--strong)}.filings .c-act{grid-column:2;grid-row:1;justify-self:end}
+.filings .c-when{grid-row:2;color:var(--muted)}.filings .c-issue{grid-column:2;grid-row:2;justify-self:end}.filings .c-ext{grid-column:1/-1}}
 @media (max-width:900px){.ib{grid-template-columns:minmax(0,1fr)}.ib.open>.figs,.ib.open>.ib-side,.ib:not(.open)>.ib-pane{display:none}
 .ib-pane{position:static;max-height:none;padding:var(--s3) var(--s4) var(--s4)}.back{display:inline-block}
 .dd{position:static}.menu{left:var(--s3);right:var(--s3);max-width:none}.dd-sort .menu{left:auto}}
@@ -962,6 +986,135 @@ function queues(s, now) {
       list(parked, waitItem, multi, now)] : null)
   const queued = h('section', { class: 'grid lanes', 'aria-label': 'Queues' }, LANES.filter(([k]) => k !== 'running').map(lane))
   return [queueFigures(s, a, live(a.running, 'task'), now), active, queued]
+}
+
+// Intake tab. mycelium's status file names every source, configured or not; its mycelium.intake spans say what each
+// filed. Each configured source is a row with its state, cadence, last pass and filings; the others list what they lack.
+const SOURCE_LABEL = { discord: 'Discord', asc: 'App Store reviews', testflight: 'TestFlight feedback', play: 'Google Play reviews', vitals: 'Android vitals', 'device-logs': 'In-app bug reports' }
+const SOURCE_READS = { discord: 'channel messages and forum posts', asc: 'customer reviews', testflight: 'tester feedback and crashes', play: 'reviews from the last week', vitals: 'crash and ANR clusters', 'device-logs': 'reports sent from the app' }
+const SOURCE_STATE = { ok: ['ok', 'polling'], waiting: ['', 'first pass due'], failing: ['err', 'failing'], overdue: ['warn', 'overdue'], stopped: ['', 'stopped'] }
+const srcName = (n) => h('span', { class: 'src-name' }, h('b', {}, SOURCE_LABEL[n] || n), h('span', { class: 'mono faint' }, n))
+const srcTrouble = (src) => src.state === 'failing' || src.state === 'overdue'
+const filedText = (c) => {
+  const bits = [c.created ? c.created + ' opened' : null, c.commented ? plural(c.commented, 'comment', 'comments') : null].filter(Boolean)
+  return bits.length ? bits.join(', ') : 'nothing new'
+}
+
+// The Intake tab's badge: configured sources, amber when one is failing or late, or mycelium is not running.
+function intakeBadge(s) {
+  const it = s.intake
+  if (!it) return ['–', false, 'This canopy server reads no mycelium status; restart it to pick up the new version.']
+  if (it.status !== 'ok') return ['–', it.status !== 'missing', it.message]
+  const on = it.data.sources.filter((x) => x.configured), bad = on.filter(srcTrouble)
+  const why = plural(on.length, 'source', 'sources') + ' configured' + (bad.length ? ', ' + bad.map((x) => x.name + ' ' + x.state).join(', ') : '') + (it.running ? '' : '; mycelium is not running')
+  return [on.length, bad.length > 0 || !it.running, why]
+}
+
+function intakeTab(s, now) {
+  const it = s.intake
+  if (!it) return [calmBox('No intake view yet.', 'This canopy server predates the Intake tab; restart it to pick up the new version.')]
+  if (it.status === 'missing') return [calmBox('mycelium is not reporting here.', it.message)]
+  if (it.status !== 'ok') return [h('div', { class: 'banner err' }, h('b', {}, it.status === 'unknown-version' ? 'mycelium status version mismatch: ' : "Can't read mycelium's status: "), it.message)]
+  const d = it.data, act = it.activity
+  const on = d.sources.filter((x) => x.configured), off = d.sources.filter((x) => !x.configured)
+  const out = []
+  if (it.message) out.push(h('div', { class: 'banner warn' }, h('b', {}, d.stoppedAt ? 'mycelium is stopped: ' : 'mycelium may have stopped: '), it.message))
+  out.push(intakeFigures(s, d, act, on, now), sourcesSection(act, on, off, now), filingsSection(d, act, now, s.traces))
+  return out
+}
+
+function intakeFigures(s, d, act, on, now) {
+  const bad = on.filter(srcTrouble)
+  const total = h('div', { class: 'fig fig-total' },
+    h('h3', {}, 'Sources'),
+    h('div', { class: 'big' + (bad.length ? ' attn' : '') }, on.length),
+    h('div', { class: 'fig-sub' }, 'of ' + d.sources.length + ' configured'),
+    bad.length ? h('div', { class: 'fig-sub warn' }, plural(bad.length, 'needs', 'need') + ' a look') : null,
+    h('div', { class: 'fig-sub faint', title: d.startedAt ? 'Started ' + d.startedAt : null },
+      d.stoppedAt ? 'stopped ' + ago(d.stoppedAt, now) : 'up ' + (d.startedAt ? dur(now - Date.parse(d.startedAt)) : '–'), d.pid ? ' · pid ' + d.pid : ''))
+  let day
+  if (!act) day = h('div', { class: 'fig fig-day' }, h('h3', {}, 'Filed, last 24 hours'),
+    h('p', { class: 'fig-sub', style: 'margin:0' }, s.traces && s.traces.status !== 'ok' ? s.traces.message : 'Tracing is off, so there are no filings to count. mycelium records each one when OTEL_EXPORTER_OTLP_ENDPOINT is set.'))
+  else {
+    const rows = on.map((x) => ({ name: x.name, c: (act.bySource[x.name] || {}).day || { created: 0, commented: 0, failed: 0 } }))
+    const sum = (k) => rows.reduce((n, r) => n + r.c[k], 0)
+    const max = Math.max(1, ...rows.map((r) => r.c.created + r.c.commented))
+    day = h('div', { class: 'fig fig-day' },
+      h('h3', { title: 'mycelium.intake spans that ended in the last 24 hours' }, 'Filed, last 24 hours', h('span', {}, plural(sum('created'), 'issue', 'issues') + ' opened · ' + plural(sum('commented'), 'comment', 'comments'))),
+      rows.length ? h('ul', { class: 'ranked bark' }, rows.map((r) => {
+        const n = r.c.created + r.c.commented
+        return h('li', { title: (SOURCE_LABEL[r.name] || r.name) + ': ' + filedText(r.c) + (r.c.failed ? ', ' + r.c.failed + ' failed' : '') },
+          h('span', { class: 'nm' }, SOURCE_LABEL[r.name] || r.name), h('span', { class: 'tr' }, n ? h('i', { style: 'width:' + Math.round((n / max) * 100) + '%' }) : null), h('b', { class: n ? null : 'faint' }, n))
+      })) : h('p', { class: 'fig-sub', style: 'margin:0' }, 'No source is configured.'),
+      sum('failed') ? h('div', { class: 'day-foot' }, h('span', { class: 'err' }, plural(sum('failed'), 'filing', 'filings') + ' failed')) : null)
+  }
+  const waiting = s.github.columns.intake.length
+  const into = h('div', { class: 'fig fig-into' },
+    h('h3', {}, 'Files into'),
+    d.repo ? h('p', { class: 'into-repo' }, link('https://github.com/' + d.repo + '/issues?q=is%3Aopen+label%3Aq%3Aintake', d.repo)) : h('p', { class: 'warn' }, 'no repository set (MYCELIUM_REPO)'),
+    h('p', { class: 'fig-sub' }, 'as ', h('span', { class: 'mono' }, 'q:intake'), ' · ',
+      h('button', { type: 'button', class: 'linkish', 'data-go': 'queue' }, plural(waiting, 'issue', 'issues') + ' awaiting triage')),
+    h('p', { class: 'fig-sub' }, d.notify
+      ? ['answers reporters on ', d.notify.channels.map((c) => SOURCE_LABEL[c] || c).join(', '), d.notify.last && !d.notify.last.ok ? h('span', { class: 'err', title: d.notify.last.error || '' }, ' · last reply pass failed') : null]
+      : h('span', { class: 'faint' }, 'replies to reporters off')))
+  return h('section', { class: 'figs', 'aria-label': 'Intake at a glance' }, total, day, into)
+}
+
+function sourcesSection(act, on, off, now) {
+  const filed = (name, w) => {
+    if (!act) return h('span', { class: 'faint' }, '–')
+    const c = (act.bySource[name] || {})[w]
+    if (!c) return h('span', { class: 'faint' }, '0')
+    const n = c.created + c.commented
+    return h('span', { title: filedText(c) + (c.failed ? ', ' + c.failed + ' failed' : '') }, h('span', { class: n ? null : 'faint' }, n), c.failed ? h('span', { class: 'err' }, ' · ' + c.failed + ' failed') : null)
+  }
+  const rows = on.map((x) => {
+    const [tone, word] = SOURCE_STATE[x.state] || ['', x.state]
+    const l = x.last, next = x.nextAt ? Date.parse(x.nextAt) - now : null
+    const lastCell = !l ? h('span', { class: 'faint' }, 'not yet')
+      : [h('span', { title: l.at }, ago(l.at, now)), ' · ', l.ok ? h('span', { class: 'muted', title: l.skipped ? l.skipped + ' skipped' : null }, filedText(l)) : h('span', { class: 'err' }, 'failed'), l.ms != null ? h('span', { class: 'faint' }, ' · took ' + dur(l.ms)) : null]
+    const nextCell = x.state === 'stopped' || next == null ? h('span', { class: 'faint' }, '–')
+      : x.state === 'overdue' ? h('span', { class: 'warn', title: x.nextAt }, 'late by ' + dur(-next))
+      : h('span', { title: x.nextAt }, next > 0 ? 'in ' + dur(next) : 'due now')
+    // data-k labels each cell when the row stacks on a phone, where the header row is hidden.
+    return [h('tr', { class: 'src-row' },
+      h('td', { class: 'c-name' }, h('span', { class: 'dot ' + tone }), srcName(x.name)),
+      h('td', { class: 'c-reads wrap' }, x.target ? [x.target, h('span', { class: 'faint' }, ' · ')] : null, h('span', { class: 'muted' }, SOURCE_READS[x.name] || '')),
+      h('td', { class: 'c-state' }, h('span', { class: 'pill ' + tone }, word)),
+      h('td', { 'data-k': 'every' }, x.intervalMs ? dur(x.intervalMs) : '–'),
+      h('td', { class: 'c-last wrap', 'data-k': 'last pass' }, lastCell),
+      h('td', { 'data-k': 'next' }, nextCell),
+      h('td', { 'data-k': 'filed 24h' }, filed(x.name, 'day')),
+      h('td', { 'data-k': '7d' }, filed(x.name, 'week'))),
+      l && l.error ? h('tr', { class: 'src-err' }, h('td', { colspan: 8, class: 'mono err' }, l.error)) : null]
+  })
+  const table = on.length ? h('div', { class: 'scroll', tabindex: 0, 'aria-label': 'Configured sources' }, h('table', { class: 'stack-sm' },
+    h('thead', {}, h('tr', {}, ['source', 'reads', 'state', 'every', 'last pass', 'next', '24h', '7d'].map((t) => h('th', {}, t)))),
+    h('tbody', {}, rows))) : h('div', { class: 'empty' }, 'No source is configured. mycelium reads its settings from ~/.mycelium/env; see its README, Configuration.')
+  return h('section', { 'aria-label': 'Sources' },
+    h('h2', {}, 'Configured', h('span', { class: 'n' }, on.length)),
+    table,
+    off.length ? [h('h3', { class: 'subhead' }, 'Not configured', h('span', { class: 'n' }, off.length)),
+      h('ul', { class: 'off-list' }, off.map((x) => h('li', {}, srcName(x.name), h('span', { class: 'mono' }, (x.needs || 'not configured').replace('not configured; set ', 'needs ')))))] : null)
+}
+
+function filingsSection(d, act, now, tr) {
+  const head = h('h2', {}, 'Recent filings', act && act.recent.length ? h('span', { class: 'n' }, act.recent.length) : null)
+  if (!act) return h('section', {}, head, h('div', { class: 'empty' }, tr && tr.status !== 'ok' ? tr.message : 'Tracing is off. Filings show here once mycelium exports spans to the collector canopy reads.'))
+  if (!act.recent.length) return h('section', {}, head, h('div', { class: 'empty' }, 'mycelium has filed nothing in the traces canopy holds.'))
+  const ACTION = { create: ['ok', 'opened'], comment: ['', 'commented'] }
+  return h('section', {}, head, h('div', { class: 'scroll', tabindex: 0, 'aria-label': 'Recent filings' }, h('table', { class: 'fit filings' },
+    h('thead', {}, h('tr', {}, ['when', 'source', 'action', 'issue', 'external id'].map((t) => h('th', {}, t)))),
+    h('tbody', {}, act.recent.map((f) => {
+      const [tone, word] = f.failed ? ['err', 'failed'] : ACTION[f.action] || ['', f.action || '?']
+      const issue = f.issue ? (d.repo ? link('https://github.com/' + d.repo + '/issues/' + f.issue, '#' + f.issue) : '#' + f.issue) : h('span', { class: 'faint' }, 'no issue')
+      return h('tr', {},
+        h('td', { class: 'c-when', title: new Date(f.at).toISOString() }, ago(new Date(f.at).toISOString(), now)),
+        h('td', { class: 'c-src' }, SOURCE_LABEL[f.source] || f.source),
+        h('td', { class: 'c-act' }, h('span', { class: 'pill ' + tone }, word)),
+        h('td', { class: 'c-issue' }, issue, ' · ', h('a', { href: '#traces/' + f.traceId, title: "Open this filing's trace" }, 'trace')),
+        h('td', { class: 'c-ext mono faint wrap' }, f.externalId || '–'))
+    })))))
 }
 
 function healthOf(s) {
@@ -1670,7 +1823,7 @@ new ResizeObserver(() => {
   })
 }).observe($('main'))
 
-const TABS = ['inbox', 'queue', 'graphs', 'traces', 'health']
+const TABS = ['inbox', 'queue', 'graphs', 'traces', 'intake', 'health']
 // #inbox/<owner>/<name>/<n> selects an inbox item; #traces/<id> opens a trace; #graphs/<name> picks a graph.
 const parseHash = () => {
   const [t, id, name, n] = location.hash.slice(1).split('/')
@@ -1738,6 +1891,11 @@ function tabs(s) {
   $('n-traces').className = 'count' + (traced && tr.errored ? ' attn' : '')
   $('tab-traces').title = tWhy
   $('tab-traces').setAttribute('aria-label', 'Traces: ' + tWhy)
+  const [iN, iAttn, iWhy] = intakeBadge(s)
+  $('n-intake').textContent = iN
+  $('n-intake').className = 'count' + (iAttn ? ' attn' : '')
+  $('tab-intake').title = iWhy
+  $('tab-intake').setAttribute('aria-label', 'Intake: ' + iWhy)
   for (const t of TABS) {
     const b = $('tab-' + t), on = t === tab
     b.setAttribute('aria-selected', on)
@@ -1896,6 +2054,7 @@ function render(s) {
   if (tab === 'queue') body.push(...queues(s, now))
   if (tab === 'graphs') body.push(...graphsTab(s))
   if (tab === 'traces') body.push(tracesTab(now))
+  if (tab === 'intake') body.push(...intakeTab(s, now))
   if (tab === 'health') {
     if (d) body.push(summary(d), h('div', { class: 'detail' }, workers(d, s.heartbeat.ageMs), events(d)))
     else body.push(section('Health', null, h('div', { class: 'empty' }, 'Ticks, workers and events appear once cambium writes a readable heartbeat; see the message above.')))
@@ -1983,6 +2142,7 @@ export const PAGE = `<!doctype html>
 <button class="tab" role="tab" type="button" id="tab-queue" data-tab="queue" aria-controls="main" tabindex="-1">Queue <span class="count" id="n-queue">–</span></button>
 <button class="tab" role="tab" type="button" id="tab-graphs" data-tab="graphs" aria-controls="main" tabindex="-1">Graphs</button>
 <button class="tab" role="tab" type="button" id="tab-traces" data-tab="traces" aria-controls="main" tabindex="-1">Traces <span class="count" id="n-traces">–</span></button>
+<button class="tab" role="tab" type="button" id="tab-intake" data-tab="intake" aria-controls="main" tabindex="-1">Intake <span class="count" id="n-intake">–</span></button>
 <button class="tab" role="tab" type="button" id="tab-health" data-tab="health" aria-controls="main" tabindex="-1">Health <span class="dot" id="d-health"></span></button>
 </nav></div>
 <main id="main" role="tabpanel" aria-labelledby="tab-inbox"><section class="calm"><span class="wm" aria-hidden="true">${RING}</span><p><b>Reading cambium and GitHub…</b></p><p class="muted">The first read of each repo's queues can take a few seconds.</p></section></main>

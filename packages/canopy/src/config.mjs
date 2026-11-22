@@ -12,9 +12,10 @@ export const expandHome = (/** @type {string} */ p, home = homedir()) =>
  * Where the heartbeat lives and which repos to read, from flags first, then
  * cambium's own config file. Only `paths` and `repos[].slug`/`path` are read from it.
  *
- * @param {{ state?: string, config?: string, repos?: string[], traces?: string }} flags
+ * @param {{ state?: string, config?: string, repos?: string[], traces?: string, intake?: string }} flags
  * @param {{ env?: Record<string, string | undefined>, home?: string, read?: (p: string) => string }} [deps]
- * @returns {{ statePath: string, tracesPath: string, repos: string[], configPath: string, configError: string | null,
+ * @returns {{ statePath: string, tracesPath: string, intakePath: string, repos: string[], configPath: string,
+ *   configError: string | null,
  *   briefs: { dir: string, paths: Record<string, string> } }}
  *   `briefs`: where cambium writes session briefs (`<home>/briefs`) and each repo's checkout (`repos[].path`).
  */
@@ -38,6 +39,8 @@ export function resolveSettings(
   const statePath = resolve(expandHome(flags.state ?? fromConfig, home))
   // Where cambium's local collector (otel/otelcol.yaml) writes spans.
   const tracesPath = resolve(expandHome(flags.traces ?? join(homeDir, 'otel', 'traces.jsonl'), home))
+  // mycelium's status file (mycelium's README, Status file).
+  const intakePath = resolve(expandHome(flags.intake ?? env.MYCELIUM_STATUS ?? '~/.mycelium/status.json', home))
 
   const listed = flags.repos?.length
     ? flags.repos
@@ -51,6 +54,7 @@ export function resolveSettings(
   return {
     statePath,
     tracesPath,
+    intakePath,
     repos: [...new Set(/** @type {string[]} */ (listed))],
     configPath,
     configError,

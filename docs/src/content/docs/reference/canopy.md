@@ -1,11 +1,11 @@
 ---
 title: canopy
-description: canopy's flags, tabs, HTTP endpoints and what it reads from cambium.
+description: canopy's flags, tabs, HTTP endpoints and what it reads from cambium and mycelium.
 sidebar:
   order: 6
 ---
 
-canopy is a local, read-only page over cambium's heartbeat, the GitHub queues and cambium's traces. It holds no credentials and writes nothing.
+canopy is a local, read-only page over cambium's heartbeat, the GitHub queues, cambium's traces and mycelium's intake sources. It holds no credentials and writes nothing.
 
 Package: `@oakgreencc/canopy`. Node ≥ 22, no runtime dependencies. GitHub is read through `graft graphql`; `graft` must be on `PATH`.
 
@@ -24,6 +24,7 @@ Package: `@oakgreencc/canopy`. Node ≥ 22, no runtime dependencies. GitHub is r
 | `--host <addr>` | `127.0.0.1` |
 | `--state <file>` | cambium config's `paths.heartbeat` (or `<paths.home>/state.json`), else `~/.cambium/state.json` |
 | `--traces <file>` | `<paths.home>/otel/traces.jsonl` from the cambium config, else `~/.cambium/otel/traces.jsonl` |
+| `--intake <file>` | `$MYCELIUM_STATUS`, else `~/.mycelium/status.json` |
 | `--config <file>` | `$CAMBIUM_CONFIG`, else `~/.cambium/config.json` |
 | `--repo <owner/name>` | Repeatable. Else the config's `repos[].slug`, else the heartbeat's repos. |
 | `--cache <seconds>` | `15`, also the minimum |
@@ -39,6 +40,7 @@ The header always shows mode and last tick. The tab is kept in the URL hash.
 | Queue | `#queue` | Triage, Running and Pull requests; the `q:intake`, `q:task` and `q:promote` lanes; a band of every issue by stage; cost per day by phase. |
 | Graphs | `#graphs`, `#graphs/<name>` | Each cambium graph drawn, with the last 24 hours of moves replayed. |
 | Traces | `#traces`, `#traces/<trace id>` | One row per traced run; a span waterfall per run. |
+| Intake | `#intake` | mycelium's sources: which are configured, each one's state, last pass and filings; what the rest lack; recent filings. |
 | Health | `#health` | Last tick, workers, events. |
 
 ### Inbox groups
@@ -83,6 +85,18 @@ A `q:human` item cambium wrote a session brief for (`<home>/briefs/<owner>__<nam
 
 A **stranded** issue is open, carries no queue label, and its `agent/*` PR closed unmerged with no open agent PR closing it. Read from the 50 most recently updated closed PRs per repository.
 
+### Intake
+
+Read from mycelium's [status file](/reference/mycelium/#status-file); filings are counted from its `mycelium.intake` spans. The tab badge counts configured sources and turns amber when one is failing or overdue, or mycelium is not running.
+
+| State | Meaning |
+| --- | --- |
+| polling | The last pass succeeded and the next is on time. |
+| first pass due | Configured; no pass yet. |
+| failing | The last pass failed. Its error is shown under the row. |
+| overdue | The next pass is more than 2 minutes, or one interval, late. When every source is overdue, mycelium is reported as possibly stopped. |
+| stopped | mycelium stopped cleanly. |
+
 ### Cost
 
 From the heartbeat's [`repos[].cost`](/reference/cambium/heartbeat/#reposcost).
@@ -100,7 +114,7 @@ Only `GET` and `HEAD` are answered, and only for a loopback `Host` (or the `--ho
 | Endpoint | Returns |
 | --- | --- |
 | `GET /` | One self-contained HTML page; polls `/api/state` every 5 s. |
-| `GET /api/state` | `{ now, pollMs, cacheMs, notes, heartbeat, github, traces, cost }` |
+| `GET /api/state` | `{ now, pollMs, cacheMs, notes, heartbeat, github, traces, intake, cost }` |
 | `GET /api/traces` | Trace file fields plus `traces`: the newest 200 runs. |
 | `GET /api/traces/<trace id>` | `{ summary, spans }`, spans in tree order with `depth`. 404 for an unknown id. |
 | `GET /api/issue/<owner>/<name>/<n>` | `{ issue, fetchedAt, error }` for an issue in a watched repository. 404 otherwise. |
@@ -112,6 +126,7 @@ Only `GET` and `HEAD` are answered, and only for a loopback `Host` (or the `--ho
 | `heartbeat` | `{ status, path, message, stale, ageMs, staleAfterMs, data }`. `status`: `ok`, `missing`, `unreadable`, `unknown-version`. `stale` after 3 × `tickSeconds`. |
 | `github` | `{ repos, columns: { intake, waiting, task, running, human, promote }, prs, stranded, flagged, fetchedAt, cached }`. A `human` item with a session brief carries `brief: { path, command }`. Each column and stranded item has `cost`: `{ usd, triage, task, rescue, runs, flagged }`, or `null`. `flagged`: session candidates not in `q:human` or stranded. |
 | `traces` | `{ status, path, message, files, malformed, total, errored, byIssue, progress, recent, flow }`. `status`: `ok`, `missing`, `unreadable`. |
+| `intake` | `{ status, path, message, running, data, activity }`. `status`: `ok`, `missing`, `unreadable`, `unknown-version`. `data.sources[]` adds `state` to the status file's entry. `activity`: `{ bySource: { <source>: { day, week, lastAt } }, recent }`, or `null` without traces. |
 | `cost` | `{ days, flagUsd }`. `days`: the last 7 UTC days, oldest first, each `{ day, triage, task, rescue, total }` in US dollars. `flagUsd`: the heartbeat's `costFlagUsd`, or `null`. |
 
 ## Inputs
@@ -120,5 +135,6 @@ Only `GET` and `HEAD` are answered, and only for a loopback `Host` (or the `--ho
 | --- | --- |
 | Heartbeat | cambium's `state.json`, schema [`version: 1`](/reference/cambium/heartbeat/). Any other version is reported, not parsed. |
 | Traces | The local collector's OTLP/JSON file and rotated backups (`traces-<time>.jsonl`), newest first, up to 64 MB. Re-parsed only when size or mtime changes. |
+| Intake | mycelium's status file, schema `version: 1`. Any other version is reported, not parsed. |
 | Session briefs | `<paths.home>/briefs/` from the cambium config, else `~/.cambium/briefs/`. Checked for each `q:human` item on every `/api/state`. |
 | Queues | GitHub labels, through `graft graphql`. Each repository's answer is cached for `--cache` seconds; a failed refresh keeps the last good answer. |

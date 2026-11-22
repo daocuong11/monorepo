@@ -12,7 +12,7 @@ import { traceStore } from './traces.mjs'
 
 export const HELP = `canopy — a local read-only page over cambium's heartbeat and the GitHub queues
 
-usage: canopy [--port <n>] [--host <addr>] [--state <file>] [--traces <file>] [--config <file>] [--repo <owner/name>]... [--cache <seconds>]
+usage: canopy [--port <n>] [--host <addr>] [--state <file>] [--traces <file>] [--intake <file>] [--config <file>] [--repo <owner/name>]... [--cache <seconds>]
        canopy install [--dry-run] [same flags]   write the launchd agent, serving with those flags
                                                  (start it: oakgreen start canopy; --dry-run prints it)
 
@@ -20,6 +20,7 @@ usage: canopy [--port <n>] [--host <addr>] [--state <file>] [--traces <file>] [-
   --host <addr>      listen address (default ${DEFAULT_HOST}; loopback only unless you say otherwise)
   --state <file>     cambium heartbeat (default: paths.heartbeat from the cambium config, else ~/.cambium/state.json)
   --traces <file>    OTLP/JSON spans from cambium's collector (default: <paths.home>/otel/traces.jsonl)
+  --intake <file>    mycelium's status file (default: $MYCELIUM_STATUS, else ~/.mycelium/status.json)
   --config <file>    cambium config (default: $CAMBIUM_CONFIG, else ~/.cambium/config.json)
   --repo <o/n>       repository to show queues for; repeatable (default: the config's repos, else the heartbeat's)
   --cache <seconds>  how long a GitHub answer is reused (default and minimum ${MIN_TTL_MS / 1000})
@@ -68,6 +69,7 @@ export function main(
         host: { type: 'string' },
         state: { type: 'string' },
         traces: { type: 'string' },
+        intake: { type: 'string' },
         config: { type: 'string' },
         repo: { type: 'string', multiple: true },
         cache: { type: 'string' },
@@ -106,7 +108,13 @@ export function main(
   let settings
   try {
     settings = resolveSettings(
-      { state: values.state, traces: values.traces, config: values.config, repos: values.repo },
+      {
+        state: values.state,
+        traces: values.traces,
+        intake: values.intake,
+        config: values.config,
+        repos: values.repo,
+      },
       { env },
     )
   } catch (e) {
@@ -136,6 +144,7 @@ export function main(
     host,
     notes,
     traces: traceStore({ path: settings.tracesPath }),
+    intakePath: settings.intakePath,
     briefs: settings.briefs,
   })
   return { server, host, port }

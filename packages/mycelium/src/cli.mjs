@@ -11,6 +11,7 @@ import { logPath, plist, plistPath } from './launchd.mjs'
 import { createNotifier } from './notify.mjs'
 import { BACKFILL_HOURS, channelsFromEnv, SOURCES, pass, runLoop, sourceFromEnv } from './runner.mjs'
 import { defaultStatePath, fileState, memoryState } from './state.mjs'
+import { createStatus, defaultStatusPath, targetOf } from './status.mjs'
 import { createTracing, NO_TRACING } from './telemetry.mjs'
 
 export const HELP = `mycelium — intake connectors: external events become q:intake intent issues
@@ -54,6 +55,7 @@ const offline = {
  *   err?: (line: string) => void,
  *   home?: string,
  *   write?: (path: string, text: string) => void,
+ *   writeStatus?: (path: string, text: string) => void,
  * }} [deps]
  */
 export async function main(argv, deps = {}) {
@@ -140,18 +142,53 @@ export async function main(argv, deps = {}) {
     if (verb === 'run') {
       /** @type {import('./runner.mjs').Source[]} */
       const sources = []
+      /** @type {Record<string, string>} */
+      const needs = {}
       for (const n of SOURCES) {
         try {
           sources.push(sourceFromEnv(n, { env, fetch, sleep }))
         } catch (e) {
-          err(`${/** @type {Error} */ (e).message} (skipped)`)
+          const message = /** @type {Error} */ (e).message
+          needs[n] = message.replace(`${n}: `, '')
+          err(`${message} (skipped)`)
         }
       }
       if (sources.length === 0) throw new Error('no source is configured')
       const stamp = (/** @type {string} */ l) => err(`${new Date(now()).toISOString()} ${l}`)
       const notifying = notifier ? `notify ${Object.keys(channels).join(', ')}` : 'notify off'
       stamp(`mycelium up: ${repo ?? '(no repo)'}; sources ${sources.map((s) => s.name).join(', ')}; ${notifying}`)
-      await runLoop(sources, { ...ctx, now, sleep, signal, report: stamp, jobs: notifier ? [notifier] : [] })
+      const status = dryRun
+        ? null
+        : createStatus({
+            path: defaultStatusPath(env, deps.home),
+            repo: repo ?? null,
+            now,
+            ...(deps.writeStatus ? { write: deps.writeStatus } : {}),
+            sources: SOURCES.map((n) => {
+              const s = sources.find((x) => x.name === n)
+              return {
+                name: n,
+                configured: Boolean(s),
+                needs: needs[n] ?? null,
+                target: s ? targetOf(n, env) : null,
+                intervalMs: s?.intervalMs ?? null,
+              }
+            }),
+            notify: notifier ? { channels: Object.keys(channels), intervalMs: notifier.intervalMs } : null,
+          })
+      try {
+        await runLoop(sources, {
+          ...ctx,
+          now,
+          sleep,
+          signal,
+          report: stamp,
+          jobs: notifier ? [notifier] : [],
+          observe: (r) => status?.pass(r),
+        })
+      } finally {
+        status?.stop()
+      }
       return 0
     }
     throw new Error(`unknown verb '${verb}'\n\n${HELP}`)
