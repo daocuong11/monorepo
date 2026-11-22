@@ -53,6 +53,6 @@ Part of the oakgreen stack, whose packages carry tree names (graft, cambium, myc
 
 1. **Glanceable first.** The tab is seen in peripheral vision; state must read before text does.
 2. **Truth over comfort.** Stale, missing, or failed data is shown plainly with its reason, never smoothed over or hidden behind a last-good value without saying so.
-3. **Three jobs, equal footing.** Health, what-needs-me, and flow each get a tab (Health, Inbox, Queue); the header and tab badges keep all three glanceable from whichever tab is open. The Graphs tab shows the shape the flow runs along: each cambium graph, its day's traffic replayed over it. Traces is the drill-down: how one workflow run actually went, span by span.
+3. **Three jobs, equal footing.** Health, what-needs-me, and flow each get a tab (Health, Inbox, Queue); the header and tab badges keep all three glanceable from whichever tab is open. The Graphs tab shows the shape the flow runs along: each cambium graph, its day's traffic replayed over it. Traces is the drill-down: how one workflow run actually went, span by span. Intake shows where work enters: mycelium's sources, whether each is configured and healthy, and what it filed.
 4. **Self-contained and local.** Nothing leaves the machine; nothing outside the page is required to render it.
 5. **Speak cambium's language.** Labels and states use the stack's real terms so the page, the CLI, and GitHub agree.
