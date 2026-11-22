@@ -145,6 +145,27 @@ test('intake → triage → q:task → task worker → PR: one trace, continued 
   assert.equal(triageSession.length, 1, "the triage worker's session is under start-triage")
 })
 
+test('a worker row kept by a failed hand-off is polled again, but its claude.* spans are emitted once', async () => {
+  const h = harness({
+    issues: [{ number: 7, labels: ['q:intake'], body: 'Make the tick faster.' }],
+    config: { engine: 'graph', phases: { dispatch: { cap: 1 }, task: { cap: 0 } } },
+  })
+  const spans = await traced(h)
+  await tick(h.deps)
+  await endWorker(h, 7, ACTIONABLE)
+  h.gh.faults.labelError = new Error('label write refused')
+  for (let i = 0; i < 3; i++) {
+    await tick(h.deps)
+    h.clock.advance(60 * MIN)
+  }
+  assert.equal(h.deps.store.worker(SLUG, 7)?.failures, 3, 'polled three times, failing each')
+  h.gh.faults.labelError = null
+  await tick(h.deps)
+  assert.deepEqual(h.gh.issue(7).labels, ['q:task'])
+  const sessions = (await spans()).filter((s) => s.name === 'claude.session')
+  assert.equal(sessions.length, 1, 'one session for one worker, however often it was polled')
+})
+
 test('a fresh q:task issue starts its own root; a requeue keeps the trace; the next attempt joins it', async () => {
   const h = harness({ issues: [{ number: 3, labels: ['q:task'] }], config: { engine: 'graph' } })
   const spans = await traced(h)

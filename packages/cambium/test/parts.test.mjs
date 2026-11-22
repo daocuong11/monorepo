@@ -394,6 +394,9 @@ test('store: workers and mode survive a reopen', () => {
     stderr: 'e',
   })
   s.markKilled('o/r', 1, 'cap')
+  assert.equal(s.noteFailure('o/r', 1, 500), 1)
+  assert.equal(s.noteFailure('o/r', 1, 900), 2)
+  s.markTraced('o/r', 1)
   s.setMode('draining')
   assert.throws(() => s.setMode(/** @type {any} */ ('nope')))
   s.close()
@@ -413,6 +416,9 @@ test('store: workers and mode survive a reopen', () => {
     stderr: 'e',
     killedReason: 'cap',
     traceparent: null,
+    failures: 2,
+    retryAt: 900,
+    traced: true,
   })
   again.removeWorker('o/r', 1)
   assert.deepEqual(again.workers(), [])
@@ -430,6 +436,11 @@ test('store: a database from before traceparent gains the column; a worker keeps
   old.close()
   const s = openStore(db)
   assert.equal(s.worker('o/r', 1)?.traceparent, null)
+  assert.deepEqual(
+    [s.worker('o/r', 1)?.failures, s.worker('o/r', 1)?.retryAt, s.worker('o/r', 1)?.traced],
+    [0, null, false],
+    'and failures, retry_at and traced, at their defaults',
+  )
   const tp = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01'
   s.addWorker({ .../** @type {any} */ (s.worker('o/r', 1)), issue: 2, traceparent: tp })
   assert.equal(s.worker('o/r', 2)?.traceparent, tp)

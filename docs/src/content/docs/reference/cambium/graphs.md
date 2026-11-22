@@ -12,7 +12,7 @@ All graphs run with `"engine": "graph"`. Steps act once; waits hold until polled
 | Step       | Graph engine                                                                                         |
 | ---------- | ---------------------------------------------------------------------------------------------------- |
 | Read       | One GraphQL query per repo: queued issues, agent PRs with checks, merge state, review decision, newest 20 comments per issue. |
-| Reconcile  | Polls `worker-running` / `triaging` / `diagnosing` for each tracked worker; kills workers over their cap; tears down worktrees. |
+| Reconcile  | Polls `worker-running` / `triaging` / `diagnosing` for each tracked worker; kills workers over their cap; tears down worktrees. A worker whose finished run cannot be written to GitHub is kept and retried after 1 minute, doubling to at most 1 hour. |
 | Watch      | One [PR graph](#pr) turn per eligible PR; then awaiting-promotion tracking.                           |
 | Sweep      | A `running` lease with this host (or none) and no tracked worker goes to its node's recovery.         |
 | Schedule   | Starts Task workers by priority then age up to `phases.task.cap`; wakes replied-to issues; starts triage up to `phases.dispatch.cap`. |

@@ -13,6 +13,12 @@ export const QUEUE_LABELS = [
   { name: 'why:approve', color: 'e4e669', description: 'In q:human: waiting for approval' },
   { name: 'why:triage', color: 'e4e669', description: 'In q:human: triage needs a human' },
   { name: 'why:rescue', color: 'e4e669', description: 'In q:human: the rescue graph could not unstick it' },
+  // The ask:* labels: what a person in q:human is asked to do (cambium/src/ask.mjs `ASK_KINDS`, `ASK_SESSION`).
+  { name: 'ask:decide', color: 'c2e0c6', description: 'In q:human: choose between options' },
+  { name: 'ask:verify', color: 'c2e0c6', description: 'In q:human: check something only a person can' },
+  { name: 'ask:chore', color: 'c2e0c6', description: 'In q:human: do a manual step' },
+  { name: 'ask:approve', color: 'c2e0c6', description: 'In q:human: approve or reject' },
+  { name: 'ask:session', color: 'c2e0c6', description: 'In q:human: best answered in a live session' },
   { name: 'wait:deferred', color: 'bfdadc', description: 'In q:intake: triage deferred it; rechecked later' },
   { name: 'wait:blocked', color: 'bfdadc', description: 'In q:intake: waits on its open blocked-by issues' },
   { name: 'red-base', color: 'b60205', description: 'Repair issue for a red base branch' },

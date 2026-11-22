@@ -11,7 +11,7 @@
 import { z } from 'zod'
 import { defineGraph, defineNode, defineWait, END } from '../graph/index.mjs'
 import { iso, key, markerOf, MIN, setLabels, setMarker } from '../issue-state.mjs'
-import { Ask, askLabels } from '../ask.mjs'
+import { Ask, withAskLabels } from '../ask.mjs'
 import { move, Q, WAIT, WHY } from '../labels.mjs'
 import { newMarker, withHistory } from '../marker.mjs'
 import { readTriage, TriageResult, triageComment, triagePrompt } from '../phases/dispatch.mjs'
@@ -410,19 +410,17 @@ const toHuman = declare(
     run: async ({ ask, ...what }, ctx) => {
       const issue = issueOf(ctx)
       const m = markerOf(issue)
-      await land(
-        ctx,
-        'to-human',
-        {
-          ...withHistory(m, { at: iso(ctx.tick.now), attempt: m.attempt, ...what }),
-          lastFailure: what.reason,
-          ask: ask ?? null,
-          fingerprint: what.outcome === 'needs-human' ? (m.fingerprint ?? null) : null,
-          host: null,
-          start: null,
-          input: null,
-        },
-        { extra: [WHY.triage, ...askLabels(ask)] },
+      const marker = {
+        ...withHistory(m, { at: iso(ctx.tick.now), attempt: m.attempt, ...what }),
+        lastFailure: what.reason,
+        ask: ask ?? null,
+        fingerprint: what.outcome === 'needs-human' ? (m.fingerprint ?? null) : null,
+        host: null,
+        start: null,
+        input: null,
+      }
+      await withAskLabels(ctx, { repo: ctx.subject.slug, issue: issue.number }, ask, (labels) =>
+        land(ctx, 'to-human', marker, { extra: [WHY.triage, ...labels] }),
       )
       ctx.log('warn', `→ q:human (${WHY.triage}): ${what.reason.split('\n')[0]}`, {
         repo: ctx.subject.slug,

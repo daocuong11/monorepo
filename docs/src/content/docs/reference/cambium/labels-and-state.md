@@ -33,7 +33,7 @@ GitHub holds cambium's state. Only cambium moves these labels; workers have `gra
 | `priority:critical` … `priority:low`          | Scheduling order (configurable via `priorityLabels`).                                           |
 | _no `q:` label_, open `agent/*` PR            | Submitted: the PR is in review or the merge queue.                                              |
 
-An open issue carries at most one `q:*` label. `why:*` and `ask:*` labels leave with `q:human`; a new hand-off into `q:human` replaces the `ask:*` labels. Rescue reports `why:*` or `ask:*` without `q:human` as `why-outside-human`. `oakgreen setup` creates every label except the priorities.
+An open issue carries at most one `q:*` label. `why:*` and `ask:*` labels leave with `q:human`; a new hand-off into `q:human` replaces the `ask:*` labels. Rescue reports `why:*` or `ask:*` without `q:human` as `why-outside-human`. `oakgreen setup` creates every label except the priorities. In a repo without the `ask:*` labels, a hand-off to `q:human` adds `why:*` alone and logs a warning; the ask is still in the state comment.
 
 ## State comment
 

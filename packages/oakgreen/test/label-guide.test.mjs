@@ -14,11 +14,17 @@ const git = (/** @type {string} */ url) => fakeExec({ git: () => ({ stdout: `${u
 test('the queue labels cover every label cambium writes', () => {
   const labels = readFileSync(join(cambiumSrc, 'labels.mjs'), 'utf8')
   const health = readFileSync(join(cambiumSrc, 'base-health.mjs'), 'utf8')
+  const ask = readFileSync(join(cambiumSrc, 'ask.mjs'), 'utf8')
+  const kinds = /ASK_KINDS = [^[]*\[([^\]]*)\]/.exec(ask)?.[1] ?? ''
   const written = [
     ...[...labels.matchAll(/'((?:q|why|wait):[a-z-]+)'/g)].map((m) => m[1]),
     /RUNNING = '([a-z-]+)'/.exec(labels)?.[1],
     /REPAIR_LABEL = '([a-z-]+)'/.exec(health)?.[1],
+    // A needs-human ask adds `ask:<kind>` (plus `ask:session`); graft refuses a label the repo lacks.
+    ...[...kinds.matchAll(/'([a-z-]+)'/g)].map((m) => `ask:${m[1]}`),
+    /ASK_SESSION = '([a-z:-]+)'/.exec(ask)?.[1],
   ]
+  assert.ok(kinds.includes("'decide'"), 'ASK_KINDS parsed')
   const ours = QUEUE_LABELS.map((l) => l.name)
   assert.deepEqual(
     [...new Set(written)].filter((l) => !ours.includes(/** @type {string} */ (l))),

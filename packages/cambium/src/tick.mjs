@@ -157,6 +157,36 @@ export async function each(deps, items, fn, where) {
   }
 }
 
+/** The first retry of a worker row whose reconcile failed waits this long; each further failure doubles it. */
+export const RETRY_BASE_MS = MIN
+/** The longest wait between retries of a failing worker row. */
+export const RETRY_MAX_MS = 60 * MIN
+
+/**
+ * {@link each} over worker rows, with a backoff: a row whose reconcile throws (a GitHub write refused, say) keeps
+ * its row, so the next tick would redo the same failing transition. Instead the failure is counted on the row and
+ * the row is skipped until its `retryAt`: 1 minute, then doubling up to an hour. A new worker for the issue gets a
+ * fresh row, and so a fresh count.
+ *
+ * @param {Deps} deps @param {Ctx} ctx @param {Worker[]} workers @param {(w: Worker) => Promise<void>} fn
+ */
+export async function eachWorker(deps, ctx, workers, fn) {
+  for (const w of workers) {
+    if (w.retryAt != null && w.retryAt > ctx.now) continue
+    try {
+      await fn(w)
+    } catch (err) {
+      const msg = /** @type {Error} */ (err)?.message ?? String(err)
+      const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** w.failures)
+      const failures = deps.store.noteFailure(w.repo, w.issue, ctx.now + delay)
+      deps.log('error', `${msg} (failure ${failures}; retried in ${Math.round(delay / MIN)}m)`, {
+        repo: w.repo,
+        issue: w.issue,
+      })
+    }
+  }
+}
+
 // ---- Read
 
 /** @param {Deps} deps @param {Ctx} ctx */
@@ -242,18 +272,13 @@ export async function requeue(deps, ctx, slug, issue, what) {
  */
 async function reconcile(deps, ctx) {
   const { config, store, procs } = deps
-  await each(
-    deps,
-    store.workers(),
-    async (w) => {
-      const caps = config.phases[/** @type {'task'} */ (w.phase)] ?? config.phases.task
-      if (stopOverdue({ procs, store, log: deps.log }, w, caps.wallClockMinutes, ctx.now) !== 'gone') return
-      if (w.phase === 'dispatch' || w.phase === 'rescue') return
-      const snap = ctx.snaps.get(w.repo)
-      if (snap) await finish(deps, ctx, w, snap)
-    },
-    (w) => ({ repo: w.repo, issue: w.issue }),
-  )
+  await eachWorker(deps, ctx, store.workers(), async (w) => {
+    const caps = config.phases[/** @type {'task'} */ (w.phase)] ?? config.phases.task
+    if (stopOverdue({ procs, store, log: deps.log }, w, caps.wallClockMinutes, ctx.now) !== 'gone') return
+    if (w.phase === 'dispatch' || w.phase === 'rescue') return
+    const snap = ctx.snaps.get(w.repo)
+    if (snap) await finish(deps, ctx, w, snap)
+  })
 }
 
 /**

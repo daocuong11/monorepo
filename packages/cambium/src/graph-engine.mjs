@@ -22,7 +22,7 @@ import { HANDED_OFF, inputFor, lostLeaseOf, task, TASK_QUEUES, TERMINAL } from '
 import { prFor } from './phases/task.mjs'
 import { iso, key, markerOf, setLabels, setMarker } from './issue-state.mjs'
 import { effectivePosition, graphVersionDecision, withHistory } from './marker.mjs'
-import { each, newCtx, staleLeases, taskCandidates, watchPairs } from './tick.mjs'
+import { each, eachWorker, newCtx, staleLeases, taskCandidates, watchPairs } from './tick.mjs'
 import { move, Q, RUNNING } from './labels.mjs'
 import { markerTrace, turnTracer } from './tracing.mjs'
 import { DISPATCH_STEPS, driveDispatch } from './dispatch-engine.mjs'
@@ -164,15 +164,15 @@ async function restart(deps, ctx, slug, issue, note) {
 
 /** @param {Deps} deps @param {Ctx} ctx */
 async function reconcile(deps, ctx) {
-  await each(
+  await eachWorker(
     deps,
+    ctx,
     deps.store.workers().filter((w) => w.phase === 'task'),
     async (w) => {
       const snap = ctx.snaps.get(w.repo)
       const subject = { slug: w.repo, number: w.issue, snap, issue: snap?.issues.get(w.issue) }
       await drive(deps, ctx, subject, { node: 'worker-running', input: { branch: w.branch, attempt: w.attempt } })
     },
-    (w) => ({ repo: w.repo, issue: w.issue }),
   )
 }
 

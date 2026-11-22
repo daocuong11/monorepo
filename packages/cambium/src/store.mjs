@@ -13,9 +13,11 @@ import { DatabaseSync } from 'node:sqlite'
  * @typedef {{
  *   repo: string, issue: number, phase: string, pid: number, worktree: string, branch: string,
  *   attempt: number, startedAt: number, host: string, stdout: string, stderr: string, killedReason: string | null,
- *   traceparent: string | null,
+ *   traceparent: string | null, failures: number, retryAt: number | null, traced: boolean,
  * }} Worker
  *   `traceparent`: the span of the step that started it, when traced; its `claude.*` spans go under it on exit.
+ *   `failures`, `retryAt`: consecutive failed reconciles of this row and when the next may run (tick.mjs `eachWorker`).
+ *   `traced`: its `claude.*` spans were emitted; they are emitted once, however often the row is polled.
  */
 
 export const MODES = /** @type {const} */ (['running', 'paused', 'draining'])
@@ -25,6 +27,7 @@ CREATE TABLE IF NOT EXISTS workers (
   repo TEXT NOT NULL, issue INTEGER NOT NULL, phase TEXT NOT NULL, pid INTEGER NOT NULL,
   worktree TEXT NOT NULL, branch TEXT NOT NULL, attempt INTEGER NOT NULL, started_at INTEGER NOT NULL,
   host TEXT NOT NULL, stdout TEXT NOT NULL, stderr TEXT NOT NULL, killed_reason TEXT, traceparent TEXT,
+  failures INTEGER NOT NULL DEFAULT 0, retry_at INTEGER, traced INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (repo, issue)
 );
 CREATE TABLE IF NOT EXISTS control (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -51,6 +54,9 @@ const toWorker = (r) => ({
   stderr: r.stderr,
   killedReason: r.killed_reason ?? null,
   traceparent: r.traceparent ?? null,
+  failures: Number(r.failures ?? 0),
+  retryAt: r.retry_at == null ? null : Number(r.retry_at),
+  traced: Boolean(r.traced),
 })
 
 /** @param {string} path a file, or `:memory:` */
@@ -59,9 +65,16 @@ export function openStore(path) {
   const db = new DatabaseSync(path)
   db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;')
   db.exec(SCHEMA)
-  // Databases from before `traceparent` existed.
+  // Databases from before these columns existed.
   const cols = /** @type {{ name: string }[]} */ (db.prepare('PRAGMA table_info(workers)').all())
-  if (!cols.some((c) => c.name === 'traceparent')) db.exec('ALTER TABLE workers ADD COLUMN traceparent TEXT')
+  const added = {
+    traceparent: 'TEXT',
+    failures: 'INTEGER NOT NULL DEFAULT 0',
+    retry_at: 'INTEGER',
+    traced: 'INTEGER NOT NULL DEFAULT 0',
+  }
+  for (const [name, type] of Object.entries(added))
+    if (!cols.some((c) => c.name === name)) db.exec(`ALTER TABLE workers ADD COLUMN ${name} ${type}`)
   const get = (/** @type {string} */ key) =>
     /** @type {any} */ (db.prepare('SELECT value FROM control WHERE key = ?').get(key))?.value ?? null
   const set = (/** @type {string} */ key, /** @type {string} */ value) =>
@@ -77,7 +90,7 @@ export function openStore(path) {
       const r = db.prepare('SELECT * FROM workers WHERE repo = ? AND issue = ?').get(repo, issue)
       return r ? toWorker(r) : null
     },
-    /** @param {Omit<Worker, 'killedReason' | 'traceparent'> & { traceparent?: string | null }} w */
+    /** @param {Omit<Worker, 'killedReason' | 'traceparent' | 'failures' | 'retryAt' | 'traced'> & { traceparent?: string | null }} w */
     addWorker(w) {
       db.prepare(
         `INSERT OR REPLACE INTO workers (repo, issue, phase, pid, worktree, branch, attempt, started_at, host, stdout, stderr, killed_reason, traceparent)
@@ -100,6 +113,25 @@ export function openStore(path) {
     /** @param {string} repo @param {number} issue @param {string} reason */
     markKilled(repo, issue, reason) {
       db.prepare('UPDATE workers SET killed_reason = ? WHERE repo = ? AND issue = ?').run(reason, repo, issue)
+    },
+    /**
+     * One more failed reconcile of the row; it is not reconciled again before `retryAt`.
+     * @param {string} repo @param {number} issue @param {number} retryAt @returns {number} the failures so far
+     */
+    noteFailure(repo, issue, retryAt) {
+      db.prepare('UPDATE workers SET failures = failures + 1, retry_at = ? WHERE repo = ? AND issue = ?').run(
+        retryAt,
+        repo,
+        issue,
+      )
+      const r = /** @type {any} */ (
+        db.prepare('SELECT failures FROM workers WHERE repo = ? AND issue = ?').get(repo, issue)
+      )
+      return Number(r?.failures ?? 0)
+    },
+    /** @param {string} repo @param {number} issue */
+    markTraced(repo, issue) {
+      db.prepare('UPDATE workers SET traced = 1 WHERE repo = ? AND issue = ?').run(repo, issue)
     },
     /** @param {string} repo @param {number} issue */
     removeWorker(repo, issue) {

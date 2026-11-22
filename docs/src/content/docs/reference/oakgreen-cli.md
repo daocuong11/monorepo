@@ -78,7 +78,7 @@ Repositories checked: `--repo`, else every `repos[].slug` in the cambium config,
 
 Heartbeat file: `paths.heartbeat`, else `<paths.home>/state.json`, else `~/.cambium/state.json`.
 
-Queue labels checked: `q:intake q:task q:human q:promote running why:budget why:reject why:approve why:triage why:rescue wait:deferred wait:blocked red-base rescue`.
+Queue labels checked: `q:intake q:task q:human q:promote running why:budget why:reject why:approve why:triage why:rescue ask:decide ask:verify ask:chore ask:approve ask:session wait:deferred wait:blocked red-base rescue`.
 
 ## Setup steps
 
