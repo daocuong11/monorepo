@@ -14,7 +14,7 @@ import { rescue } from './graphs/rescue.mjs'
 import { key, MIN } from './issue-state.mjs'
 import { findStuck, rescuesOf, stillStuck } from './phases/rescue.mjs'
 import { branchIssue } from './github.mjs'
-import { each } from './tick.mjs'
+import { each, eachWorker } from './tick.mjs'
 import { markerTrace, turnTracer } from './tracing.mjs'
 
 /**
@@ -130,8 +130,9 @@ export function stuckIn(deps, ctx, slug, view, { closed = [], recheck = false, b
 
 /** @param {Deps} deps @param {Ctx} ctx */
 async function reconcile(deps, ctx) {
-  await each(
+  await eachWorker(
     deps,
+    ctx,
     deps.store.workers().filter((w) => w.phase === PHASE),
     async (w) => {
       const base = ctx.snaps.get(w.repo)
@@ -155,7 +156,6 @@ async function reconcile(deps, ctx) {
         },
       )
     },
-    (w) => ({ repo: w.repo, issue: w.issue }),
   )
 }
 

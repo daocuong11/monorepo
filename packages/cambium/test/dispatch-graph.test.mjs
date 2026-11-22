@@ -225,6 +225,45 @@ test('needs-human with an ask → ask:* labels beside why:triage; the state comm
   assert.match(body, /\*\*Recommendation:\*\* The task tick/)
 })
 
+test('needs-human with an ask on a repo without the ask:* labels → q:human with why:triage alone, the ask kept', async () => {
+  const h = intake()
+  h.gh.faults.missingLabels = new Set(['ask:decide', 'ask:session'])
+  await triage(h, logWith(verdictMessage({ verdict: 'needs-human', reason: 'Two candidates.', ask: DECIDE })))
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:human', 'why:triage'])
+  assert.deepEqual(h.gh.marker(7)?.ask, DECIDE, 'the ask is still in the state comment')
+  assert.equal(h.deps.store.worker(SLUG, 7), null, 'the hand-off finished: the worker row is gone')
+})
+
+test('a hand-off GitHub keeps refusing backs off (1m, then 2m), not every tick; it lands once GitHub takes it', async () => {
+  const h = intake()
+  await tick(h.deps)
+  const w = h.deps.store.worker(SLUG, 7)
+  assert.ok(w)
+  h.spawner.logs.set(w.stdout, logWith(verdictMessage({ verdict: 'needs-human', reason: 'Which?' })))
+  h.procs.live.delete(w.pid)
+  h.gh.faults.labelError = new Error('label write refused')
+  const labelCalls = () => h.gh.calls.filter((c) => c.op === 'label').length
+
+  await tick(h.deps)
+  assert.equal(h.deps.store.worker(SLUG, 7)?.failures, 1, 'the row is kept, its failure counted')
+  assert.equal(h.deps.store.worker(SLUG, 7)?.retryAt, T0 + MIN)
+  const after1 = labelCalls()
+  await tick(h.deps)
+  await tick(h.deps)
+  assert.equal(labelCalls(), after1, 'not retried before retryAt')
+
+  h.clock.advance(MIN)
+  await tick(h.deps)
+  assert.equal(h.deps.store.worker(SLUG, 7)?.failures, 2)
+  assert.equal(h.deps.store.worker(SLUG, 7)?.retryAt, T0 + 3 * MIN, 'the wait doubles')
+
+  h.gh.faults.labelError = null
+  h.clock.advance(2 * MIN)
+  await tick(h.deps)
+  assert.deepEqual(h.gh.issue(7).labels.sort(), ['q:human', 'why:triage'])
+  assert.equal(h.deps.store.worker(SLUG, 7), null)
+})
+
 test('needs-human with an invalid ask still lands in q:human with why:triage, the ask dropped', async () => {
   const h = intake()
   const ask = { kind: 'decide', question: 'Which?', interactive: false }

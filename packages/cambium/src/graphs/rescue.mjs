@@ -13,7 +13,7 @@
  */
 import { z } from 'zod'
 import { advance, defineGraph, defineNode, defineWait, END } from '../graph/index.mjs'
-import { askLabels } from '../ask.mjs'
+import { withAskLabels } from '../ask.mjs'
 import { iso, key, markerOf, setLabels, setMarker } from '../issue-state.mjs'
 import { move, Q, RESCUE_LABEL, WHY } from '../labels.mjs'
 import { newMarker, withHistory } from '../marker.mjs'
@@ -94,24 +94,27 @@ const rescued = (ctx, m, reason) =>
  */
 async function handToHuman(ctx, issue, reason, outcome, ask) {
   const m = markerOf(issue)
-  await place(
-    ctx,
-    issue,
-    {
-      ...graphMarker(withHistory(m, { at: iso(ctx.tick.now), attempt: m.attempt, outcome, reason })),
-      graph: rescue.name,
-      graphVersion: rescue.version,
-      phase: 'rescue',
-      node: 'to-human',
-      status: 'waiting',
-      enteredAt: iso(ctx.tick.now),
-      lastFailure: reason,
-      ask: ask ?? null,
-      host: null,
-      start: null,
-      input: null,
-    },
-    move(issue.labels, Q.human, { extra: [WHY.rescue, ...askLabels(ask)] }),
+  const where = { repo: ctx.subject.slug, issue: issue.number }
+  await withAskLabels(ctx, where, ask, (labels) =>
+    place(
+      ctx,
+      issue,
+      {
+        ...graphMarker(withHistory(m, { at: iso(ctx.tick.now), attempt: m.attempt, outcome, reason })),
+        graph: rescue.name,
+        graphVersion: rescue.version,
+        phase: 'rescue',
+        node: 'to-human',
+        status: 'waiting',
+        enteredAt: iso(ctx.tick.now),
+        lastFailure: reason,
+        ask: ask ?? null,
+        host: null,
+        start: null,
+        input: null,
+      },
+      move(issue.labels, Q.human, { extra: [WHY.rescue, ...labels] }),
+    ),
   )
 }
 

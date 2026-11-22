@@ -59,6 +59,28 @@ export function askError(raw) {
 /** The labels an ask adds beside `q:human`. @param {AskT | null | undefined} ask @returns {string[]} */
 export const askLabels = (ask) => (ask ? [`ask:${ask.kind}`, ...(ask.interactive ? [ASK_SESSION] : [])] : [])
 
+/** graft's refusal to add a label the repo does not have (graft/src/github/issues.mjs `labelIssue`). */
+const MISSING_LABEL = /label '[^']+' does not exist/
+
+/**
+ * Hand an issue to a human with its ask's labels, or without them when the repo refuses them: a repo set up before
+ * the `ask:*` labels existed lacks them, and the ask is in the state comment anyway. Without this the hand-off
+ * fails, and is retried, every tick.
+ * @param {{ log: (level: 'warn', msg: string, where?: { repo?: string, issue?: number }) => void }} ctx
+ * @param {{ repo: string, issue: number }} where @param {AskT | null | undefined} ask
+ * @param {(labels: string[]) => Promise<void>} handOff called with the ask's labels, then (on refusal) with none
+ */
+export async function withAskLabels(ctx, where, ask, handOff) {
+  try {
+    await handOff(askLabels(ask))
+  } catch (err) {
+    const msg = /** @type {Error} */ (err)?.message ?? String(err)
+    if (!ask || !MISSING_LABEL.test(msg)) throw err
+    ctx.log('warn', `${msg}; → q:human without ask labels (\`oakgreen setup\` adds them)`, where)
+    await handOff([])
+  }
+}
+
 const HEAD = /** @type {const} */ ({
   decide: 'Decide',
   verify: 'Verify',

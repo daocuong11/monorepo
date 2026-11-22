@@ -23,7 +23,7 @@ import { iso, key, markerOf, setLabels, setMarker } from './issue-state.mjs'
 import { byPriorityThenAge, move, Q, RUNNING, WAIT, WHY } from './labels.mjs'
 import { newMarker, withHistory } from './marker.mjs'
 import { humanReplies, stateSince } from './human-reply.mjs'
-import { each, staleLeases } from './tick.mjs'
+import { each, eachWorker, staleLeases } from './tick.mjs'
 import { markerTrace, turnTracer } from './tracing.mjs'
 
 /**
@@ -82,15 +82,15 @@ async function releaseWorker(deps, s) {
 
 /** @param {Deps} deps @param {Ctx} ctx */
 async function reconcile(deps, ctx) {
-  await each(
+  await eachWorker(
     deps,
+    ctx,
     deps.store.workers().filter((w) => w.phase === PHASE),
     async (w) => {
       const snap = ctx.snaps.get(w.repo)
       const subject = { slug: w.repo, number: w.issue, snap, issue: snap?.issues.get(w.issue) }
       await driveDispatch(deps, ctx, subject, { node: 'triaging', input: { attempt: w.attempt } })
     },
-    (w) => ({ repo: w.repo, issue: w.issue }),
   )
 }
 

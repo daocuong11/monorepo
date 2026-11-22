@@ -57,8 +57,18 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
   /** @type {{ op: string, args: any[] }[]} */
   const calls = []
   let nextComment = 1000
-  /** @type {{ readError: Error | null, labelError: Error | null, hang: boolean, mergeError: Error | null, updateError: Error | null }} */
-  const faults = { readError: null, labelError: null, hang: false, mergeError: null, updateError: null }
+  /**
+   * `missingLabels`: labels the repo lacks; adding one is refused as graft refuses it.
+   * @type {{ readError: Error | null, labelError: Error | null, hang: boolean, mergeError: Error | null, updateError: Error | null, missingLabels: Set<string> }}
+   */
+  const faults = {
+    readError: null,
+    labelError: null,
+    hang: false,
+    mergeError: null,
+    updateError: null,
+    missingLabels: new Set(),
+  }
   /**
    * The base's health `read` reports (base-health.mjs), or null for none; `repairs` is filled from the open
    * issues labelled `red-base`, as the real query does.
@@ -107,6 +117,8 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
     async label(slug, number, { add, remove }) {
       calls.push({ op: 'label', args: [slug, number, { add, remove }] })
       if (faults.labelError) throw faults.labelError
+      const missing = add.find((l) => faults.missingLabels.has(l))
+      if (missing) throw new Error(`graft issue exited 1: refusing: label '${missing}' does not exist in ${slug}`)
       const i = /** @type {Required<FakeIssue>} */ (store.get(number))
       i.labels = [...i.labels.filter((l) => !remove.includes(l)), ...add.filter((l) => !i.labels.includes(l))]
     },

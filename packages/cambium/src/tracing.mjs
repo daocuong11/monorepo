@@ -334,13 +334,16 @@ export const markerTrace = (marker) => ({
  * (`parent`, kept on the worker row). Never throws: tracing must not fail a tick.
  *
  * @param {{ telemetry?: Telemetry, spawner: { readLog(path: string): string },
+ *   store?: { markTraced(repo: string, issue: number): void },
  *   log: (level: 'info' | 'warn' | 'error', msg: string, where?: { repo?: string, issue?: number }) => void }} ctx
- * @param {{ repo: string, issue: number, stdout: string, traceparent?: string | null }} w
+ * @param {{ repo: string, issue: number, stdout: string, traceparent?: string | null, traced?: boolean }} w
  */
 export function traceWorker(ctx, w) {
-  if (!ctx.telemetry?.enabled || !w.traceparent) return
+  if (!ctx.telemetry?.enabled || !w.traceparent || w.traced) return
   try {
     ctx.telemetry.workerSpans(ctx.spawner.readLog(w.stdout), w.traceparent)
+    // Once per worker: a row kept by a failed transition is polled again, and its spans must not repeat.
+    ctx.store?.markTraced(w.repo, w.issue)
   } catch (err) {
     ctx.log('warn', `worker spans: ${/** @type {Error} */ (err)?.message ?? err}`, { repo: w.repo, issue: w.issue })
   }
