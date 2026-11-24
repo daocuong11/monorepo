@@ -5,7 +5,7 @@ export default defineConfig({
   site: 'https://docs.oakgreen.cc',
   integrations: [
     starlight({
-      title: 'forest',
+      title: 'oakgreen.cc',
       description: 'Run coding agents against a GitHub repository, with GitHub as the source of truth.',
       favicon: '/favicon.svg',
       head: [{ tag: 'meta', attrs: { name: 'theme-color', content: '#0b190f' } }],
