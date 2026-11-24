@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readdirSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createClient, httpCacheFor } from '../src/github/app.mjs'
@@ -81,6 +81,23 @@ test('a corrupt entry is a miss; a stale one is pruned on the next write; GRAFT_
   assert.equal(readdirSync(d).length, 1)
   assert.equal(httpCacheFor({ GRAFT_HTTP_CACHE: '0' }), null)
   assert.ok(httpCacheFor({ GRAFT_HOME: d }))
+})
+
+test('a 304-served entry refreshes its mtime, so a read entry survives the prune', () => {
+  const d = dir()
+  const cache = etagCache(d)
+  cache.set('k', { etag: '"a"', text: '{}', next: null })
+  const [name] = readdirSync(d)
+  const p = join(d, name)
+  // Age the entry to just inside the window, then read it: the read refreshes its mtime.
+  const old = (Date.now() - MAX_AGE_MS + 60000) / 1000
+  utimesSync(p, old, old)
+  assert.equal(cache.get('k')?.etag, '"a"')
+  assert.ok(statSync(p).mtimeMs > Date.now() - 60000)
+  // A write prunes entries older than the window; the read entry survives it.
+  cache.set('other', { etag: '"b"', text: '{}', next: null })
+  assert.equal(cache.get('k')?.etag, '"a"')
+  assert.equal(readdirSync(d).length, 2)
 })
 
 test('graphql: a RATE_LIMIT error says when the budget resets', async () => {
