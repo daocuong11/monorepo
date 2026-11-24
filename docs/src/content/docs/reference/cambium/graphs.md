@@ -64,8 +64,9 @@ One turn per tick for each agent PR (head `agent/*`) closing a cambium-owned iss
 3. A newer open agent PR closes the same issue → `close-pr` (superseded).
 4. Red CI, `mergeable: CONFLICTING` or `CHANGES_REQUESTED` → `rework`.
 5. Green, clean, repo `merge` is `"green"`, nothing armed, no refusal on this head within 10 min → `merge`.
-6. Not merged `mergeQueueMinutes` after submission → `to-human` (`why:approve`).
-7. Otherwise nothing this tick.
+6. Auto-merge armed, green, and GitHub reports `BLOCKED` `mergeStallMinutes` after arming → `to-human` (`why:approve`, outcome `merge-blocked`).
+7. Not merged `mergeQueueMinutes` after submission → `to-human` (`why:approve`).
+8. Otherwise nothing this tick.
 
 ```text
 assess → close-out [merged] | merge [toMerge] | rework [toRework] | close-pr [toClose] | to-human [toHumanInbox] | end

@@ -19,10 +19,16 @@ import { join, resolve } from 'node:path'
  *   (so graft's merge policy still decides). `green` needs `engine: "graph"`.
  * @typedef {{
  *   slug: string, path: string, baseBranch: string, release: RepoRelease, merge: MergePolicy,
- *   requiredCheck: string | null,
+ *   requiredCheck: string | null, phases: RepoPhases, watch: Watch[],
  * }} Repo
  *   `requiredCheck` (default `ci`): the check whose runs on `baseBranch` say whether the base is green (see
- *   base-health.mjs); `null` turns the red-base gate and repair off for the repo.
+ *   base-health.mjs); `null` turns the red-base gate and repair off for the repo. `phases`: per-phase overrides of
+ *   `wallClockMinutes` and `maxTurns` for this repo's workers ({@link capsFor}). `watch`: workflows whose latest
+ *   run on a branch must be green (watch.mjs).
+ * @typedef {Partial<Record<'task' | 'dispatch' | 'rescue', { wallClockMinutes?: number, maxTurns?: number }>>} RepoPhases
+ * @typedef {{ workflow: string, branch: string, issue: boolean }} Watch
+ *   `workflow`: the workflow file name (`release.yml`) or its id. `branch` (default: the repo's `baseBranch`).
+ *   `issue` (default true): a failing run opens one `q:human` issue, closed once the workflow is green again.
  * @typedef {{ cap: number, wallClockMinutes: number, maxTurns: number, maxAttempts: number }} PhaseCaps
  * @typedef {PhaseCaps & { maxReworks: number }} TaskCaps
  *   `maxReworks`: how many times the PR graph sends one PR back to a worker (red CI, a conflict, changes
@@ -38,6 +44,8 @@ import { join, resolve } from 'node:path'
  *     rescue: PhaseCaps,
  *   },
  *   mergeQueueMinutes: number,
+ *   mergeStallMinutes: number,
+ *   watchEveryMinutes: number,
  *   merge: MergePolicy,
  *   priorityLabels: string[],
  *   release: { enabled: boolean, time: string },
@@ -52,6 +60,9 @@ import { join, resolve } from 'node:path'
  *   gc: GcConfig,
  *   costFlagUsd: number,
  * }} Config
+ *   `mergeStallMinutes`: an agent PR whose auto-merge has been armed this long, with green checks, while GitHub
+ *   still reports it BLOCKED (a rule cambium cannot see holds it) goes to `q:human` with GitHub's state. 0: off.
+ *   `watchEveryMinutes`: how often each repo's `watch` workflows are read (watch.mjs).
  *   `costFlagUsd`: an issue whose task-phase spend (cost.mjs) is over this many US dollars with no merged PR is
  *   flagged in the heartbeat, and canopy's Inbox, as a session candidate. 0 turns the flag off.
  * @typedef {{
@@ -96,6 +107,8 @@ export function defaults(home = DEFAULT_HOME) {
       rescue: { cap: 0, wallClockMinutes: 20, maxTurns: 80, maxAttempts: 1 },
     },
     mergeQueueMinutes: 120,
+    mergeStallMinutes: 20,
+    watchEveryMinutes: 5,
     merge: 'none',
     priorityLabels: ['priority:critical', 'priority:high', 'priority:medium', 'priority:low'],
     release: { enabled: false, time: '06:00' },
@@ -134,6 +147,57 @@ export function configPath(/** @type {string | undefined} */ flag, env = process
   return untilde(flag ?? env.CAMBIUM_CONFIG ?? join(DEFAULT_HOME, 'config.json'))
 }
 
+/** The phase caps a repo may override. */
+const REPO_PHASE_KEYS = Object.freeze(['wallClockMinutes', 'maxTurns'])
+
+/** @param {string} slug @param {any} raw @returns {RepoPhases} */
+function repoPhases(slug, raw) {
+  if (raw === undefined) return {}
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    throw new Error(`config: repo ${slug} phases must be an object`)
+  /** @type {RepoPhases} */
+  const out = {}
+  for (const [phase, caps] of Object.entries(raw)) {
+    if (!['task', 'dispatch', 'rescue'].includes(phase))
+      throw new Error(`config: repo ${slug} phases.${phase}: the phases are task, dispatch and rescue`)
+    for (const [k, v] of Object.entries(caps ?? {})) {
+      if (!REPO_PHASE_KEYS.includes(k))
+        throw new Error(`config: repo ${slug} phases.${phase}.${k}: a repo may set ${REPO_PHASE_KEYS.join(', ')}`)
+      if (!(typeof v === 'number' && v > 0))
+        throw new Error(`config: repo ${slug} phases.${phase}.${k} must be a number above 0, got ${JSON.stringify(v)}`)
+    }
+    out[/** @type {'task'} */ (phase)] = { ...caps }
+  }
+  return out
+}
+
+/** @param {string} slug @param {any} raw @param {string} baseBranch @returns {Watch[]} */
+function repoWatch(slug, raw, baseBranch) {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) throw new Error(`config: repo ${slug} watch must be a list of { workflow, branch }`)
+  return raw.map((w, i) => {
+    const workflow = typeof w === 'string' ? w : w?.workflow
+    if (typeof workflow !== 'string' || !workflow)
+      throw new Error(`config: repo ${slug} watch[${i}] needs "workflow" (a file name like ci.yml, or its id)`)
+    const branch = (typeof w === 'object' && w.branch) || baseBranch
+    if (typeof branch !== 'string') throw new Error(`config: repo ${slug} watch[${i}].branch must be a branch name`)
+    const issue = typeof w === 'object' && w.issue !== undefined ? w.issue : true
+    if (typeof issue !== 'boolean') throw new Error(`config: repo ${slug} watch[${i}].issue must be true or false`)
+    return { workflow, branch, issue }
+  })
+}
+
+/**
+ * One phase's caps for one repo's workers: the global `phases.<phase>`, under the repo's `phases.<phase>`.
+ * @param {Config} config @param {string} slug @param {string} phase
+ * @returns {PhaseCaps}
+ */
+export function capsFor(config, slug, phase) {
+  const base = config.phases[/** @type {'task'} */ (phase)] ?? config.phases.task
+  const over = config.repos.find((r) => r.slug === slug)?.phases?.[/** @type {'task'} */ (phase)]
+  return over ? { ...base, ...over } : base
+}
+
 /**
  * @param {any} raw the parsed file
  * @returns {Config}
@@ -170,8 +234,13 @@ export function resolveConfig(raw = {}) {
     const merge = r.merge ?? config.merge
     if (!MERGE_POLICIES.includes(merge))
       throw new Error(`config: repo ${r.slug} merge must be "none" or "green", got ${JSON.stringify(merge)}`)
-    return { slug: r.slug, path: untilde(r.path), baseBranch, release, merge, requiredCheck }
+    const phases = repoPhases(r.slug, r.phases)
+    const watch = repoWatch(r.slug, r.watch, baseBranch)
+    return { slug: r.slug, path: untilde(r.path), baseBranch, release, merge, requiredCheck, phases, watch }
   })
+  for (const k of /** @type {const} */ (['mergeStallMinutes', 'watchEveryMinutes']))
+    if (!(typeof config[k] === 'number' && config[k] >= 0))
+      throw new Error(`config: ${k} must be a number, at least 0, got ${JSON.stringify(config[k])}`)
   if (!MERGE_POLICIES.includes(config.merge))
     throw new Error(`config: merge must be "none" or "green", got ${JSON.stringify(config.merge)}`)
   const wenv = config.worker.env

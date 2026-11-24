@@ -59,7 +59,7 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
   let nextComment = 1000
   /**
    * `missingLabels`: labels the repo lacks; adding one is refused as graft refuses it.
-   * @type {{ readError: Error | null, labelError: Error | null, hang: boolean, mergeError: Error | null, updateError: Error | null, missingLabels: Set<string> }}
+   * @type {{ readError: Error | null, labelError: Error | null, hang: boolean, mergeError: Error | null, updateError: Error | null, runsError: Error | null, missingLabels: Set<string> }}
    */
   const faults = {
     readError: null,
@@ -67,6 +67,7 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
     hang: false,
     mergeError: null,
     updateError: null,
+    runsError: null,
     missingLabels: new Set(),
   }
   /**
@@ -75,6 +76,8 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
    * @type {{ base: Omit<import('../src/base-health.mjs').BaseHealth, 'repairs'> | null }}
    */
   const health = { base: null }
+  /** Workflow runs by `<workflow>@<branch>`, newest first (watch.mjs). @type {Map<string, import("../src/watch.mjs").WorkflowRun[]>} */
+  const runs = new Map()
   let nextIssue = 9000
 
   const toIssue = (/** @type {Required<FakeIssue>} */ i) => ({
@@ -137,6 +140,8 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
     },
     async createIssue(slug, { title, body, labels }) {
       calls.push({ op: 'createIssue', args: [slug, { title, body, labels }] })
+      const missing = labels.find((l) => faults.missingLabels.has(l))
+      if (missing) throw new Error(`graft issue exited 1: refusing: label '${missing}' does not exist in ${slug}`)
       const number = nextIssue++
       store.set(number, {
         number,
@@ -166,6 +171,11 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
     async mergePull(slug, number) {
       calls.push({ op: 'mergePull', args: [slug, number] })
       if (faults.mergeError) throw faults.mergeError
+    },
+    async workflowRuns(slug, workflow, branch) {
+      calls.push({ op: 'workflowRuns', args: [slug, workflow, branch] })
+      if (faults.runsError) throw faults.runsError
+      return [...(runs.get(`${workflow}@${branch}`) ?? [])]
     },
     async behindBase(slug, number) {
       calls.push({ op: 'behindBase', args: [slug, number] })
@@ -208,6 +218,7 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
     calls,
     faults,
     health,
+    runs,
     pulls,
     issue: (/** @type {number} */ n) => /** @type {Required<FakeIssue>} */ (store.get(n)),
     marker: (/** @type {number} */ n) => parseMarker(store.get(n)?.comment?.body),

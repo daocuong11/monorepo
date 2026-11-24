@@ -23,6 +23,7 @@ export const QUEUE_LABELS = [
   { name: 'wait:blocked', color: 'bfdadc', description: 'In q:intake: waits on its open blocked-by issues' },
   { name: 'red-base', color: 'b60205', description: 'Repair issue for a red base branch' },
   { name: 'rescue', color: 'f9d0c4', description: 'Root-cause ticket filed by the rescue graph' },
+  { name: 'watch', color: 'd93f0b', description: 'A watched workflow is failing (cambium watch)' },
 ]
 
 export const MYCELIUM_SOURCES = {

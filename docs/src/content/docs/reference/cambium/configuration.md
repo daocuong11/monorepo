@@ -30,6 +30,8 @@ One JSON file: `--config`, else `$CAMBIUM_CONFIG`, else `~/.cambium/config.json`
     "rescue": { "cap": 0, "wallClockMinutes": 20, "maxTurns": 80, "maxAttempts": 1 }
   },
   "mergeQueueMinutes": 120,
+  "mergeStallMinutes": 20,
+  "watchEveryMinutes": 5,
   "merge": "none",
   "priorityLabels": ["priority:critical", "priority:high", "priority:medium", "priority:low"],
   "release": { "enabled": false, "time": "06:00" },
@@ -75,6 +77,8 @@ A file that does not load, or has no `repos`, keeps the running config and logs 
 | `tickSeconds`        | `30`       | Interval between ticks.                                                                                   |
 | `stepTimeoutSeconds` | `20`       | Bound on each tick step; a step over it is logged and the tick moves on.                                  |
 | `mergeQueueMinutes`  | `120`      | A submitted PR not merged after this long goes to `q:human` (`why:approve`).                              |
+| `mergeStallMinutes`  | `20`       | An agent PR with auto-merge armed and green checks that GitHub still reports `BLOCKED` this long after arming goes to `q:human` (`why:approve`), with GitHub's state in the reason. A rule cambium cannot read holds it: a ruleset review, an approval for unattributed changes, or a required check that never reported. `0` turns it off. |
+| `watchEveryMinutes`  | `5`        | How often each repo's [`watch`](#reposwatch) workflows are read. `0` turns watching off. |
 | `merge`              | `"none"`   | Who merges a Task PR: `"none"` (merge queue, auto-merge or a human) or `"green"` (cambium, once CI is green; graph engine). Overridable per repo. |
 | `priorityLabels`     | four `priority:*` | Scheduling order, first is highest. Unlabelled issues sort after all of them.                     |
 | `costFlagUsd`        | `10`       | US dollars. An issue whose task-phase [cost](/reference/cambium/labels-and-state/#cost) is over this, with no merged PR, is flagged in the heartbeat and in canopy's Inbox as a session candidate. `0` turns the flag off. |
@@ -89,15 +93,33 @@ A file that does not load, or has no `repos`, keeps the running config and logs 
 | `requiredCheck` | `"ci"`             | Check whose runs on `baseBranch` decide [red base](/explanation/merging-and-red-base/). `null` turns the gate and repair off. |
 | `merge`         | top-level `merge`  | Per-repo override.                                                                            |
 | `release`       | see below          | Per-repo release settings (graph engine).                                                     |
+| `phases`        | `{}`               | Per-repo overrides of `wallClockMinutes` and `maxTurns`, by phase: `{ "task": { "wallClockMinutes": 120 } }`. Other keys are refused. |
+| `watch`         | `[]`               | Workflows whose latest run must be green. See [`repos[].watch`](#reposwatch). |
 
 `repos[].release`: `{ "enabled", "time", "from", "to", "check" }`. `enabled` and `time` default to the top-level `release`; `from` to `baseBranch`; `to` to `"main"`; `check` to the repo's `requiredCheck`. A release is cut at the newest `from` commit where `check` is green; `null` cuts at the tip. A repo whose `from` equals `to` has no promotion PR.
+
+### `repos[].watch`
+
+Each entry is a workflow file name (`"cd.yml"`), or `{ "workflow", "branch", "issue" }`. `branch` defaults to the repo's `baseBranch`; `issue` defaults to `true`.
+
+Every `watchEveryMinutes`, cambium reads the newest completed push or schedule run of each workflow on its branch. Cancelled and skipped runs are passed over.
+
+- A failed, timed-out or startup-failed run logs a `warn` event. With `issue: true` it also opens one `q:human` issue labelled `watch` (only `q:human` if the repo lacks that label). A later failing run comments on that issue.
+- The next green run logs an `info` event and closes the issue.
+- A read that fails keeps the last verdict.
+
+Verdicts are kept in the store across restarts, and each repo's are in the heartbeat as `repos[].watch`.
+
+```json
+"watch": ["release.yml", { "workflow": "e2e.yml", "branch": "develop", "issue": false }]
+```
 
 ## `phases`
 
 | Key                         | Default | Meaning                                                              |
 | --------------------------- | ------- | -------------------------------------------------------------------- |
 | `task.cap`                  | `2`     | Live Task workers, counted from tracked processes.                   |
-| `task.wallClockMinutes`     | `60`    | Worker killed past this.                                             |
+| `task.wallClockMinutes`     | `60`    | Worker killed past this. A repo may override it (`repos[].phases`). |
 | `task.maxTurns`             | `200`   | Passed as `--max-turns`.                                             |
 | `task.maxAttempts`          | `3`     | Attempts before `q:human` + `why:budget`.                            |
 | `task.maxReworks`           | `3`     | Reworks of one PR before `q:human` + `why:budget`.                   |
