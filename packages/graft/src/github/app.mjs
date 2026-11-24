@@ -21,6 +21,7 @@ import { createPrivateKey, createSign } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { graftHome, appFor, loadUserConfig } from '../config.mjs'
+import { etagCache } from './http-cache.mjs'
 
 const b64u = (buf) => Buffer.from(buf).toString('base64url')
 
@@ -94,8 +95,10 @@ const nextLink = (res) => /<([^>]+)>;\s*rel="next"/.exec(res.headers?.get?.('lin
 export const isNotFound = (err) => err?.status === 404 || /: 404 /.test(String(err?.message))
 
 /**
- * @typedef {{ status: number, text: string, json: any, next: string | null }} Response
- *   `json` is `null` for a body that is not JSON; `next` is the next page.
+ * @typedef {{ status: number, text: string, json: any, next: string | null, headers?: Record<string, string>,
+ *   cached?: boolean }} Response
+ *   `json` is `null` for a body that is not JSON; `next` is the next page. `headers`: the {@link KEPT_HEADERS}.
+ *   `cached`: answered from the ETag cache on a 304.
  */
 
 /** How many characters of a non-JSON error body an Error message keeps. */
@@ -133,40 +136,59 @@ export function errorBody(text) {
  *
  * A non-2xx answer is thrown as an Error whose message is `<path>: <status>
  * <body>` (the body through {@link errorBody}: one line), carrying `status` (see {@link isNotFound}) and the
- * {@link KEPT_HEADERS} as `headers` so {@link rateLimitWait} can read them.
+ * {@link KEPT_HEADERS} as `headers` so {@link rateLimitWait} can read them. A
+ * success carries them too (`headers`), so a caller can see its budget.
  *
+ * With a `cache` (http-cache.mjs), a GET is conditional: a 304 is answered
+ * from the cached body, which GitHub does not count against the rate limit.
+ *
+ * @param {string} path @param {RequestInit} [opts] @param {typeof globalThis.fetch} [fetchImpl]
+ * @param {import('./http-cache.mjs').HttpCache | null} [cache]
  * @returns {Promise<Response>}
  */
-export async function request(path, opts = {}, fetchImpl = globalThis.fetch) {
+export async function request(path, opts = {}, fetchImpl = globalThis.fetch, cache = null) {
   const url = urlFor(path)
-  const res = await fetchImpl(url, {
-    ...opts,
-    headers: {
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      ...opts.headers,
-    },
-  })
+  /** @type {Record<string, string>} */
+  const sent = {
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    .../** @type {Record<string, string>} */ (opts.headers ?? {}),
+  }
+  const method = (opts.method ?? 'GET').toUpperCase()
+  const key = cache && method === 'GET' ? `${sent.Accept} ${url}` : null
+  const hit = key ? /** @type {import('./http-cache.mjs').HttpCache} */ (cache).get(key) : null
+  const res = await fetchImpl(url, { ...opts, headers: hit ? { ...sent, 'If-None-Match': hit.etag } : sent })
+  /** @type {Record<string, string>} */
+  const headers = {}
+  for (const h of KEPT_HEADERS) {
+    const v = res.headers?.get?.(h)
+    if (v !== null && v !== undefined) headers[h] = String(v)
+  }
+  if (res.status === 304 && hit) {
+    await res.text().catch(() => '')
+    return { status: 200, text: hit.text, json: parseJson(hit.text), next: hit.next, headers, cached: true }
+  }
   const text = await res.text()
   if (!res.ok) {
-    /** @type {Record<string, string>} */
-    const headers = {}
-    for (const h of KEPT_HEADERS) {
-      const v = res.headers?.get?.(h)
-      if (v !== null && v !== undefined) headers[h] = String(v)
-    }
     throw Object.assign(new Error(`${path}: ${res.status} ${errorBody(text)}`), {
       status: res.status,
       headers,
     })
   }
-  let json = null
+  const next = nextLink(res)
+  const etag = res.headers?.get?.('etag')
+  if (key && etag && res.status === 200)
+    /** @type {import('./http-cache.mjs').HttpCache} */ (cache).set(key, { etag, text, next })
+  return { status: res.status, text, json: parseJson(text), next, headers }
+}
+
+/** A body as JSON, or null for one that is not (job logs: `api` prints the text). @param {string} text */
+function parseJson(text) {
   try {
-    json = text ? JSON.parse(text) : null
+    return text ? JSON.parse(text) : null
   } catch {
-    json = null // non-JSON body (e.g. logs) — `api` prints the text
+    return null
   }
-  return { status: res.status, text, json, next: nextLink(res) }
 }
 
 /**
@@ -423,7 +445,9 @@ function labelled(err, method, path) {
  * GitHub answers is rethrown naming its method, path and `cause.code`.
  * `sleep` is injectable so tests do not wait.
  *
- * @param {{ token: string | undefined, fetch?: typeof globalThis.fetch, sleep?: (ms: number) => Promise<void>, report?: (line: string) => void, retries?: number }} input
+ * @param {{ token: string | undefined, fetch?: typeof globalThis.fetch, sleep?: (ms: number) => Promise<void>, report?: (line: string) => void, retries?: number, cache?: import('./http-cache.mjs').HttpCache | null }} input
+ *   `cache`: a conditional-GET cache (http-cache.mjs); only {@link clientFor} gives one, so tests and one-off
+ *   clients never touch the disk.
  */
 export function createClient({
   token,
@@ -431,6 +455,7 @@ export function createClient({
   sleep = defaultSleep,
   report = noop,
   retries = RATE_LIMIT_RETRIES,
+  cache = null,
 }) {
   const auth = { Authorization: `token ${token}` }
   const withAuth = (init = {}) => ({ ...init, headers: { ...auth, ...(init.headers ?? {}) } })
@@ -440,7 +465,7 @@ export function createClient({
     let dropRetries = 0
     for (let attempt = 0; ; attempt++) {
       try {
-        return await request(path, withAuth(init), fetch)
+        return await request(path, withAuth(init), fetch, cache)
       } catch (err) {
         // A read is safe to repeat on a dropped connection — typically a
         // keep-alive socket gone stale while a git hook ran — because it
@@ -475,12 +500,24 @@ export function createClient({
   // than by every caller. The release path needs this for `updateRefs` — the
   // one write REST cannot express: several refs moved atomically.
   const graphql = async (query, variables = {}) => {
-    const { json: out } = await raw('https://api.github.com/graphql', {
+    const { json: out, headers } = await raw('https://api.github.com/graphql', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, variables }),
     })
-    if (out?.errors?.length) throw new Error(`graphql: ${JSON.stringify(out.errors)}`)
+    if (out?.errors?.length) {
+      // GitHub answers a spent GraphQL budget with 200 and a RATE_LIMIT error, not a 403, so it never reaches
+      // rateLimitWait. Say when it resets, so a poller can sit it out instead of asking every tick.
+      const limited = out.errors.some((/** @type {any} */ e) => e?.type === 'RATE_LIMIT')
+      const reset = Number(headers?.['x-ratelimit-reset'])
+      const until = limited && reset > 0 ? new Date(reset * 1000).toISOString() : null
+      throw Object.assign(
+        new Error(
+          `graphql: ${limited ? `rate limited${until ? ` until ${until}` : ''}: ` : ''}${JSON.stringify(out.errors)}`,
+        ),
+        limited ? { rateLimited: true, resetAt: until } : {},
+      )
+    }
     return out?.data ?? null
   }
   const getOrNull = async (path) => {
@@ -534,5 +571,13 @@ export function createClient({
 export async function clientFor({ owner, repo, project = null, env = process.env, fetch = globalThis.fetch, report }) {
   const { appId, keyPem } = readAppCredentials({ owner, project, env })
   const token = await cachedInstallationToken({ owner, repo, appId, keyPem, env, fetch })
-  return createClient({ token, fetch, report })
+  return createClient({ token, fetch, report, cache: httpCacheFor(env) })
+}
+
+/**
+ * The conditional-GET cache under `$GRAFT_HOME/cache/http/`, or null when `GRAFT_HTTP_CACHE=0`.
+ * @param {NodeJS.ProcessEnv} env
+ */
+export function httpCacheFor(env = process.env) {
+  return env.GRAFT_HTTP_CACHE === '0' ? null : etagCache(join(graftHome(env), 'cache', 'http'))
 }

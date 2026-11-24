@@ -73,9 +73,10 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
   /**
    * The base's health `read` reports (base-health.mjs), or null for none; `repairs` is filled from the open
    * issues labelled `red-base`, as the real query does.
-   * @type {{ base: Omit<import('../src/base-health.mjs').BaseHealth, 'repairs'> | null }}
+   * `rateLimit`: the GraphQL budget `read` reports, or null.
+   * @type {{ base: Omit<import("../src/base-health.mjs").BaseHealth, "repairs"> | null, rateLimit: { cost: number, remaining: number, resetAt: string } | null }}
    */
-  const health = { base: null }
+  const health = { base: null, rateLimit: null }
   /** Workflow runs by `<workflow>@<branch>`, newest first (watch.mjs). @type {Map<string, import("../src/watch.mjs").WorkflowRun[]>} */
   const runs = new Map()
   let nextIssue = 9000
@@ -115,6 +116,7 @@ export function fakeGitHub({ issues = [], prs = [] } = {}) {
         issues: issuesOut,
         prs: pulls.map((p) => ({ ...p, closes: [...p.closes], failing: [...p.failing] })),
         ...(health.base ? { base: { ...health.base, suspects: [...health.base.suspects], repairs } } : {}),
+        rateLimit: health.rateLimit,
       }
     },
     async label(slug, number, { add, remove }) {

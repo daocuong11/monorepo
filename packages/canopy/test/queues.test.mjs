@@ -234,9 +234,10 @@ test('cache: a failed refresh keeps the last good answer, with the error', async
     },
   }
   const cache = cachedQueues({ client, now: () => t })
+  assert.equal(cache.ttlMs, 60_000, 'the default')
   await cache.get([REPO])
   fail = true
-  t += 20_000
+  t += 61_000
   const v = await cache.get([REPO])
   assert.deepEqual(v.repos, [{ slug: REPO, ok: false, error: 'rate limited', fetchedAt: new Date(T0).toISOString() }])
   assert.equal(v.columns.task.length, 1)

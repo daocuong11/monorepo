@@ -274,7 +274,7 @@ test('cachedIssues: one fetch per ttl, the last good answer kept beside a failed
   await cache.get(REPO, 4)
   assert.equal(calls, 1)
   assert.equal(a.issue?.title, '#4')
-  t += 16_000
+  t += 61_000
   fail = true
   const b = await cache.get(REPO, 4)
   assert.equal(b.issue?.title, '#4')

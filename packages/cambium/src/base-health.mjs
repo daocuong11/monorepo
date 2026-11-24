@@ -34,7 +34,7 @@ export const BASE_FIELDS = `baseRef: ref(qualifiedName: $baseRef) @include(if: $
       target { ... on Commit { history(first: ${HISTORY}) { nodes {
         oid messageHeadline
         associatedPullRequests(first: 1) { nodes { number } }
-        checkSuites(first: 30) { nodes { branch { name } checkRuns(first: 3, filterBy: { checkName: $check }) { nodes { status conclusion detailsUrl } } } }
+        checkSuites(first: 10) { nodes { branch { name } checkRuns(first: 3, filterBy: { checkName: $check }) { nodes { status conclusion detailsUrl } } } }
       } } } }
     }
     repairs: issues(labels: ["${REPAIR_LABEL}"], states: OPEN, first: 5) @include(if: $health) { nodes { number } }`

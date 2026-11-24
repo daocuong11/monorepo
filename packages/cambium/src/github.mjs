@@ -52,7 +52,9 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
  * @typedef {{
  *   issues: Map<number, Issue>, prs: PullRequest[], release?: Release | null,
  *   base?: import('./base-health.mjs').BaseHealth,
+ *   rateLimit?: { cost: number, remaining: number, resetAt: string } | null,
  * }} Snapshot
+ *   `rateLimit`: the GraphQL budget after the snapshot read (tick.mjs `read` pauses before it runs out).
  * @typedef {{ sha: string, behind: number, url: string | null }} GreenCommit
  *   `behind`: how many first-parent commits the ref's tip is past it. `url`: the green run.
  * @typedef {{
@@ -102,7 +104,7 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
 const PR_FIELDS = `number url headRefName state headRefOid isInMergeQueue body mergeable mergeStateStatus reviewDecision createdAt updatedAt
   headRef { id }
   autoMergeRequest { enabledAt }
-  closingIssuesReferences(first: 5) { nodes { ...I } }
+  closingIssuesReferences(first: 5) { nodes { number } }
   commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 50) { nodes {
     __typename
     ... on CheckRun { name conclusion detailsUrl title summary }
@@ -114,6 +116,7 @@ const PR_FIELDS = `number url headRefName state headRefOid isInMergeQueue body m
  * promotion PRs and how far `$from` is ahead of `$to` (see {@link Release}).
  */
 export const SNAPSHOT_QUERY = `query($owner: String!, $name: String!, $labels: [String!], $release: Boolean!, $from: String!, $to: String!, $health: Boolean!, $baseRef: String!, $check: String!) {
+  rateLimit { cost remaining resetAt }
   repository(owner: $owner, name: $name) {
     issues(labels: $labels, states: OPEN, first: 100, orderBy: { field: CREATED_AT, direction: ASC }) { pageInfo { hasNextPage endCursor } nodes { ...I } }
     open: pullRequests(states: OPEN, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { ${PR_FIELDS} } }
@@ -178,7 +181,7 @@ export const CLOSED_PULLS = 50
 export const CLOSED_PULLS_QUERY = `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {
     closed: pullRequests(states: CLOSED, first: ${CLOSED_PULLS}, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { ${PR_FIELDS} } }
 } }
-${SNAPSHOT_QUERY.slice(SNAPSHOT_QUERY.indexOf('fragment I on Issue'), SNAPSHOT_QUERY.indexOf('fragment P on'))}`
+`
 
 /** Pages read past the first: 10 × 100 queued issues per repo is far past any real queue. */
 const MAX_ISSUE_PAGES = 10
@@ -352,7 +355,12 @@ export function normalize(data, { botLogin = null, release = null, health = null
       autoMergeAt: p.autoMergeRequest?.enabledAt ?? null,
       checks: rollup?.state ?? null,
       failing,
-      closes: [...new Set([...(p.closingIssuesReferences?.nodes ?? []).map(addIssue), ...bodyCloses(p.body)])],
+      closes: [
+        ...new Set([
+          ...(p.closingIssuesReferences?.nodes ?? []).map((/** @type {any} */ n) => n.number),
+          ...bodyCloses(p.body),
+        ]),
+      ],
       mergeable: p.mergeable ?? null,
       mergeState: p.mergeStateStatus ?? null,
       reviewDecision: p.reviewDecision ?? null,
@@ -439,6 +447,7 @@ export function graftGitHub({ config, exec: run = exec }) {
         info = more?.pageInfo
       }
       const snap = normalize(data, { botLogin: config.graft.botLogin, release, health })
+      snap.rateLimit = (data?.data ?? data)?.rateLimit ?? null
       const unread = unreadCloses(snap)
       if (!unread.length) return snap
       // Issues named only in PR bodies (in no queue): one more query, for those.

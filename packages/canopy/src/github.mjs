@@ -48,6 +48,8 @@ export function graftClient({ exec = defaultExec, bin = 'graft' } = {}) {
 }
 
 export const MIN_TTL_MS = 15_000
+/** How long a GitHub answer is reused unless `--cache` says otherwise: the queues query costs about 10 GraphQL points, so a tab open at 15s would spend some 2.4k an hour per repo. */
+export const DEFAULT_TTL_MS = 60_000
 
 /**
  * Server-side cache in front of a client, per repo: at most one fetch per
@@ -56,7 +58,7 @@ export const MIN_TTL_MS = 15_000
  *
  * @param {{ client: GithubClient, ttlMs?: number, now?: () => number }} opts
  */
-export function cachedQueues({ client, ttlMs = MIN_TTL_MS, now = Date.now }) {
+export function cachedQueues({ client, ttlMs = DEFAULT_TTL_MS, now = Date.now }) {
   const ttl = Math.max(MIN_TTL_MS, ttlMs)
   /** @type {Map<string, { at: number, value: import('./queues.mjs').RepoQueues }>} */
   const entries = new Map()
@@ -118,7 +120,7 @@ const ISSUES_KEPT = 200
  *
  * @param {{ client: GithubClient, ttlMs?: number, now?: () => number }} opts
  */
-export function cachedIssues({ client, ttlMs = MIN_TTL_MS, now = Date.now }) {
+export function cachedIssues({ client, ttlMs = DEFAULT_TTL_MS, now = Date.now }) {
   const ttl = Math.max(MIN_TTL_MS, ttlMs)
   /** @type {Map<string, { at: number, value: IssueRead }>} */
   const entries = new Map()

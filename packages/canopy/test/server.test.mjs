@@ -102,7 +102,7 @@ test('GET /api/state: heartbeat and grouped queues', async () => {
       s.github.stranded.map((/** @type {any} */ i) => [i.number, i.pr.number]),
       [[7, 30]],
     )
-    assert.equal(s.cacheMs, 15_000)
+    assert.equal(s.cacheMs, 60_000)
   })
 })
 

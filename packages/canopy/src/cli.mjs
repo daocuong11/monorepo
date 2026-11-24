@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { resolveSettings } from './config.mjs'
-import { cachedIssues, cachedQueues, graftClient, MIN_TTL_MS } from './github.mjs'
+import { cachedIssues, cachedQueues, DEFAULT_TTL_MS, graftClient, MIN_TTL_MS } from './github.mjs'
 import { logPath, plist, plistPath } from './launchd.mjs'
 import { createApp, DEFAULT_HOST, DEFAULT_PORT } from './server.mjs'
 import { traceStore } from './traces.mjs'
@@ -23,7 +23,7 @@ usage: canopy [--port <n>] [--host <addr>] [--state <file>] [--traces <file>] [-
   --intake <file>    mycelium's status file (default: $MYCELIUM_STATUS, else ~/.mycelium/status.json)
   --config <file>    cambium config (default: $CAMBIUM_CONFIG, else ~/.cambium/config.json)
   --repo <o/n>       repository to show queues for; repeatable (default: the config's repos, else the heartbeat's)
-  --cache <seconds>  how long a GitHub answer is reused (default and minimum ${MIN_TTL_MS / 1000})
+  --cache <seconds>  how long a GitHub answer is reused (default ${DEFAULT_TTL_MS / 1000}, minimum ${MIN_TTL_MS / 1000})
   --graft <cmd>      graft binary (default: graft on PATH)
 
 Reads only. Open http://<host>:<port>/ ; the page polls /api/state (and /api/traces on the Traces tab, /api/issue/<owner>/<name>/<n> for the Inbox pane).
@@ -100,7 +100,7 @@ export function main(
     err(`canopy: --port must be 0-65535, got ${values.port}\n`)
     return 2
   }
-  const cacheS = values.cache === undefined ? MIN_TTL_MS / 1000 : Number(values.cache)
+  const cacheS = values.cache === undefined ? DEFAULT_TTL_MS / 1000 : Number(values.cache)
   if (!Number.isFinite(cacheS)) {
     err(`canopy: --cache must be a number of seconds, got ${values.cache}\n`)
     return 2

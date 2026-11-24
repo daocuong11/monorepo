@@ -478,6 +478,42 @@ scenario('a failing step is logged and the tick moves on to the heartbeat', asyn
   assert.ok(h.events.some((e) => e.level === 'error' && /rate limited/.test(e.msg)))
 })
 
+scenario('a rate-limit error naming its reset pauses that repo’s reads until then, quietly', async () => {
+  const h = harness({ issues: [task(21)] })
+  const reset = h.clock.now() + 20 * MIN
+  h.gh.faults.readError = new Error(
+    `graft graphql exited 1: graphql: rate limited until ${new Date(reset).toISOString()}: [{"type":"RATE_LIMIT"}]`,
+  )
+  await tick(h.deps)
+  assert.ok(h.events.some((e) => e.level === 'warn' && /reads paused until/.test(e.msg)))
+  h.gh.faults.readError = null
+  const reads = () => h.gh.calls.filter((c) => c.op === 'read').length
+  const before = reads()
+  const events = h.events.length
+  h.clock.advance(10 * MIN)
+  const state = await tick(h.deps)
+  assert.equal(reads(), before, 'paused: no read')
+  assert.equal(state.steps.find((s) => s.name === 'read')?.ok, true, 'a pause is not a failed step')
+  assert.match(String(h.beats.at(-1)?.repos[0].error), /reads paused until/)
+  assert.equal(h.events.length, events, 'nothing logged while paused')
+  h.clock.advance(11 * MIN)
+  await tick(h.deps)
+  assert.equal(reads(), before + 1, 'past the reset: read again')
+})
+
+scenario('a snapshot whose budget is nearly spent pauses reads until the reset', async () => {
+  const h = harness({ issues: [task(21)] })
+  const resetAt = new Date(h.clock.now() + 30 * MIN).toISOString()
+  h.gh.health.rateLimit = { cost: 40, remaining: 150, resetAt }
+  await tick(h.deps)
+  assert.deepEqual(h.beats.at(-1)?.repos[0].rateLimit, { cost: 40, remaining: 150, resetAt })
+  assert.ok(h.events.some((e) => /budget nearly spent \(150 left, 40 a read\); reads paused/.test(e.msg)))
+  const reads = h.gh.calls.filter((c) => c.op === 'read').length
+  h.clock.advance(MIN)
+  await tick(h.deps)
+  assert.equal(h.gh.calls.filter((c) => c.op === 'read').length, reads)
+})
+
 scenario('one failing write does not stop the other items in the step', async () => {
   const h = harness({ issues: [task(22), task(23)] })
   let n = 0

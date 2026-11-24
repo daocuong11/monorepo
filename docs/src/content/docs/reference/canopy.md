@@ -27,7 +27,7 @@ Package: `@oakgreencc/canopy`. Node ≥ 22, no runtime dependencies. GitHub is r
 | `--intake <file>` | `$MYCELIUM_STATUS`, else `~/.mycelium/status.json` |
 | `--config <file>` | `$CAMBIUM_CONFIG`, else `~/.cambium/config.json` |
 | `--repo <owner/name>` | Repeatable. Else the config's `repos[].slug`, else the heartbeat's repos. |
-| `--cache <seconds>` | `15`, also the minimum |
+| `--cache <seconds>` | `60`; minimum `15` |
 | `--graft <cmd>` | `graft` |
 
 ## Tabs
