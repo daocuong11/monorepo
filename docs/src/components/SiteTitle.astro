@@ -1,11 +1,13 @@
 ---
 import Ring from './Ring.astro'
 const { siteTitle, siteTitleHref } = Astro.locals.starlightRoute
+// The product name leads; the site title (the parent domain) follows, as in the tab title.
+const product = 'forest'
 ---
 
 <a href={siteTitleHref} class="site-title">
 	<Ring class="mark" strokeWidth={40} />
-	<span class="word" translate="no">{siteTitle}</span>
+	<span class="word" translate="no">{product} | {siteTitle}</span>
 </a>
 
 <style>
