@@ -12,7 +12,7 @@
  * kept. Entries untouched for {@link MAX_AGE_MS} are pruned, a few at a time, when one is written.
  */
 import { createHash } from 'node:crypto'
-import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** The largest body kept, in characters. */
@@ -56,6 +56,12 @@ export function etagCache(dir, { now = Date.now } = {}) {
       try {
         const entry = JSON.parse(readFileSync(file(key), 'utf8'))
         if (typeof entry?.etag !== 'string' || typeof entry?.text !== 'string') return null
+        // A 304 is answered from this entry, so a read counts as a touch:
+        // refresh the mtime so a hot entry is not pruned.
+        try {
+          const at = new Date(now())
+          utimesSync(file(key), at, at)
+        } catch {}
         return { etag: entry.etag, text: entry.text, next: entry.next ?? null }
       } catch {
         return null
