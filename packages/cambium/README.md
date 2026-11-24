@@ -128,6 +128,8 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
     "rescue": { "cap": 0, "wallClockMinutes": 20, "maxTurns": 80, "maxAttempts": 1 }
   },
   "mergeQueueMinutes": 120,
+  "mergeStallMinutes": 20,
+  "watchEveryMinutes": 5,
   "merge": "none",
   "priorityLabels": ["priority:critical", "priority:high", "priority:medium", "priority:low"],
   "release": { "enabled": false, "time": "06:00" },
@@ -168,6 +170,9 @@ One JSON file. Everything but `repos` is optional; these are the defaults:
 - `phases.rescue.cap` (`engine: "graph"`; 0, the default, turns it off) and `rescue`: see [The rescue graph](#the-rescue-graph).
 - Setting `paths.home` moves every default path under it.
 - `release.time` is host-local `HH:MM`.
+- `repos[].phases`: per-repo overrides of `wallClockMinutes` and `maxTurns`, by phase (`{ "task": { "wallClockMinutes": 120 } }`); other keys are refused. `capsFor` in `src/config.mjs` merges them over the global `phases`.
+- `repos[].watch`: workflows whose newest completed push or schedule run on a branch must be green (`src/watch.mjs`). Each entry is a workflow file name, or `{ "workflow", "branch", "issue" }` (`branch` defaults to `baseBranch`, `issue` to `true`). Read every `watchEveryMinutes` (default 5; `0` off); cancelled and skipped runs are passed over. Red → a `warn` event and, with `issue`, one `q:human` issue labelled `watch` (`q:human` alone when the repo lacks the label; a later failing run comments on it). Green again → an `info` event and the issue is closed. A failed read keeps the last verdict. Verdicts live in the store (`watch:<repo>:<workflow>@<branch>`) and the heartbeat (`repos[].watch`).
+- `mergeStallMinutes` (default 20; `0` off): an agent PR with auto-merge armed and green checks that GitHub still reports `BLOCKED` (`mergeStateStatus`) this long after arming goes to `q:human` + `why:approve` with outcome `merge-blocked`. A rule cambium cannot read holds it (a ruleset review, approval for unattributed changes, a required check that never reported); `mergeQueueMinutes` would otherwise wait two hours and say nothing about why.
 - `repos[].release` (`engine: "graph"`): `{ "enabled", "time", "from", "to", "check" }`. `enabled` and `time` default to the top-level `release`, `from` to the repo's `baseBranch`, `to` to `"main"`, `check` to the repo's `requiredCheck` (`null`: cut at the tip). A repo whose `from` equals `to` has no promotion PR. Example: `{ "slug": "o/app", "path": "~/app", "baseBranch": "develop", "release": { "enabled": true, "time": "06:00", "from": "develop", "to": "main" } }`.
 
 ### Target repo convention

@@ -6,6 +6,8 @@
  * step that throws or times out is recorded and the tick moves on. Nothing
  * here waits on a worker.
  */
+import { capsFor } from './config.mjs'
+import { watchStates, watchWorkflows } from './watch.mjs'
 import { byPriorityThenAge, move, Q, queueOf, RUNNING, WHY } from './labels.mjs'
 import { withHistory } from './marker.mjs'
 import { failureSummary, iso, key, markerOf, MIN, setLabels, setMarker } from './issue-state.mjs'
@@ -99,6 +101,7 @@ export async function tick(deps) {
         ])),
     ...(ctx.mode === 'running' ? /** @type {[string, StepFn][]} */ ([['schedule', schedule]]) : []),
     ...(paused ? [] : /** @type {[string, any][]} */ ([['release', release]])),
+    ...(paused ? [] : /** @type {[string, StepFn][]} */ ([['workflows', watchWorkflows]])),
     ...(paused || !engine.upkeep ? [] : /** @type {[string, StepFn][]} */ ([['upkeep', engine.upkeep]])),
     ...(paused || !deps.gc ? [] : /** @type {[string, StepFn][]} */ ([['gc', gc]])),
     ...(deps.briefs ? /** @type {[string, StepFn][]} */ ([['briefs', briefs]]) : []),
@@ -273,7 +276,7 @@ export async function requeue(deps, ctx, slug, issue, what) {
 async function reconcile(deps, ctx) {
   const { config, store, procs } = deps
   await eachWorker(deps, ctx, store.workers(), async (w) => {
-    const caps = config.phases[/** @type {'task'} */ (w.phase)] ?? config.phases.task
+    const caps = capsFor(config, w.repo, w.phase)
     if (stopOverdue({ procs, store, log: deps.log }, w, caps.wallClockMinutes, ctx.now) !== 'gone') return
     if (w.phase === 'dispatch' || w.phase === 'rescue') return
     const snap = ctx.snaps.get(w.repo)
@@ -538,7 +541,7 @@ export async function startTask(deps, ctx, slug, issue, snap, { foreground = fal
   const { config } = deps
   const repo = config.repos.find((r) => r.slug === slug)
   if (!repo) throw new Error(`${slug} is not in the config`)
-  const caps = config.phases.task
+  const caps = capsFor(config, slug, 'task')
   const m0 = markerOf(issue)
   if (m0.attempt > caps.maxAttempts) {
     await toHuman(deps, ctx, slug, issue, { reason: `${caps.maxAttempts} attempts spent`, outcome: 'budget' })
@@ -677,6 +680,7 @@ async function release(deps, ctx) {
  *   repos: {
  *     slug: string, ok: boolean, error: string | null, counts: Counts | null,
  *     base: import('./base-health.mjs').BaseHealth | null,
+ *     watch: import('./watch.mjs').WatchState[],
  *     cost: { issues: IssueCost[], days: import('./cost.mjs').CostDay[] },
  *   }[],
  *   workers: {
@@ -771,6 +775,7 @@ export function heartbeatState(deps, ctx) {
       error: ctx.readErrors.get(r.slug) ?? null,
       counts: snap ? countsOf(snap) : null,
       base: snap?.base ?? null,
+      watch: watchStates(deps, r.slug),
       cost: {
         issues: snap ? issueCosts(snap, config.costFlagUsd) : [],
         days: costDays(ledger.filter((row) => row.repo === r.slug)),
@@ -781,7 +786,7 @@ export function heartbeatState(deps, ctx) {
   for (const r of repos)
     if (r.counts) for (const k of /** @type {(keyof Counts)[]} */ (Object.keys(total))) total[k] += r.counts[k]
   const workers = deps.store.workers().map((w) => {
-    const caps = config.phases[/** @type {'task'} */ (w.phase)] ?? config.phases.task
+    const caps = capsFor(config, w.repo, w.phase)
     return {
       repo: w.repo,
       issue: w.issue,

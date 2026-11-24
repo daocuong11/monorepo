@@ -8,6 +8,7 @@
  * The triage worker runs in a read-only checkout (workers.mjs `readOnly`): detached at the base branch, no install,
  * no Edit/Write. It reads code to judge the issue, and nothing it could leave behind is worth keeping.
  */
+import { capsFor } from '../config.mjs'
 import { z } from 'zod'
 import { defineGraph, defineNode, defineWait, END } from '../graph/index.mjs'
 import { iso, key, markerOf, MIN, setLabels, setMarker } from '../issue-state.mjs'
@@ -151,7 +152,7 @@ const startTriage = declare(
       const issue = issueOf(ctx)
       const repo = config.repos.find((r) => r.slug === slug)
       if (!repo) throw new Error(`${slug} is not in the config`)
-      const caps = config.phases.dispatch
+      const caps = capsFor(config, slug, 'dispatch')
       const m0 = intakeMarker(issue)
       if (m0.attempt > caps.maxAttempts)
         return { to: 'human', reason: `${caps.maxAttempts} triage attempts spent`, outcome: 'budget' }
@@ -272,7 +273,7 @@ const triaging = declare(
         if (host && host !== config.host) return { ready: false }
         return { ready: true, output: { exit: 'lost', ...lostLeaseOf(ctx) } }
       }
-      const caps = config.phases.dispatch
+      const caps = capsFor(config, slug, 'dispatch')
       if (
         !reaped?.has(w.pid) &&
         stopOverdue({ procs, store, log: ctx.log }, w, caps.wallClockMinutes, ctx.tick.now) !== 'gone'

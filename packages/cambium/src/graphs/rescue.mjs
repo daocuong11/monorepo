@@ -11,6 +11,7 @@
  * `rescue`) keeps Schedule and Sweep off it meanwhile, and the verdict is acted on only while the item is still
  * stuck.
  */
+import { capsFor } from '../config.mjs'
 import { z } from 'zod'
 import { advance, defineGraph, defineNode, defineWait, END } from '../graph/index.mjs'
 import { withAskLabels } from '../ask.mjs'
@@ -230,7 +231,7 @@ const startRescue = defineNode({
       }
     recordRescue(store, slug, number, ctx.tick.now)
     recordSymptoms(store, stuck)
-    const caps = config.phases.rescue
+    const caps = capsFor(config, slug, 'rescue')
     const pr = ctx.subject.pr ?? (stuck.pr ? (ctx.subject.snap?.prs.find((p) => p.number === stuck.pr) ?? null) : null)
     /** @type {import('../workers.mjs').Started} */
     let s
@@ -304,7 +305,7 @@ const diagnosing = defineWait({
     const { slug, number, snap, issue, reaped, stuck } = ctx.subject
     const w = store.worker(slug, number)
     if (w?.phase !== 'rescue') return { ready: true, output: { exit: 'lost' } }
-    const caps = config.phases.rescue
+    const caps = capsFor(config, slug, 'rescue')
     if (
       !reaped?.has(w.pid) &&
       stopOverdue({ procs, store, log: ctx.log }, w, caps.wallClockMinutes, ctx.tick.now) !== 'gone'

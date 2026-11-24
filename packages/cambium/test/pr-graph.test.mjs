@@ -135,6 +135,29 @@ test('auto-merge already armed: cambium does not merge again', async () => {
   assert.deepEqual(h.merges(), [])
 })
 
+test('armed, green and BLOCKED past mergeStallMinutes → q:human + why:approve, naming GitHub’s state', async () => {
+  const h = submitted({ pr: { checks: 'SUCCESS', autoMerge: true, mergeState: 'BLOCKED' } })
+  h.gh.pulls[0].autoMergeAt = new Date(h.clock.now()).toISOString()
+  await tick(h.deps)
+  h.clock.advance(19 * MIN)
+  await tick(h.deps)
+  assert.ok(!h.gh.issue(50).labels.includes('q:human'), 'within the stall window: held')
+  h.clock.advance(2 * MIN)
+  await tick(h.deps)
+  assert.deepEqual(h.gh.issue(50).labels.sort(), ['q:human', 'why:approve'])
+  const last = h.gh.marker(50)?.history.at(-1)
+  assert.equal(last?.outcome, 'merge-blocked')
+  assert.match(String(last?.reason), /auto-merge armed 21 min ago .* BLOCKED/)
+})
+
+test('armed and green but not BLOCKED (GitHub still merging): no stall before mergeQueueMinutes', async () => {
+  const h = submitted({ pr: { checks: 'SUCCESS', autoMerge: true, mergeState: 'CLEAN' } })
+  h.gh.pulls[0].autoMergeAt = new Date(h.clock.now()).toISOString()
+  h.clock.advance(60 * MIN)
+  await tick(h.deps)
+  assert.ok(!h.gh.issue(50).labels.includes('q:human'))
+})
+
 test('a refused merge is recorded and held; asked again on a new head or after the retry window', async () => {
   const h = submitted({ pr: { checks: 'SUCCESS', headSha: 'head1' } })
   h.gh.faults.mergeError = new Error('graft: base develop is red; refusing to merge')

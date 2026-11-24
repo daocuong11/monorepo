@@ -217,6 +217,23 @@ scenario('lesson #4349: over the wall-clock cap → terminate the worker (it exi
   assert.deepEqual(h.gh.issue(9).labels, ['q:task'])
 })
 
+scenario('a repo’s phases.task.wallClockMinutes overrides the global cap for its workers', async () => {
+  const h = harness({
+    issues: [task(9)],
+    config: { repos: [{ slug: SLUG, path: '/repo', phases: { task: { wallClockMinutes: 120 } } }] },
+  })
+  await tick(h.deps)
+  const w = /** @type {any} */ (h.deps.store.worker(SLUG, 9))
+  h.deps.config.phases.task.cap = 0
+  h.clock.advance(90 * MIN)
+  await tick(h.deps)
+  assert.deepEqual(h.procs.terminated, [], 'past the global 60, under the repo’s 120: untouched')
+  h.clock.advance(31 * MIN)
+  await tick(h.deps)
+  assert.deepEqual(h.procs.terminated, [w.pid])
+  assert.match(String(h.gh.marker(9)?.lastFailure), /120 min wall-clock cap/)
+})
+
 scenario('a worker that ignores SIGTERM is held through the grace, then SIGKILLed and requeued', async () => {
   const h = harness({ issues: [task(9)] })
   await tick(h.deps)

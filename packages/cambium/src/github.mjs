@@ -29,9 +29,10 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
  *   checks: 'SUCCESS' | 'FAILURE' | 'ERROR' | 'PENDING' | 'EXPECTED' | null, failing: FailingCheck[], closes: number[],
  *   mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN' | null,
  *   reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null, createdAt: string | null,
- *   updatedAt?: string | null,
+ *   updatedAt?: string | null, mergeState?: string | null, autoMergeAt?: string | null,
  * }} PullRequest
- *   `mergeable`: GitHub's conflict check against the base (UNKNOWN while it computes). `reviewDecision`: null
+ *   `mergeable`: GitHub's conflict check against the base (UNKNOWN while it computes). `mergeState`: GitHub's
+ *   `mergeStateStatus` (BLOCKED: a rule holds it, whatever its checks say). `autoMergeAt`: when auto-merge was armed. `reviewDecision`: null
  *   when the base requires no review.
  * @typedef {{
  *   number: number, url: string, title: string, state: 'OPEN' | 'MERGED' | 'CLOSED', createdAt: string,
@@ -82,7 +83,10 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
  *   addBlockedBy(slug: string, number: number, blocker: number): Promise<{ state: 'OPEN' | 'CLOSED' }>,
  *   closedPulls(slug: string): Promise<PullRequest[]>,
  *   readIssues(slug: string, numbers: number[]): Promise<Map<number, Issue>>,
+ *   workflowRuns(slug: string, workflow: string, branch: string): Promise<import('./watch.mjs').WorkflowRun[]>,
  * }} GitHub
+ *   `workflowRuns`: the newest completed push or schedule runs of `workflow` (file name or id) on `branch`, newest
+ *   first (watch.mjs).
  *   `greenCommit`: the newest commit on `ref`'s first-parent line, at most `depth` back, whose `check` concluded
  *   success (`check` null: the tip). `compareRange`: GitHub's compare of `base...head`. `branches`: the branch
  *   names starting with `prefix`. `createBranch`: a new branch at `sha`.
@@ -95,7 +99,7 @@ import { BASE_FIELDS, baseHealthOf } from './base-health.mjs'
  *   an issue is left out.
  */
 
-const PR_FIELDS = `number url headRefName state headRefOid isInMergeQueue body mergeable reviewDecision createdAt updatedAt
+const PR_FIELDS = `number url headRefName state headRefOid isInMergeQueue body mergeable mergeStateStatus reviewDecision createdAt updatedAt
   headRef { id }
   autoMergeRequest { enabledAt }
   closingIssuesReferences(first: 5) { nodes { ...I } }
@@ -345,10 +349,12 @@ export function normalize(data, { botLogin = null, release = null, health = null
       branchExists: Boolean(p.headRef),
       inMergeQueue: Boolean(p.isInMergeQueue),
       autoMerge: Boolean(p.autoMergeRequest),
+      autoMergeAt: p.autoMergeRequest?.enabledAt ?? null,
       checks: rollup?.state ?? null,
       failing,
       closes: [...new Set([...(p.closingIssuesReferences?.nodes ?? []).map(addIssue), ...bodyCloses(p.body)])],
       mergeable: p.mergeable ?? null,
+      mergeState: p.mergeStateStatus ?? null,
       reviewDecision: p.reviewDecision ?? null,
       createdAt: p.createdAt ?? null,
       updatedAt: p.updatedAt ?? null,
@@ -555,6 +561,20 @@ export function graftGitHub({ config, exec: run = exec }) {
     },
     async updatePull(slug, number) {
       await graft(slug, ['pr', 'update', String(number)])
+    },
+    async workflowRuns(slug, workflow, branch) {
+      const q = `branch=${encodeURIComponent(branch)}&status=completed&exclude_pull_requests=true&per_page=10`
+      const path = `/repos/${slug}/actions/workflows/${encodeURIComponent(workflow)}/runs?${q}`
+      const data = await json(graft(slug, ['api', 'GET', path]))
+      return (data?.workflow_runs ?? [])
+        .filter((/** @type {any} */ r) => r.event !== 'pull_request' && r.head_branch === branch)
+        .map((/** @type {any} */ r) => ({
+          id: r.id,
+          url: r.html_url,
+          sha: r.head_sha,
+          conclusion: String(r.conclusion ?? ''),
+          at: r.updated_at ?? r.created_at,
+        }))
     },
     async linkIssue(slug, pr, issue) {
       const path = `/repos/${slug}/pulls/${pr}`

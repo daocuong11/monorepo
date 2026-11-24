@@ -10,7 +10,8 @@
  *   state as the reason (a fresh attempt budget, at most `phases.task.maxReworks` reworks). Red CI while the base
  *   is red (base-health.mjs) holds instead, except on the repair issue.
  * - close: the issue is closed, or a newer agent PR closes the same issue → the PR is closed with a comment.
- * - human: reworks spent, a merge only a human may make, or not merged within `mergeQueueMinutes`.
+ * - human: reworks spent, a merge only a human may make, auto-merge armed and green but BLOCKED for
+ *   `mergeStallMinutes`, or not merged within `mergeQueueMinutes`.
  * - hold: nothing to do this tick (a refusal waiting out its retry window, a repo cambium does not merge).
  *
  * A merged PR (its issue still open) goes to `close-out`: the issue is closed and the branch deleted. The PR graph's state is the issue's
@@ -141,6 +142,22 @@ const assess = declare(
           return { to: 'merge', ...ref }
       }
       if (human) return hold
+
+      // Armed, green, and still BLOCKED: a rule cambium cannot read (a ruleset review, an approval for unattributed
+      // changes, a required check that never reports) holds it, and nothing on cambium's side will change that.
+      const stall = ctx.config.mergeStallMinutes
+      const armedAt = Date.parse(pr.autoMergeAt ?? '') || null
+      if (stall > 0 && green && pr.autoMerge && pr.mergeState === 'BLOCKED' && armedAt !== null) {
+        const mins = Math.floor((ctx.tick.now - armedAt) / MIN)
+        if (mins >= stall)
+          return {
+            to: 'human',
+            reason: `PR #${pr.number}: auto-merge armed ${mins} min ago and its checks are green, but GitHub reports it BLOCKED. A rule cambium cannot see holds it: a ruleset's review or its approval for unattributed changes, or a required check that has not reported. The PR's merge box names it.`,
+            outcome: 'merge-blocked',
+            pr: pr.number,
+            why: WHY.approve,
+          }
+      }
 
       const since = submittedAt(pr, m)
       const cap = ctx.config.mergeQueueMinutes
