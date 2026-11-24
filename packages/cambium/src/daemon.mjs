@@ -27,7 +27,29 @@ export function readHeartbeat(path) {
   }
 }
 
+/** The most characters one log entry's message keeps. */
+export const LOG_MSG_MAX = 1000
+
 /**
+ * A message fit for one log line: an HTML page (a 5xx from GitHub's edge, passed through an error) becomes its
+ * `<title>`, whitespace runs (newlines included) become one space, and the rest is cut at {@link LOG_MSG_MAX}.
+ * @param {string} msg
+ */
+export function oneLine(msg) {
+  let s = String(msg ?? '')
+  s = s.replace(/<(!doctype html|html)[\s\S]*?(<\/html>|$)/gi, (page) => {
+    const title = page
+      .match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
+      ?.replace(/\s+/g, ' ')
+      .trim()
+    return title ? `(HTML page: ${title})` : '(HTML page)'
+  })
+  s = s.replace(/\s+/g, ' ').trim()
+  return s.length > LOG_MSG_MAX ? `${s.slice(0, LOG_MSG_MAX)}…` : s
+}
+
+/**
+ * Each entry is one line ({@link oneLine}), so the log stays greppable whatever an error carried.
  * @param {{ file?: string | null, maxBytes?: number, keep?: number, now?: () => number,
  *   echo?: (line: string) => void }} [opts]
  */
@@ -42,7 +64,8 @@ export function makeLogger({
   const ring = []
   if (file) mkdirSync(dirname(file), { recursive: true })
   /** @type {import('./tick.mjs').Deps['log']} */
-  const log = (level, msg, where = {}) => {
+  const log = (level, raw, where = {}) => {
+    const msg = oneLine(raw)
     const event = { at: new Date(now()).toISOString(), level, msg, ...where }
     ring.push(event)
     if (ring.length > keep) ring.shift()

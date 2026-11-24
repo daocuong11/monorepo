@@ -15,6 +15,8 @@ import { PublishError } from '../src/errors.mjs'
 import {
   createClient,
   droppedConnection,
+  ERROR_BODY_MAX,
+  errorBody,
   isNotFound,
   retryServerErrors,
   SERVER_ERROR_RETRIES,
@@ -227,6 +229,29 @@ test('retryServerErrors repeats a dropped connection and says so', async () => {
   assert.deepEqual(reports, [
     `connection dropped (EPIPE) on POST /repos/o/r/git/trees: waiting 1s (retry 1/${SERVER_ERROR_RETRIES})`,
   ])
+})
+
+test('errorBody: JSON kept on one line, an HTML page becomes its title, other text cut to one line', () => {
+  assert.equal(errorBody('{\n  "message": "Not Found"\n}'), '{ "message": "Not Found" }')
+  assert.equal(
+    errorBody('<html>\n<head><title>502 Bad Gateway</title></head>\n<body><center>nginx</center></body>\n</html>'),
+    '(HTML page: 502 Bad Gateway)',
+  )
+  assert.equal(errorBody('<!DOCTYPE html>\n<html><body>no title</body></html>'), '(HTML page)')
+  const long = errorBody(`line one\nline two ${'x'.repeat(ERROR_BODY_MAX)}`)
+  assert.equal(long.length, ERROR_BODY_MAX + 1)
+  assert.ok(long.startsWith('line one line two'))
+  assert.equal(errorBody(''), '')
+})
+
+test('a 504 HTML page from GitHub’s edge is thrown as one line naming its title', async () => {
+  const page = '<!DOCTYPE html>\n<html>\n<head><title>Unicorn! · GitHub</title></head>\n<body>…</body>\n</html>'
+  const fetch = /** @type {typeof globalThis.fetch} */ (async () => new Response(page, { status: 504 }))
+  const client = createClient({ token: 'ghs_t', fetch, sleep: async () => {} })
+  await assert.rejects(client.json('/repos/o/r', 'GET'), (err) => {
+    assert.equal(/** @type {Error} */ (err).message, '/repos/o/r: 504 (HTML page: Unicorn! · GitHub)')
+    return true
+  })
 })
 
 test('the client itself never retries a 5xx — that is the caller’s call, per endpoint', async () => {

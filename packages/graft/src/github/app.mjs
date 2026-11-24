@@ -98,6 +98,33 @@ export const isNotFound = (err) => err?.status === 404 || /: 404 /.test(String(e
  *   `json` is `null` for a body that is not JSON; `next` is the next page.
  */
 
+/** How many characters of a non-JSON error body an Error message keeps. */
+export const ERROR_BODY_MAX = 300
+
+/**
+ * An error answer's body, fit for one log line. JSON (GitHub's API errors) is kept, on one line, since callers
+ * match on its `message`. An HTML page (a 502/504 from GitHub's edge) becomes its `<title>`; any other text is
+ * collapsed onto one line and cut at {@link ERROR_BODY_MAX} characters.
+ * @param {string} text
+ */
+export function errorBody(text) {
+  const t = String(text ?? '').trim()
+  if (!t) return ''
+  try {
+    JSON.parse(t)
+    return t.replace(/\s*\n\s*/g, ' ')
+  } catch {}
+  if (/^<(!doctype|html)/i.test(t) || /<\/(html|body)>/i.test(t)) {
+    const title = t
+      .match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
+      ?.replace(/\s+/g, ' ')
+      .trim()
+    return title ? `(HTML page: ${title})` : '(HTML page)'
+  }
+  const line = t.replace(/\s+/g, ' ')
+  return line.length > ERROR_BODY_MAX ? `${line.slice(0, ERROR_BODY_MAX)}…` : line
+}
+
 /**
  * Raw REST call. Returns `{ status, text, json, next }` so callers can page
  * and choose whether to parse. Not every endpoint returns JSON — job logs are
@@ -105,7 +132,7 @@ export const isNotFound = (err) => err?.status === 404 || /: 404 /.test(String(e
  * that looks nothing like "this endpoint isn't JSON".
  *
  * A non-2xx answer is thrown as an Error whose message is `<path>: <status>
- * <body>`, carrying `status` (see {@link isNotFound}) and the
+ * <body>` (the body through {@link errorBody}: one line), carrying `status` (see {@link isNotFound}) and the
  * {@link KEPT_HEADERS} as `headers` so {@link rateLimitWait} can read them.
  *
  * @returns {Promise<Response>}
@@ -128,7 +155,7 @@ export async function request(path, opts = {}, fetchImpl = globalThis.fetch) {
       const v = res.headers?.get?.(h)
       if (v !== null && v !== undefined) headers[h] = String(v)
     }
-    throw Object.assign(new Error(`${path}: ${res.status} ${text}`), {
+    throw Object.assign(new Error(`${path}: ${res.status} ${errorBody(text)}`), {
       status: res.status,
       headers,
     })
@@ -489,7 +516,8 @@ export function createClient({
   }
   const download = async (path, init = {}) => {
     const res = await fetch(urlFor(path), withAuth(init))
-    if (!res.ok) throw Object.assign(new Error(`${path}: ${res.status} ${await res.text()}`), { status: res.status })
+    if (!res.ok)
+      throw Object.assign(new Error(`${path}: ${res.status} ${errorBody(await res.text())}`), { status: res.status })
     return Buffer.from(await res.arrayBuffer())
   }
   return { api, json, raw, getOrNull, paginate, download, graphql }
