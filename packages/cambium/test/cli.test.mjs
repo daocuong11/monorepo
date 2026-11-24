@@ -6,7 +6,15 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { main } from '../src/cli.mjs'
-import { acquireLock, makeLogger, readHeartbeat, runDaemon, writeHeartbeat } from '../src/daemon.mjs'
+import {
+  acquireLock,
+  LOG_MSG_MAX,
+  makeLogger,
+  oneLine,
+  readHeartbeat,
+  runDaemon,
+  writeHeartbeat,
+} from '../src/daemon.mjs'
 import { openStore } from '../src/store.mjs'
 import { harness, SLUG } from './fakes.mjs'
 
@@ -320,4 +328,21 @@ test('logger: file rotation and the event ring', () => {
   assert.match(echoed[0], /info {2}o\/r#1 one/)
   assert.match(readFileSync(`${file}.1`, 'utf8'), /two/)
   assert.match(readFileSync(file, 'utf8'), /three/)
+})
+
+test('logger: an entry is one line, an HTML error page shrinks to its title, a long message is cut', () => {
+  /** @type {string[]} */
+  const echoed = []
+  const { log, events } = makeLogger({ now: () => 0, echo: (l) => echoed.push(l) })
+  const page = `<!DOCTYPE html>\n<html>\n<head><title>Unicorn! &middot; GitHub</title></head>\n<body>\n<img src="data:image/png;base64,${'A'.repeat(5000)}">\n</body>\n</html>`
+  log('error', `read: graft graphql exited 1: graft graphql: https://api.github.com/graphql: 504 ${page}`, {
+    repo: 'o/r',
+  })
+  log('error', `502 <html>\n<head><title>502 Bad Gateway</title></head>\n<body>nginx</body>\n</html>`)
+  log('warn', 'x'.repeat(LOG_MSG_MAX + 50))
+  assert.equal(echoed[0].split('\n').length, 1)
+  assert.match(echoed[0], /graphql: 504 \(HTML page: Unicorn! &middot; GitHub\)$/)
+  assert.equal(events()[1].msg, '502 (HTML page: 502 Bad Gateway)')
+  assert.equal(events()[2].msg.length, LOG_MSG_MAX + 1)
+  assert.equal(oneLine('refusing:\n  a human merges it'), 'refusing: a human merges it')
 })
