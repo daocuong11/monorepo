@@ -194,18 +194,46 @@ export async function eachWorker(deps, ctx, workers, fn) {
 
 /** @param {Deps} deps @param {Ctx} ctx */
 async function read(deps, ctx) {
+  let skipped = 0
   for (const repo of deps.config.repos) {
+    const where = { repo: repo.slug }
+    const pausedKey = `ratelimit.until:${repo.slug}`
+    const until = Number(deps.store.get(pausedKey) ?? 0)
+    if (ctx.now < until) {
+      ctx.readErrors.set(repo.slug, `GraphQL budget spent; reads paused until ${iso(until)}`)
+      skipped++
+      continue
+    }
+    const pause = (/** @type {number} */ at, /** @type {string} */ why) => {
+      deps.store.set(pausedKey, String(at))
+      deps.log('warn', `${why}; reads paused until ${iso(at)}`, where)
+    }
     try {
-      ctx.snaps.set(repo.slug, await deps.github.read(repo.slug))
+      const snap = await deps.github.read(repo.slug)
+      ctx.snaps.set(repo.slug, snap)
+      // Stop one read short of the wall: the budget left must cover this read and a margin for workers' calls.
+      const rl = snap.rateLimit
+      const resetAt = Date.parse(rl?.resetAt ?? '')
+      if (rl && resetAt > ctx.now && rl.remaining < rl.cost * RATE_LIMIT_MARGIN)
+        pause(resetAt, `GraphQL budget nearly spent (${rl.remaining} left, ${rl.cost} a read)`)
     } catch (err) {
       const msg = /** @type {Error} */ (err)?.message ?? String(err)
       ctx.readErrors.set(repo.slug, msg)
-      deps.log('error', `read: ${msg}`, { repo: repo.slug })
+      deps.log('error', `read: ${msg}`, where)
+      if (/RATE_LIMIT|rate limited/.test(msg)) {
+        const at = Date.parse(msg.match(/rate limited until (\S+Z)/)?.[1] ?? '')
+        pause(at > ctx.now ? at : ctx.now + RATE_LIMIT_FALLBACK_MINUTES * MIN, 'GraphQL rate limited')
+      }
     }
   }
-  if (ctx.readErrors.size === deps.config.repos.length && ctx.readErrors.size)
-    throw new Error(`no repository could be read`)
+  const failed = ctx.readErrors.size - skipped
+  if (failed > 0 && failed === deps.config.repos.length - skipped) throw new Error(`no repository could be read`)
 }
+
+/** Reads pause while the GraphQL budget left is under this many reads' worth. */
+export const RATE_LIMIT_MARGIN = 5
+/** How long reads pause after a rate-limit error that does not say when the budget resets. */
+export const RATE_LIMIT_FALLBACK_MINUTES = 10
 
 /**
  * Into the Human Queue with a reason label. The marker is written before the
@@ -681,6 +709,7 @@ async function release(deps, ctx) {
  *     slug: string, ok: boolean, error: string | null, counts: Counts | null,
  *     base: import('./base-health.mjs').BaseHealth | null,
  *     watch: import('./watch.mjs').WatchState[],
+ *     rateLimit: { cost: number, remaining: number, resetAt: string } | null,
  *     cost: { issues: IssueCost[], days: import('./cost.mjs').CostDay[] },
  *   }[],
  *   workers: {
@@ -776,6 +805,7 @@ export function heartbeatState(deps, ctx) {
       counts: snap ? countsOf(snap) : null,
       base: snap?.base ?? null,
       watch: watchStates(deps, r.slug),
+      rateLimit: snap?.rateLimit ?? null,
       cost: {
         issues: snap ? issueCosts(snap, config.costFlagUsd) : [],
         days: costDays(ledger.filter((row) => row.repo === r.slug)),

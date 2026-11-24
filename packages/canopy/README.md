@@ -81,7 +81,7 @@ With the `proxy` service running too (`oakgreen start` starts it), canopy is als
 | `--intake <file>`     | `$MYCELIUM_STATUS`, else `~/.mycelium/status.json`                                              |
 | `--config <file>`     | `$CAMBIUM_CONFIG`, else `~/.cambium/config.json`                                                |
 | `--repo <owner/name>` | repeatable; else the config's `repos[].slug`, else the heartbeat's repos                        |
-| `--cache <seconds>`   | `15`, also the minimum                                                                          |
+| `--cache <seconds>`   | `60`; minimum `15`                                                                              |
 | `--graft <cmd>`       | `graft`                                                                                         |
 
 ## What it serves

@@ -7,7 +7,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { resolveConfig } from '../src/config.mjs'
-import { graftGitHub, ISSUES_PAGE_QUERY, normalize, SNAPSHOT_QUERY } from '../src/github.mjs'
+import {
+  addIssues,
+  graftGitHub,
+  ISSUES_PAGE_QUERY,
+  issuesQuery,
+  normalize,
+  SNAPSHOT_QUERY,
+  unreadCloses,
+} from '../src/github.mjs'
 import { byPriorityThenAge, move } from '../src/labels.mjs'
 import { plist } from '../src/launchd.mjs'
 import {
@@ -199,6 +207,9 @@ test('config: defaults, ~ paths, validation', () => {
   assert.throws(() => resolveConfig({ release: { time: '6am' } }), /HH:MM/)
 })
 
+/** Issue #6 as `issuesQuery` answers it: the PR in {@link graphqlAnswer} closes it. */
+const ISSUE_6 = { __typename: 'Issue', number: 6, state: 'OPEN', labels: { nodes: [] }, comments: { nodes: [] } }
+
 const graphqlAnswer = {
   repository: {
     issues: {
@@ -238,7 +249,7 @@ const graphqlAnswer = {
           headRef: { id: 'x' },
           autoMergeRequest: { enabledAt: 'now' },
           closingIssuesReferences: {
-            nodes: [{ number: 6, state: 'OPEN', labels: { nodes: [] }, comments: { nodes: [] } }],
+            nodes: [{ number: 6 }],
           },
           commits: {
             nodes: [
@@ -292,7 +303,9 @@ test('normalize: issues, agent PRs only, failing checks, markers from the bot on
   )
   assert.equal(snap.issues.get(5)?.stateComment?.id, 2)
   assert.equal(snap.issues.get(5)?.stateComment?.marker.attempt, 2)
-  assert.ok(snap.issues.has(6), 'issues a PR closes are in the snapshot too')
+  assert.ok(!snap.issues.has(6), 'an issue only a PR names is not inlined: it costs the whole query')
+  assert.deepEqual(unreadCloses(snap), [6], 'it is read on its own')
+  addIssues(snap, { repository: { i6: ISSUE_6 } }, [6])
   assert.deepEqual(snap.issues.get(5)?.blockedBy, [
     { number: 3, state: 'OPEN', closedAt: null },
     { number: 4, state: 'CLOSED', closedAt: null },
@@ -305,7 +318,17 @@ test('normalize: issues, agent PRs only, failing checks, markers from the bot on
 test('graft client: every call is one graft invocation, as the Clock App, in the repo', async () => {
   /** @type {{ cmd: string, args: string[], opts: any }[]} */
   const calls = []
-  const answers = [JSON.stringify(graphqlAnswer), '', JSON.stringify({ id: 77 }), '', '', '', '', '']
+  const answers = [
+    JSON.stringify(graphqlAnswer),
+    JSON.stringify({ repository: { i6: ISSUE_6 } }),
+    '',
+    JSON.stringify({ id: 77 }),
+    '',
+    '',
+    '',
+    '',
+    '',
+  ]
   const config = resolveConfig({ repos: [{ slug: 'o/r', path: '/src/r' }], graft: { app: 'clock-app' } })
   const gh = graftGitHub({
     config,
@@ -341,6 +364,7 @@ test('graft client: every call is one graft invocation, as the Clock App, in the
     check: 'ci',
   })
   assert.deepEqual(argv.slice(1), [
+    ['graphql', issuesQuery([6]), '--vars', JSON.stringify({ owner: 'o', name: 'r' }), '--repo', 'o/r'],
     ['issue', 'label', '5', '--add', 'running', '--remove', 'q:human,why:budget', '--repo', 'o/r'],
     ['issue', 'comment', '5', '--body-file', '-', '--repo', 'o/r'],
     ['api', 'PATCH', '/repos/o/r/issues/comments/77', '--body', '{"body":"BODY2"}', '--repo', 'o/r'],
@@ -352,7 +376,7 @@ test('graft client: every call is one graft invocation, as the Clock App, in the
     ['api', 'POST', '/repos/o/r/issues/5/dependencies/blocked_by', '--body', '{"issue_id":4242}', '--repo', 'o/r'],
   ])
   assert.ok(calls.every((c) => c.cmd === 'graft' && c.opts.cwd === '/src/r' && c.opts.env.GRAFT_APP === 'clock-app'))
-  assert.equal(calls[2].opts.input, 'BODY')
+  assert.equal(calls[3].opts.input, 'BODY')
   assert.ok(!/mergePullRequest|enablePullRequestAuto/.test(SNAPSHOT_QUERY), 'read only')
 })
 

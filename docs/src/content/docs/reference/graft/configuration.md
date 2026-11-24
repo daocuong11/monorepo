@@ -63,6 +63,7 @@ Whatever CODEOWNERS says, these are protected: `.graft.json` (or the `"graft"` k
 | Protected paths | CODEOWNERS | yes |
 | App identity and private key | `~/.config/graft/apps/<slug>/` (mode 0600) | no |
 | Token cache | `~/.config/graft/cache/` (mode 0600) | no |
+| REST answer cache (by ETag) | `~/.config/graft/cache/http/`; entries unused for 7 days are pruned | no |
 | Rulesets written for manual import | `~/.config/graft/rulesets/<owner>-<repo>-<base>.json` | no |
 | Maintainer grants (`maintainer/<session>.json`) and log (`maintainer.log`) | `<git-common-dir>/graft/` | no, shared by a clone's worktrees |
 | Validation receipt | `<git-dir>/graft/validated-base.json` | no, per worktree |
@@ -72,3 +73,4 @@ Whatever CODEOWNERS says, these are protected: `.graft.json` (or the `"graft"` k
 | Variable | Meaning |
 | --- | --- |
 | `GRAFT_APP` | App slug to act as, overriding the owner mapping. |
+| `GRAFT_HTTP_CACHE` | `0` turns the REST answer cache off. With it on, a repeated GET asks GitHub only whether the answer changed; an unchanged answer is served from the cache and costs no rate limit. |

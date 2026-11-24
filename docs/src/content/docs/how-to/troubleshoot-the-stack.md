@@ -30,6 +30,7 @@ Start with `oakgreen doctor`. Each failing line names its fix.
 | A repository's tasks never start | Its base reads red because no `ci` check runs on it. Set `"requiredCheck": null`, or the real check name, on its `repos[]` entry. |
 | A task is requeued as `spawn-failed` | The worktree's install, hydrate or prepare step failed. The stderr tail is in the issue's state comment and the worker's `err.log`. |
 | `q:intake` issues are never triaged | Triage needs `"engine": "graph"` and `phases.dispatch.cap` above 0. |
+| `GraphQL budget spent; reads paused until …` in the heartbeat | The App installation's hourly GraphQL budget ran low, so cambium stops reading that repository until the reset. Workers keep running. Close canopy tabs you are not using; each open tab refetches queues every `--cache` seconds. |
 
 ## Tracing
 
