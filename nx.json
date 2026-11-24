@@ -76,6 +76,11 @@
       "fallbackCurrentVersionResolver": "disk",
       "specifierSource": "conventional-commits"
     },
+    "conventionalCommits": {
+      "types": {
+        "perf": { "semverBump": "patch", "changelog": { "title": "Performance" } }
+      }
+    },
     "changelog": {
       "automaticFromRef": true,
       "projectChangelogs": {
